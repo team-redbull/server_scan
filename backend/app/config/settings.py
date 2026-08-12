@@ -67,6 +67,11 @@ class Settings(BaseSettings):
     # --- Pagination / search limits ---
     default_page_size: int = 50
     max_page_size: int = 200
+    # Signs opaque keyset-pagination cursors (see `app.domain.services.cursor`)
+    # so a client can never forge one that skips the filter/sort binding
+    # check. Insecure default is fine for dev/test; production deployments
+    # must override via INVENTORY_CURSOR_SECRET.
+    cursor_secret: str = "dev-insecure-cursor-secret-change-in-production"  # noqa: S105 - dev default, not a real secret
 
     # --- Regex / classification safety ---
     regex_max_pattern_length: int = 200

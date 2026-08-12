@@ -1,0 +1,143 @@
+"""API response schemas for `/api/v1/servers`.
+
+Neither of these is the persistence model (`app.domain.models.server.
+Server`) reused as-is — an explicit project requirement, not just a style
+preference:
+
+* `ServerSummary` is a deliberately lighter projection for list responses.
+  At 10k+ servers, shipping the full `hardware` subdocument (CPU, every
+  memory module, every drive, every PSU) on every row of a list response
+  is pure waste — nothing in a list view renders it. `connectivity.facts`
+  is the one exception kept in the summary: it's small (four scalars) and
+  drives a fabric-health column in the list UI, so leaving it out would
+  just cause the frontend to issue a detail fetch per row.
+* `ServerDetail` is a field-for-field superset of `Server` today, but it's
+  still its own model rather than `Server` returned directly, for two
+  concrete reasons: (1) `Server.id` is aliased to `_id` for MongoDB, and
+  FastAPI's default `response_model_by_alias=True` would serialize that
+  alias straight into the API response, leaking a Mongo-ism into the
+  public contract; (2) returning the persistence model directly means any
+  storage-only field added to `Server` in a later slice is silently
+  exposed over the API with no seam to stop and ask "should this be
+  public?" — a dedicated response schema is that seam, even when today it
+  happens to mirror every field.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime
+
+from pydantic import BaseModel
+
+from app.domain.enums import HealthSeverity, InstallationType, Vendor
+from app.domain.models.classification import Classification
+from app.domain.models.connectivity import Connectivity, ConnectivityFacts
+from app.domain.models.hardware import Hardware
+from app.domain.models.health import Health
+from app.domain.models.maintenance import Maintenance
+from app.domain.models.network import NetworkInfo
+from app.domain.models.openshift import OpenShiftLifecycle
+from app.domain.models.server import Identity, Server
+
+
+class ServerSummary(BaseModel):
+    id: str
+    name: str
+    vendor: Vendor
+    model: str | None
+    site_id: str | None
+    manager_id: str | None
+    installation_type: InstallationType
+    health_overall: HealthSeverity
+    maintenance_enabled: bool
+    connectivity_facts: ConnectivityFacts
+    last_seen_at: datetime | None
+    updated_at: datetime
+
+    @classmethod
+    def from_server(cls, server: Server) -> ServerSummary:
+        return cls(
+            id=server.id,
+            name=server.name,
+            vendor=server.identity.vendor,
+            model=server.model,
+            site_id=server.site_id,
+            manager_id=server.manager_id,
+            installation_type=server.classification.installation_type,
+            health_overall=server.health.overall,
+            maintenance_enabled=server.maintenance.enabled,
+            connectivity_facts=server.connectivity.facts,
+            last_seen_at=server.last_seen_at,
+            updated_at=server.updated_at,
+        )
+
+
+class PageInfo(BaseModel):
+    next_cursor: str | None
+    has_more: bool
+    page_size: int
+    count: int | None
+    count_capped: bool
+
+
+class ServerListResponse(BaseModel):
+    items: list[ServerSummary]
+    page: PageInfo
+
+
+class ServerDetail(BaseModel):
+    """Full server detail. See module docstring for why this is a
+    dedicated model rather than `Server` returned as-is.
+    """
+
+    id: str
+    schema_version: int
+    name: str
+    name_normalized: str
+    model: str | None
+    model_normalized: str
+    identity: Identity
+    hardware: Hardware
+    network: NetworkInfo
+    connectivity: Connectivity
+    classification: Classification
+    health: Health
+    maintenance: Maintenance
+    openshift: OpenShiftLifecycle
+    site_id: str | None
+    manager_id: str | None
+    tags: list[str]
+    search_tokens: list[str]
+    source_provider: str | None
+    last_seen_at: datetime | None
+    revision: int
+    created_at: datetime
+    updated_at: datetime
+
+    @classmethod
+    def from_server(cls, server: Server) -> ServerDetail:
+        return cls(
+            id=server.id,
+            schema_version=server.schema_version,
+            name=server.name,
+            name_normalized=server.name_normalized,
+            model=server.model,
+            model_normalized=server.model_normalized,
+            identity=server.identity,
+            hardware=server.hardware,
+            network=server.network,
+            connectivity=server.connectivity,
+            classification=server.classification,
+            health=server.health,
+            maintenance=server.maintenance,
+            openshift=server.openshift,
+            site_id=server.site_id,
+            manager_id=server.manager_id,
+            tags=server.tags,
+            search_tokens=server.search_tokens,
+            source_provider=server.source_provider,
+            last_seen_at=server.last_seen_at,
+            revision=server.revision,
+            created_at=server.created_at,
+            updated_at=server.updated_at,
+        )

@@ -147,3 +147,44 @@ class RateLimitedError(AppError):
 class ServiceUnavailableError(AppError):
     status_code = 503
     code = ErrorCode.SERVICE_UNAVAILABLE
+
+
+# --- Search / pagination ---
+# All 400s except `PageSizeTooLargeError`, which mirrors FastAPI/Pydantic's
+# own convention of using 422 for a query-parameter constraint violation
+# (as opposed to a structurally malformed request).
+
+
+class UnknownFilterError(AppError):
+    status_code = 400
+    code = ErrorCode.UNKNOWN_FILTER
+
+
+class UnknownSortFieldError(AppError):
+    status_code = 400
+    code = ErrorCode.UNKNOWN_SORT_FIELD
+
+
+class SearchQueryTooShortError(AppError):
+    status_code = 400
+    code = ErrorCode.SEARCH_QUERY_TOO_SHORT
+
+
+class SearchQueryTooLongError(AppError):
+    status_code = 400
+    code = ErrorCode.SEARCH_QUERY_TOO_LONG
+
+
+class PageSizeTooLargeError(AppError):
+    status_code = 422
+    code = ErrorCode.PAGE_SIZE_TOO_LARGE
+
+
+class CursorInvalidError(AppError):
+    status_code = 400
+    code = ErrorCode.CURSOR_INVALID
+
+
+class CursorFilterMismatchError(AppError):
+    status_code = 400
+    code = ErrorCode.CURSOR_FILTER_MISMATCH

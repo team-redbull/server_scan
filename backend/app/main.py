@@ -23,10 +23,12 @@ from starlette.middleware.base import RequestResponseEndpoint
 from starlette.responses import Response
 
 from app.api.health import router as health_router
+from app.api.v1.servers import router as servers_router
 from app.config import get_settings
 from app.exception_handlers import register_exception_handlers
 from app.infrastructure.logging import configure_logging
 from app.infrastructure.mongodb import MongoClientHolder
+from app.infrastructure.mongodb.indexes import ensure_indexes
 from app.infrastructure.redis import RedisClientHolder
 from app.middleware.request_context import RequestContextMiddleware
 from app.observability.metrics import http_request_duration_seconds, http_requests_total
@@ -46,6 +48,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     mongo = MongoClientHolder(settings)
     await mongo.connect()
+    await ensure_indexes(mongo.db)
     app.state.mongo = mongo
 
     redis = RedisClientHolder(settings)
@@ -81,6 +84,7 @@ def create_app() -> FastAPI:
 
     register_exception_handlers(app)
     app.include_router(health_router)
+    app.include_router(servers_router)
 
     if settings.metrics_enabled:
 

@@ -1,0 +1,359 @@
+"""Ingestion pipeline: `ProviderServer` -> domain `Server`, upserted via
+`ServerRepository`.
+
+Correlation simplification (slice 1 scope, documented here since it's the
+one deliberate shortcut in this module): a `ProviderServer` is matched
+against an existing document only by `(vendor, serial_normalized)` when a
+serial is present; with no serial, it is always treated as a new server.
+The full identity-correlation ladder described in
+`app.domain.models.server.Identity`'s docstring (system_uuid first, then
+BMC MAC, then NIC MACs, then per-manager `external_id`, ...) is slice 2's
+job — this keeps ingestion working end-to-end now without pretending to
+solve a problem slice 2 owns.
+
+Field ownership: every field this module writes is ingestion-owned
+(identity, hardware, network, connectivity, name/model, `search_tokens`,
+`source_provider`, `last_seen_at`). It never touches `tags` beyond what
+the provider reports, and never touches `classification`/`health`/
+`maintenance` at all (those are written by their own engines in later
+slices) — a re-ingest of an already-classified, already-in-maintenance
+server must not silently reset either back to its zero value. Because
+`upsert` fully replaces the document (`replace_one`), this module must
+carry forward `existing.classification`/`existing.health`/
+`existing.maintenance`/`existing.openshift` verbatim when updating, not
+just its own fields.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Sequence
+from dataclasses import dataclass
+from typing import Protocol
+
+import structlog
+from pymongo.errors import DuplicateKeyError
+
+from app.domain.enums import MediaType, Vendor
+from app.domain.models.connectivity import (
+    Connectivity,
+    ConnectivityAttachment,
+    compute_connectivity_facts,
+)
+from app.domain.models.hardware import Cpu, Hardware, Memory, Power, Storage, StorageDrive
+from app.domain.models.manager import Manager
+from app.domain.models.network import BmcInfo, NetworkInfo
+from app.domain.models.server import Identity, Server
+from app.domain.models.site import Site
+from app.domain.ports.provider import ProviderServer, ServerInventoryProvider
+from app.domain.ports.repository import ServerRepository
+from app.domain.services.normalize import normalize_text
+from app.domain.services.search_tokens import build_search_tokens
+from app.domain.value_objects.bmc_address import parse_bmc_address
+from app.domain.value_objects.mac_address import normalize_mac
+from app.utils.ids import new_id
+from app.utils.timeutil import utcnow
+
+logger = structlog.get_logger(__name__)
+
+
+class SiteRepositoryPort(Protocol):
+    """The one method `IngestService` needs from a site repository.
+    Defined here (application layer) rather than in `app.domain.ports`
+    because it's this service's own dependency, not a cross-cutting
+    domain contract — `MongoSiteRepository` satisfies it structurally.
+    """
+
+    async def upsert(self, site: Site) -> Site: ...
+
+
+class ManagerRepositoryPort(Protocol):
+    async def upsert(self, manager: Manager) -> Manager: ...
+
+
+@dataclass(slots=True)
+class IngestSummary:
+    fetched: int = 0
+    created: int = 0
+    updated: int = 0
+    errors: int = 0
+
+
+def _opt_str(value: object) -> str | None:
+    return str(value) if value is not None else None
+
+
+def _opt_int(value: object) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):  # bool is an int subclass; never intended here
+        return int(value)
+    if isinstance(value, int):
+        return value
+    return int(str(value))
+
+
+def _drive_from_dict(data: dict[str, object]) -> StorageDrive:
+    media_raw = data.get("media_type")
+    try:
+        media_type = MediaType(str(media_raw)) if media_raw else MediaType.UNKNOWN
+    except ValueError:
+        media_type = MediaType.UNKNOWN
+    return StorageDrive(
+        id=str(data.get("id", "")),
+        model=_opt_str(data.get("model")),
+        serial=_opt_str(data.get("serial")),
+        media_type=media_type,
+        capacity_bytes=_opt_int(data.get("capacity_bytes")),
+        health=_opt_str(data.get("health")),
+    )
+
+
+class IngestService:
+    """Runs a full provider ingest: upsert referenced sites/managers, then
+    normalize/correlate/upsert every `ProviderServer` the provider yields.
+    """
+
+    def __init__(
+        self,
+        *,
+        server_repo: ServerRepository,
+        site_repo: SiteRepositoryPort,
+        manager_repo: ManagerRepositoryPort,
+    ) -> None:
+        self._server_repo = server_repo
+        self._site_repo = site_repo
+        self._manager_repo = manager_repo
+
+    async def ingest(
+        self,
+        provider: ServerInventoryProvider,
+        *,
+        sites: Sequence[Site] = (),
+        managers: Sequence[Manager] = (),
+    ) -> IngestSummary:
+        summary = IngestSummary()
+
+        # Idempotent — safe to upsert the same fixed site/manager set on
+        # every ingest run.
+        for site in sites:
+            await self._site_repo.upsert(site)
+        for manager in managers:
+            await self._manager_repo.upsert(manager)
+
+        await provider.health_check()
+
+        async for provider_server in provider.list_servers():
+            summary.fetched += 1
+            try:
+                created = await self._ingest_one(
+                    provider_server, provider_type=provider.provider_type
+                )
+            except Exception:
+                logger.exception(
+                    "ingest.server_failed",
+                    external_id=provider_server.external_id,
+                    vendor=provider_server.vendor,
+                )
+                summary.errors += 1
+                continue
+
+            if created:
+                summary.created += 1
+            else:
+                summary.updated += 1
+
+        logger.info(
+            "ingest.completed",
+            fetched=summary.fetched,
+            created=summary.created,
+            updated=summary.updated,
+            errors=summary.errors,
+        )
+        return summary
+
+    async def _find_by_vendor_serial(self, vendor: Vendor, serial_normalized: str) -> Server | None:
+        page = await self._server_repo.list_page(
+            filters={
+                "identity.vendor": vendor.value,
+                "identity.serial_normalized": serial_normalized,
+            },
+            search=None,
+            sort="name",
+            sort_desc=False,
+            cursor=None,
+            page_size=1,
+            with_count=False,
+        )
+        return page.items[0] if page.items else None
+
+    async def _ingest_one(self, ps: ProviderServer, *, provider_type: str) -> bool:
+        """Returns True if a new server document was created, False if an
+        existing one was updated.
+        """
+        try:
+            vendor = Vendor(ps.vendor)
+        except ValueError:
+            vendor = Vendor.UNKNOWN
+
+        serial_normalized = normalize_text(ps.serial)
+        existing = (
+            await self._find_by_vendor_serial(vendor, serial_normalized)
+            if serial_normalized
+            else None
+        )
+
+        server = self._build_server(
+            ps,
+            vendor=vendor,
+            serial_normalized=serial_normalized,
+            existing=existing,
+            provider_type=provider_type,
+        )
+
+        try:
+            await self._server_repo.upsert(server)
+        except DuplicateKeyError:
+            # A concurrent/duplicate insert collided on a secondary unique
+            # index (system_uuid or (vendor, serial_normalized)) between
+            # our lookup and our upsert. Not fancy: look the real owner up
+            # and update it in place instead of failing the whole run.
+            refetched = (
+                await self._find_by_vendor_serial(vendor, serial_normalized)
+                if serial_normalized
+                else None
+            )
+            if refetched is None:
+                raise
+            server = self._build_server(
+                ps,
+                vendor=vendor,
+                serial_normalized=serial_normalized,
+                existing=refetched,
+                provider_type=provider_type,
+            )
+            await self._server_repo.upsert(server)
+            return False
+
+        return existing is None
+
+    def _build_server(
+        self,
+        ps: ProviderServer,
+        *,
+        vendor: Vendor,
+        serial_normalized: str,
+        existing: Server | None,
+        provider_type: str,
+    ) -> Server:
+        now = utcnow()
+        server_id = existing.id if existing is not None else new_id("server")
+        created_at = existing.created_at if existing is not None else now
+        revision = existing.revision + 1 if existing is not None else 1
+
+        bmc_parsed = parse_bmc_address(ps.bmc_address_raw)
+        bmc_mac = normalize_mac(ps.bmc_mac)
+        nic_macs = [mac for mac in (normalize_mac(m) for m in ps.nic_macs) if mac is not None]
+
+        identity = Identity(
+            vendor=vendor,
+            serial=ps.serial,
+            serial_normalized=serial_normalized,
+            system_uuid=ps.system_uuid,
+            nic_macs=nic_macs,
+            external_ids={ps.manager_id: ps.external_id} if ps.manager_id else {},
+        )
+
+        network = NetworkInfo(
+            bmc=BmcInfo(
+                address_raw=ps.bmc_address_raw,
+                scheme=bmc_parsed.scheme if bmc_parsed else None,
+                host=bmc_parsed.host if bmc_parsed else None,
+                host_is_ip=bmc_parsed.host_is_ip if bmc_parsed else False,
+                port=bmc_parsed.port if bmc_parsed else None,
+                path=bmc_parsed.path if bmc_parsed else None,
+                mac=bmc_mac,
+            ),
+            # ProviderServer carries a flat MAC list, not per-interface
+            # name/speed/link-state — nothing to populate `interfaces`
+            # from yet. A real collector's richer per-NIC data will need
+            # `ProviderServer` extended before this can be filled in.
+            interfaces=[],
+        )
+
+        attachments = [
+            ConnectivityAttachment(
+                type=a.type,
+                provider=a.provider,
+                fabric=a.fabric,
+                fabric_name=a.fabric_name,
+                fabric_id=a.fabric_id,
+                fabric_model=a.fabric_model,
+                fabric_serial=a.fabric_serial,
+                server_interface=a.server_interface,
+                server_port=a.server_port,
+                fabric_port=a.fabric_port,
+                admin_state=a.admin_state,
+                oper_state=a.oper_state,
+                speed_mbps=a.speed_mbps,
+                last_seen=now,
+            )
+            for a in ps.attachments
+        ]
+        connectivity = Connectivity(
+            attachments=attachments, facts=compute_connectivity_facts(attachments)
+        )
+
+        hardware = Hardware(
+            cpu=Cpu(
+                sockets=ps.cpu_sockets,
+                cores=ps.cpu_cores,
+                threads=ps.cpu_threads,
+                model=ps.cpu_model,
+            ),
+            memory=Memory(total_bytes=ps.memory_total_bytes, modules=[]),
+            storage=Storage(
+                total_bytes=ps.storage_total_bytes,
+                drives=[_drive_from_dict(d) for d in ps.storage_drives],
+            ),
+            # `ProviderServer` has no GPU field (see
+            # `app.infrastructure.providers.fake.generator`'s docstring) —
+            # nothing to populate this from until the port grows one.
+            gpus=[],
+            power=Power(psus=[]),
+        )
+
+        # User/engine-owned state carried forward verbatim on update — see
+        # module docstring's field-ownership note. Simply omitted (rather
+        # than passed as None) when there's no existing document, so
+        # Pydantic's own `default_factory` supplies the zero value.
+        carried_forward: dict[str, object] = {}
+        if existing is not None:
+            carried_forward = {
+                "classification": existing.classification,
+                "health": existing.health,
+                "maintenance": existing.maintenance,
+                "openshift": existing.openshift,
+            }
+
+        server = Server(
+            _id=server_id,
+            name=ps.name,
+            name_normalized=normalize_text(ps.name),
+            model=ps.model,
+            model_normalized=normalize_text(ps.model),
+            identity=identity,
+            hardware=hardware,
+            network=network,
+            connectivity=connectivity,
+            site_id=ps.site_id,
+            manager_id=ps.manager_id,
+            tags=list(ps.tags),
+            source_provider=provider_type,
+            last_seen_at=now,
+            revision=revision,
+            created_at=created_at,
+            updated_at=now,
+            **carried_forward,
+        )
+        server.search_tokens = build_search_tokens(server)
+        return server

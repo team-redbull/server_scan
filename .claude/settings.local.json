@@ -1,11 +1,11 @@
 {
-  "enableAllProjectMcpServers": true,
-  "enabledMcpjsonServers": [
-    "claude-flow"
-  ],
   "permissions": {
     "allow": [
       "WebSearch"
     ]
-  }
+  },
+  "enableAllProjectMcpServers": true,
+  "enabledMcpjsonServers": [
+    "claude-flow"
+  ]
 }
