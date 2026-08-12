@@ -1,0 +1,353 @@
+"""API tests for `GET /api/v1/servers` and `GET /api/v1/servers/{id}`,
+against a real running app (lifespan included) and the live dev Mongo +
+Redis stack. Test data is inserted directly via `MongoServerRepository`
+— never through the fake generator/ingest pipeline — to keep these tests
+focused on the HTTP/query/cache contract, not ingestion.
+"""
+
+from __future__ import annotations
+
+import contextlib
+from collections.abc import AsyncIterator
+
+import pytest
+from httpx import ASGITransport, AsyncClient
+
+from app.config import Settings, get_settings
+from app.domain.enums import HealthSeverity, InstallationType, Vendor
+from app.domain.models.classification import Classification
+from app.domain.models.health import Health
+from app.domain.models.maintenance import Maintenance
+from app.domain.models.server import Identity, Server
+from app.domain.services.normalize import normalize_text
+from app.domain.services.search_tokens import build_search_tokens
+from app.infrastructure.mongodb.client import MongoClientHolder
+from app.infrastructure.mongodb.server_repository import MongoServerRepository
+from app.infrastructure.redis.client import RedisClientHolder
+from app.main import create_app
+from app.utils.ids import new_id
+from app.utils.timeutil import utcnow
+
+
+def _make_server(
+    index: int,
+    *,
+    site_id: str | None = None,
+    vendor: Vendor = Vendor.DELL,
+    health: HealthSeverity = HealthSeverity.UNKNOWN,
+    installation_type: InstallationType = InstallationType.UNCLASSIFIED,
+    maintenance_enabled: bool = False,
+    name: str | None = None,
+) -> Server:
+    now = utcnow()
+    nm = name if name is not None else f"api-test-srv-{index:04d}"
+    serial = f"APITEST{index:06d}"
+    server = Server(
+        _id=new_id("server"),
+        name=nm,
+        name_normalized=normalize_text(nm),
+        identity=Identity(
+            vendor=vendor,
+            serial=serial,
+            serial_normalized=normalize_text(serial),
+            system_uuid=f"api-test-uuid-{index:06d}",
+        ),
+        site_id=site_id,
+        classification=Classification(installation_type=installation_type),
+        health=Health(overall=health),
+        maintenance=Maintenance(enabled=maintenance_enabled),
+        created_at=now,
+        updated_at=now,
+        last_seen_at=now,
+    )
+    server.search_tokens = build_search_tokens(server)
+    return server
+
+
+@pytest.fixture
+async def app_context() -> AsyncIterator[tuple[AsyncClient, MongoServerRepository]]:
+    settings = get_settings()
+    app = create_app()
+    async with (
+        AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client,
+        app.router.lifespan_context(app),
+    ):
+        mongo: MongoClientHolder = app.state.mongo
+        redis: RedisClientHolder = app.state.redis
+        for name in ("servers", "sites", "managers"):
+            await mongo.db[name].delete_many({})
+        # Different tests reuse the same filter/sort combinations, and the
+        # list cache key doesn't know about test boundaries — flush so one
+        # test's cached page can never leak into the next.
+        # Best-effort: cache tests don't require Redis to be up.
+        with contextlib.suppress(Exception):
+            await redis.client.flushdb()
+
+        repo = MongoServerRepository(mongo, cursor_secret=settings.cursor_secret)
+        yield client, repo
+
+        for name in ("servers", "sites", "managers"):
+            await mongo.db[name].delete_many({})
+
+
+async def test_list_returns_expected_items(
+    app_context: tuple[AsyncClient, MongoServerRepository],
+) -> None:
+    client, repo = app_context
+    for i in range(3):
+        await repo.upsert(_make_server(i))
+
+    resp = await client.get("/api/v1/servers")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body["items"]) == 3
+    assert body["page"]["has_more"] is False
+    item = body["items"][0]
+    assert set(item) == {
+        "id",
+        "name",
+        "vendor",
+        "model",
+        "site_id",
+        "manager_id",
+        "classification",
+        "health",
+        "maintenance",
+        "connectivity",
+        "last_seen_at",
+        "updated_at",
+    }
+
+
+async def test_list_excludes_hardware_from_summary(
+    app_context: tuple[AsyncClient, MongoServerRepository],
+) -> None:
+    client, repo = app_context
+    await repo.upsert(_make_server(0))
+
+    resp = await client.get("/api/v1/servers")
+
+    assert resp.status_code == 200
+    assert "hardware" not in resp.json()["items"][0]
+
+
+async def test_search_matches_by_token(
+    app_context: tuple[AsyncClient, MongoServerRepository],
+) -> None:
+    client, repo = app_context
+    await repo.upsert(_make_server(1, name="ocp-dell-worker-777"))
+    await repo.upsert(_make_server(2, name="upi-cisco-master-778"))
+
+    resp = await client.get("/api/v1/servers", params={"search": "ocp"})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body["items"]) == 1
+    assert body["items"][0]["name"] == "ocp-dell-worker-777"
+
+
+async def test_filter_by_site_id(app_context: tuple[AsyncClient, MongoServerRepository]) -> None:
+    client, repo = app_context
+    for i in range(3):
+        await repo.upsert(_make_server(i, site_id="site_one"))
+    for i in range(3, 5):
+        await repo.upsert(_make_server(i, site_id="site_two"))
+
+    resp = await client.get("/api/v1/servers", params={"site_id": "site_one"})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body["items"]) == 3
+    assert all(item["site_id"] == "site_one" for item in body["items"])
+
+
+async def test_filter_by_maintenance_bool(
+    app_context: tuple[AsyncClient, MongoServerRepository],
+) -> None:
+    client, repo = app_context
+    await repo.upsert(_make_server(1, maintenance_enabled=True))
+    await repo.upsert(_make_server(2, maintenance_enabled=False))
+
+    resp = await client.get("/api/v1/servers", params={"maintenance": "true"})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body["items"]) == 1
+    assert body["items"][0]["maintenance"]["enabled"] is True
+
+
+async def test_page_size_too_large_returns_422(
+    app_context: tuple[AsyncClient, MongoServerRepository],
+) -> None:
+    client, _repo = app_context
+    settings = get_settings()
+
+    resp = await client.get("/api/v1/servers", params={"page_size": settings.max_page_size + 1})
+
+    assert resp.status_code == 422
+    body = resp.json()
+    assert body["code"] == "PAGE_SIZE_TOO_LARGE"
+
+
+async def test_unknown_filter_returns_400_problem_json(
+    app_context: tuple[AsyncClient, MongoServerRepository],
+) -> None:
+    client, _repo = app_context
+
+    resp = await client.get("/api/v1/servers", params={"not_a_real_filter": "x"})
+
+    assert resp.status_code == 400
+    assert resp.headers["content-type"].startswith("application/problem+json")
+    body = resp.json()
+    assert body["code"] == "UNKNOWN_FILTER"
+    assert body["status"] == 400
+    assert "request_id" in body
+    assert body["instance"] == "/api/v1/servers"
+
+
+async def test_unknown_sort_returns_400(
+    app_context: tuple[AsyncClient, MongoServerRepository],
+) -> None:
+    client, _repo = app_context
+
+    resp = await client.get("/api/v1/servers", params={"sort": "not_a_real_sort"})
+
+    assert resp.status_code == 400
+    body = resp.json()
+    assert body["code"] == "UNKNOWN_SORT_FIELD"
+
+
+async def test_cursor_round_trip_across_pages_no_duplicates(
+    app_context: tuple[AsyncClient, MongoServerRepository],
+) -> None:
+    client, repo = app_context
+    total = 7
+    for i in range(total):
+        await repo.upsert(_make_server(i))
+
+    seen: list[str] = []
+    cursor: str | None = None
+    for _ in range(total):
+        params: dict[str, str] = {"page_size": "3"}
+        if cursor:
+            params["cursor"] = cursor
+        resp = await client.get("/api/v1/servers", params=params)
+        assert resp.status_code == 200
+        body = resp.json()
+        seen.extend(item["id"] for item in body["items"])
+        if not body["page"]["has_more"]:
+            break
+        cursor = body["page"]["next_cursor"]
+        assert cursor is not None
+
+    assert len(seen) == total
+    assert len(set(seen)) == total
+
+
+async def test_stale_cursor_after_filter_change_returns_400(
+    app_context: tuple[AsyncClient, MongoServerRepository],
+) -> None:
+    client, repo = app_context
+    for i in range(5):
+        await repo.upsert(_make_server(i, site_id="site_alpha"))
+    for i in range(5, 8):
+        await repo.upsert(_make_server(i, site_id="site_beta"))
+
+    first = await client.get("/api/v1/servers", params={"site_id": "site_alpha", "page_size": "2"})
+    assert first.status_code == 200
+    cursor = first.json()["page"]["next_cursor"]
+    assert cursor is not None
+
+    second = await client.get(
+        "/api/v1/servers",
+        params={"site_id": "site_beta", "page_size": "2", "cursor": cursor},
+    )
+
+    assert second.status_code == 400
+    assert second.json()["code"] == "CURSOR_FILTER_MISMATCH"
+
+
+async def test_get_detail_200_for_existing_server(
+    app_context: tuple[AsyncClient, MongoServerRepository],
+) -> None:
+    client, repo = app_context
+    server = _make_server(1, name="detail-test-server")
+    await repo.upsert(server)
+
+    resp = await client.get(f"/api/v1/servers/{server.id}")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["id"] == server.id
+    assert body["name"] == "detail-test-server"
+    assert "hardware" in body  # detail is a superset, unlike the list summary
+
+
+async def test_get_detail_200_is_cache_stable_on_second_read(
+    app_context: tuple[AsyncClient, MongoServerRepository],
+) -> None:
+    client, repo = app_context
+    server = _make_server(1, name="detail-cache-test")
+    await repo.upsert(server)
+
+    first = await client.get(f"/api/v1/servers/{server.id}")
+    second = await client.get(f"/api/v1/servers/{server.id}")
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json() == second.json()
+
+
+async def test_get_detail_404_for_missing_server(
+    app_context: tuple[AsyncClient, MongoServerRepository],
+) -> None:
+    client, _repo = app_context
+
+    resp = await client.get("/api/v1/servers/srv_does_not_exist")
+
+    assert resp.status_code == 404
+    body = resp.json()
+    assert body["code"] == "NOT_FOUND"
+
+
+async def test_list_returns_200_from_mongo_when_redis_unreachable() -> None:
+    """The whole point of cache-aside-with-degradation: a Redis outage
+    must never turn into a request failure, only a cache miss. Built as a
+    standalone test (not via `app_context`) because it needs to swap
+    `app.state.redis` for a holder pointed at an unreachable port after
+    startup, without disturbing the real Mongo connection.
+    """
+    app = create_app()
+    async with (
+        AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client,
+        app.router.lifespan_context(app),
+    ):
+        mongo: MongoClientHolder = app.state.mongo
+        for name in ("servers", "sites", "managers"):
+            await mongo.db[name].delete_many({})
+        repo = MongoServerRepository(mongo, cursor_secret=get_settings().cursor_secret)
+        server = await repo.upsert(_make_server(1, name="redis-down-test-server"))
+
+        broken_settings = Settings(
+            redis_uri="redis://localhost:1/0",
+            redis_connect_timeout_seconds=0.5,
+            redis_socket_timeout_seconds=0.5,
+        )
+        broken_redis = RedisClientHolder(broken_settings)
+        await broken_redis.connect()  # never raises, even unreachable
+        app.state.redis = broken_redis
+
+        try:
+            resp = await client.get("/api/v1/servers")
+            assert resp.status_code == 200
+            body = resp.json()
+            assert len(body["items"]) == 1
+            assert body["items"][0]["name"] == "redis-down-test-server"
+
+            detail_resp = await client.get(f"/api/v1/servers/{server.id}")
+            assert detail_resp.status_code == 200
+            assert detail_resp.json()["name"] == "redis-down-test-server"
+        finally:
+            await mongo.db["servers"].delete_many({})
+            await broken_redis.close()

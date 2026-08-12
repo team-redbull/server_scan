@@ -29,7 +29,7 @@ from datetime import datetime
 
 from pydantic import BaseModel
 
-from app.domain.enums import HealthSeverity, InstallationType, Vendor
+from app.domain.enums import Vendor
 from app.domain.models.classification import Classification
 from app.domain.models.connectivity import Connectivity, ConnectivityFacts
 from app.domain.models.hardware import Hardware
@@ -40,17 +40,32 @@ from app.domain.models.openshift import OpenShiftLifecycle
 from app.domain.models.server import Identity, Server
 
 
+class ConnectivitySummary(BaseModel):
+    """`ServerSummary`'s slice of `Connectivity` — facts only, never the
+    full `attachments` list (that's detail-only; see the module docstring
+    on why summaries stay lean).
+    """
+
+    facts: ConnectivityFacts
+
+
 class ServerSummary(BaseModel):
+    """List-response projection. Nested (`classification.installation_type`,
+    `health.overall`, `maintenance.enabled`, `connectivity.facts`) to match
+    `ServerDetail`'s shape rather than flattening these onto the top level
+    — one nesting convention across both endpoints, not two.
+    """
+
     id: str
     name: str
     vendor: Vendor
     model: str | None
     site_id: str | None
     manager_id: str | None
-    installation_type: InstallationType
-    health_overall: HealthSeverity
-    maintenance_enabled: bool
-    connectivity_facts: ConnectivityFacts
+    classification: Classification
+    health: Health
+    maintenance: Maintenance
+    connectivity: ConnectivitySummary
     last_seen_at: datetime | None
     updated_at: datetime
 
@@ -63,10 +78,10 @@ class ServerSummary(BaseModel):
             model=server.model,
             site_id=server.site_id,
             manager_id=server.manager_id,
-            installation_type=server.classification.installation_type,
-            health_overall=server.health.overall,
-            maintenance_enabled=server.maintenance.enabled,
-            connectivity_facts=server.connectivity.facts,
+            classification=server.classification,
+            health=server.health,
+            maintenance=server.maintenance,
+            connectivity=ConnectivitySummary(facts=server.connectivity.facts),
             last_seen_at=server.last_seen_at,
             updated_at=server.updated_at,
         )

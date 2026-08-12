@@ -47,7 +47,12 @@ SERVER_INDEXES: list[IndexModel] = [
         [("identity.vendor", ASCENDING), ("identity.serial_normalized", ASCENDING)],
         name="uniq_vendor_serial",
         unique=True,
-        partialFilterExpression={"identity.serial_normalized": {"$ne": ""}},
+        # MongoDB partial-index filter expressions support only a small
+        # operator subset ($eq, $exists, $gt/$gte/$lt/$lte, $type, and
+        # $and of those) — no $ne. `$gt: ""` is the allowed-operator way
+        # to express "non-empty string": every non-empty string sorts
+        # lexicographically after "".
+        partialFilterExpression={"identity.serial_normalized": {"$gt": ""}},
     ),
     # Multikey — backs `app.domain.services.search.build_search_query`'s
     # anchored-prefix regex match.
