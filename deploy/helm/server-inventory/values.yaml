@@ -1,0 +1,30 @@
+backend:
+  image:
+    repository: server-inventory-api
+    tag: latest
+    pullPolicy: IfNotPresent
+  replicaCount: 2
+  port: 8080
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 512Mi
+
+# Name of a pre-existing Secret with keys `mongo-uri` and `redis-uri`.
+# This chart does not create it — see deploy/README.md for why MongoDB
+# and Redis are treated as externally provisioned platform services.
+db:
+  secretName: server-inventory-db
+
+config:
+  logLevel: INFO
+  metricsEnabled: "true"
+  defaultPageSize: "50"
+  maxPageSize: "200"
+  corsAllowedOrigins: ""
+
+route:
+  enabled: true
+  host: "" # empty lets OpenShift generate one from the Service name

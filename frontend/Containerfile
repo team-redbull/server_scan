@@ -1,0 +1,22 @@
+# Frontend container image: a static build served by nginx, no Node
+# runtime in production. UBI9's nginx image (not nginx:alpine or
+# nginxinc/nginx-unprivileged) for the same reason as the backend's base —
+# Red Hat-supported inside an air-gapped OpenShift estate — and it already
+# runs unprivileged on port 8080 by default, matching this platform's
+# non-root requirement with no extra configuration.
+
+FROM registry.access.redhat.com/ubi9/nodejs-22:latest AS build
+WORKDIR /app
+COPY package.json package-lock.json ./
+# npm ci --omit=dev would skip the devDependencies the build itself needs
+# (vite, typescript, tailwind) — this is a build stage, not the final
+# image, so the full dependency set is intentional here.
+RUN npm ci
+COPY . .
+RUN npm run build
+
+FROM registry.access.redhat.com/ubi9/nginx-124:latest AS runtime
+COPY --from=build /app/dist /usr/share/nginx/html
+COPY nginx.conf /etc/nginx/nginx.conf
+
+EXPOSE 8080

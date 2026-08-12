@@ -1,0 +1,6 @@
+apiVersion: v2
+name: server-inventory
+description: Air-gapped bare-metal server inventory platform
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

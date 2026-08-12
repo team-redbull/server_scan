@@ -1,0 +1,60 @@
+# Local development stack. `compose.yaml` is the current canonical filename
+# for the Compose spec (docker-compose.yml is kept working for backward
+# compatibility by every implementation, but is no longer the name new
+# projects are told to use); works with `docker compose` and `podman
+# compose` interchangeably. For a zero-extra-tooling path on a machine with
+# only rootless podman and no compose provider installed, use
+# `scripts/dev-up.sh` instead — it drives the same three containers with
+# plain `podman run`.
+
+services:
+  mongo:
+    image: docker.io/library/mongo:8
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: docker.io/library/redis:8-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build:
+      context: .
+      dockerfile: Containerfile
+    ports:
+      - "8080:8080"
+    environment:
+      INVENTORY_MONGO_URI: mongodb://mongo:27017
+      INVENTORY_REDIS_URI: redis://redis:6379/0
+      INVENTORY_CORS_ALLOWED_ORIGINS: http://localhost:5173
+      INVENTORY_ENVIRONMENT: development
+    depends_on:
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  web:
+    build:
+      context: ./frontend
+      dockerfile: Containerfile
+    ports:
+      - "5173:8080"
+    depends_on:
+      - api
+
+volumes:
+  mongo-data:

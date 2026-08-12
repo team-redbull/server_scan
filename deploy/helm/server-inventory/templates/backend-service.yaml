@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-api
+  labels:
+    app.kubernetes.io/name: {{ .Release.Name }}-api
+    app.kubernetes.io/component: backend
+    app.kubernetes.io/part-of: server-inventory
+spec:
+  selector:
+    app.kubernetes.io/name: {{ .Release.Name }}-api
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
