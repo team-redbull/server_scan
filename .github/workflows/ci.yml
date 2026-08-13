@@ -112,3 +112,98 @@ jobs:
 
       - name: Build
         run: npm run build
+
+  e2e:
+    name: E2E (Playwright)
+    runs-on: ubuntu-latest
+    services:
+      mongo:
+        image: mongo:8
+        ports: ["27017:27017"]
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.adminCommand(\"ping\")'"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+      redis:
+        image: redis:8-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      INVENTORY_MONGO_URI: mongodb://localhost:27017
+      INVENTORY_REDIS_URI: redis://localhost:6379/0
+      INVENTORY_ENVIRONMENT: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "0.12.3"
+
+      - name: Set up Python
+        run: uv python install ${{ env.PYTHON_VERSION }}
+
+      - name: Install backend dependencies
+        run: uv sync --all-groups
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Install Playwright browsers
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+
+      - name: Start backend
+        run: |
+          uv run uvicorn app.main:app --host 0.0.0.0 --port 8080 \
+            > "$RUNNER_TEMP/backend.log" 2>&1 &
+          for _ in $(seq 1 30); do
+            curl -sf http://localhost:8080/health/ready && exit 0
+            sleep 1
+          done
+          echo "backend did not become ready in time"
+          cat "$RUNNER_TEMP/backend.log"
+          exit 1
+
+      - name: Seed a deterministic dataset
+        # Small on purpose — this is E2E flow coverage, not the 10k/50k
+        # scale verification `tools/verify_indexes.py`/`tools/loadtest.py`
+        # already own (see docs/adr/0007). Just enough servers for the
+        # inventory/search/maintenance flows to have real data to act on.
+        run: uv run python -m tools.seed_inventory --count 300 --seed 42
+
+      - name: Start frontend dev server
+        working-directory: frontend
+        run: |
+          npm run dev -- --port 5173 --host > "$RUNNER_TEMP/frontend.log" 2>&1 &
+          for _ in $(seq 1 30); do
+            curl -sf http://localhost:5173/ > /dev/null && exit 0
+            sleep 1
+          done
+          echo "frontend dev server did not become ready in time"
+          cat "$RUNNER_TEMP/frontend.log"
+          exit 1
+
+      - name: Run Playwright tests
+        working-directory: frontend
+        run: npx playwright test
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: frontend/playwright-report/
+          retention-days: 14

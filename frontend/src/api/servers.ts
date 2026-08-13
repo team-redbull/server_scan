@@ -42,3 +42,29 @@ export function listServers(params: ServerListParams = {}): Promise<ServerListRe
 export function getServer(id: string): Promise<ServerDetail> {
   return apiFetch<ServerDetail>(`/api/v1/servers/${encodeURIComponent(id)}`);
 }
+
+export interface MaintenanceEnableRequest {
+  reason?: string;
+  ticket?: string;
+  expected_end?: string;
+}
+
+// Both endpoints return the full `ServerDetail` (not a maintenance-only
+// body) — mirrors the backend's own choice (see `maintenance_schemas.py`'s
+// docstring): a caller toggling maintenance almost always wants the
+// resulting server state, not just the maintenance sub-document.
+export function enableMaintenance(
+  id: string,
+  body: MaintenanceEnableRequest,
+): Promise<ServerDetail> {
+  return apiFetch<ServerDetail>(`/api/v1/servers/${encodeURIComponent(id)}/maintenance`, {
+    method: "PUT",
+    body: JSON.stringify(body),
+  });
+}
+
+export function disableMaintenance(id: string): Promise<ServerDetail> {
+  return apiFetch<ServerDetail>(`/api/v1/servers/${encodeURIComponent(id)}/maintenance`, {
+    method: "DELETE",
+  });
+}

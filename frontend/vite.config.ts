@@ -3,6 +3,7 @@ import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import path from "node:path";
 import { defineConfig } from "vite";
+import { configDefaults } from "vitest/config";
 
 // https://vite.dev/config/
 export default defineConfig({
@@ -32,5 +33,12 @@ export default defineConfig({
     environment: "jsdom",
     globals: true,
     setupFiles: ["./src/test/setup.ts"],
+    // `e2e/` holds Playwright specs (own runner, own `*.spec.ts` files —
+    // see playwright.config.ts) which collide with Vitest's default
+    // include glob and fail under Vitest's runner ("did not expect
+    // test.describe() to be called here"). Vitest's own default excludes
+    // (node_modules, dist, etc.) stay implicit; this adds the one project-
+    // specific exclusion on top rather than replacing them.
+    exclude: [...configDefaults.exclude, "e2e/**"],
   },
 });

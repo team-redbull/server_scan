@@ -370,6 +370,39 @@ writeup; summary:
   that remain are expected and bounded (a `limit`-capped preview scan, or
   a count the frontend never actually requests).
 
+**Slice 7**: Playwright E2E coverage of the critical admin flows, plus a
+real gap it surfaced. See
+`docs/adr/0008-e2e-tests-and-maintenance-ui.md` for the full writeup;
+summary:
+
+- Maintenance had a fully-built, audited backend (slice 4) but no
+  frontend control — `OverviewTab` only ever displayed it read-only,
+  since maintenance fell into the gap between slice 1 (inventory) and
+  slice 5 (classification/health editors), neither of which owned it.
+  Writing an E2E test for "the maintenance flow" is what surfaced there
+  was no flow to test. Fixed: `app/api/servers.ts` gained
+  `enableMaintenance`/`disableMaintenance`, `app/features/servers/
+  hooks.ts` gained the matching mutations, and `OverviewTab` gained an
+  inline start/end-maintenance control.
+- `frontend/e2e/` (Playwright) covers inventory search/detail/tabs,
+  classification-rule create+preview+disable+delete, health-policy
+  create+shadow-panel+delete, and maintenance enable/disable — run three
+  times back to back with zero leftover test data (`test.afterEach`
+  cleanup via direct API calls, keyed by a per-run unique name).
+- A real, confirmed Chromium behavior broke the obvious `getByLabel`
+  selector approach: a `<label>Text<select>…option…</select></label>`
+  field's computed accessible name (and `textContent`) concatenates the
+  label text with every option's text, so `getByLabel("Vendor")`
+  intermittently matched the *Source* field instead (its option list
+  contains `"VENDOR_CUSTOM"`). Fixed with `labeledField()`, an XPath
+  `text()`-axis helper that matches only a label's own direct text node.
+  Documented as an ADR, not just a code comment, since it will recur the
+  moment a new form field is added and a future test reaches for
+  `getByLabel` again.
+- New `e2e` CI job: real backend + MongoDB + Redis + a small (300-server)
+  seeded dataset + the frontend dev server, running the full suite
+  headless with `--with-deps` Chromium.
+
 Real authentication is designed (see the session's approved plan) but
 lands in a subsequent slice — this document will gain a section and an
 ADR once it's implemented, rather than describing not-yet-existing code

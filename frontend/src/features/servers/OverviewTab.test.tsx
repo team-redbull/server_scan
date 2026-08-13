@@ -1,0 +1,70 @@
+import { fireEvent, render, screen } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
+
+import { OverviewTab } from "@/features/servers/OverviewTab";
+import type { ServerDetail } from "@/types/server";
+
+function makeServer(overrides: Partial<ServerDetail> = {}): ServerDetail {
+  return {
+    id: "srv_1",
+    name: "ocp-dell-worker-000",
+    model: "PowerEdge R6515",
+    identity: { vendor: "dell", serial: "SN123" },
+    classification: { installation_type: "HOSTED_CLUSTER" },
+    health: { overall: "HEALTHY" },
+    maintenance: { enabled: false },
+    site_id: "site_dc1",
+    manager_id: "mgr_1",
+    last_seen_at: "2026-08-13T10:00:00Z",
+    updated_at: "2026-08-13T10:00:00Z",
+    ...overrides,
+  };
+}
+
+describe("OverviewTab maintenance controls", () => {
+  it("shows a start-maintenance form when not in maintenance, and omits it without a handler", () => {
+    render(<OverviewTab server={makeServer()} />);
+    expect(screen.getByText("Not in maintenance")).toBeInTheDocument();
+    // No `onEnableMaintenance` supplied — the form must not render at all,
+    // not just be disabled (this is the "usable read-only" contract the
+    // component's prop docstring describes).
+    expect(screen.queryByPlaceholderText("Reason (optional)")).not.toBeInTheDocument();
+  });
+
+  it("submits the typed reason when starting maintenance", () => {
+    const onEnable = vi.fn();
+    render(<OverviewTab server={makeServer()} onEnableMaintenance={onEnable} />);
+
+    fireEvent.change(screen.getByPlaceholderText("Reason (optional)"), {
+      target: { value: "planned firmware upgrade" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Start maintenance" }));
+
+    expect(onEnable).toHaveBeenCalledWith("planned firmware upgrade");
+  });
+
+  it("shows the reason and an end-maintenance control when already in maintenance", () => {
+    const onDisable = vi.fn();
+    render(
+      <OverviewTab
+        server={makeServer({ maintenance: { enabled: true, reason: "disk replacement" } })}
+        onDisableMaintenance={onDisable}
+      />,
+    );
+
+    expect(screen.getByText("disk replacement")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "End maintenance" }));
+    expect(onDisable).toHaveBeenCalledOnce();
+  });
+
+  it("disables both controls while a mutation is pending", () => {
+    render(
+      <OverviewTab
+        server={makeServer({ maintenance: { enabled: true, reason: "x" } })}
+        onDisableMaintenance={vi.fn()}
+        maintenancePending
+      />,
+    );
+    expect(screen.getByRole("button", { name: "End maintenance" })).toBeDisabled();
+  });
+});

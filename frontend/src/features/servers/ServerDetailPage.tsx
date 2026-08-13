@@ -4,7 +4,11 @@ import { Link, useParams } from "react-router";
 import { ApiError } from "@/api/client";
 import { ConnectivityTab } from "@/features/servers/ConnectivityTab";
 import { HardwareTab } from "@/features/servers/HardwareTab";
-import { useServerDetailQuery } from "@/features/servers/hooks";
+import {
+  useDisableMaintenanceMutation,
+  useEnableMaintenanceMutation,
+  useServerDetailQuery,
+} from "@/features/servers/hooks";
 import { NetworkTab } from "@/features/servers/NetworkTab";
 import { OverviewTab } from "@/features/servers/OverviewTab";
 
@@ -23,6 +27,8 @@ export function ServerDetailPage() {
   const [activeTab, setActiveTab] = useState<TabId>("overview");
 
   const { data, isPending, isError, error } = useServerDetailQuery(id ?? "");
+  const enableMaintenanceMutation = useEnableMaintenanceMutation(id ?? "");
+  const disableMaintenanceMutation = useDisableMaintenanceMutation(id ?? "");
 
   return (
     <main className="mx-auto max-w-5xl p-8">
@@ -70,7 +76,20 @@ export function ServerDetailPage() {
           </div>
 
           <div className="mt-6">
-            {activeTab === "overview" && <OverviewTab server={data} />}
+            {activeTab === "overview" && (
+              <OverviewTab
+                server={data}
+                onEnableMaintenance={(reason) => {
+                  enableMaintenanceMutation.mutate(reason ? { reason } : {});
+                }}
+                onDisableMaintenance={() => {
+                  disableMaintenanceMutation.mutate();
+                }}
+                maintenancePending={
+                  enableMaintenanceMutation.isPending || disableMaintenanceMutation.isPending
+                }
+              />
+            )}
             {activeTab === "hardware" && <HardwareTab hardware={data.hardware} />}
             {activeTab === "network" && <NetworkTab network={data.network} />}
             {activeTab === "connectivity" && <ConnectivityTab connectivity={data.connectivity} />}
