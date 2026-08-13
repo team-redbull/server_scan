@@ -239,15 +239,54 @@ groups rather than assuming exactly two.
 
 **Slices 2 and 3**: the classification engine and rules API, and the
 health policy engine and policies API (see above), wired into ingestion
-and exposed via reclassify/recalculate endpoints. 302 backend tests
-(unit/integration/api) and the full frontend lint/typecheck/test/build
-pipeline pass.
+and exposed via reclassify/recalculate endpoints.
 
-Maintenance, audit events, the classification/health-policy editor UIs,
-the 10k/50k performance pass, and real authentication are designed (see
-the session's approved plan) but land in subsequent slices — this
-document will gain a section and an ADR for each as they're implemented,
-rather than describing not-yet-existing code as done.
+**Slice 4**: maintenance and an immutable audit trail.
+
+- `PUT`/`DELETE /api/v1/servers/{id}/maintenance` enable/disable a
+  server's maintenance window (`app.application.services.
+  maintenance_service.MaintenanceService`) — deliberately touching only
+  `Server.maintenance`, never `classification`/`health`, so a server can
+  be simultaneously HOSTED_CLUSTER, CRITICAL, and in maintenance without
+  the three concepts interfering.
+- `audit_events` is append-only by construction, not by convention:
+  `MongoAuditEventRepository` exposes only `record()` — no `update`/
+  `delete` method exists on the class at all, so no code path in this
+  codebase *can* alter or remove a recorded event. `AuditService.record()`
+  is the one place every mutation (classification rule CRUD, health
+  policy CRUD, maintenance changes, and real classification/health
+  transitions from `reclassify`/`recalculate`/ingestion) goes through.
+- Ingestion emits `SERVER_CREATED` for genuinely new servers and
+  `CLASSIFICATION_CHANGED`/`HEALTH_STATUS_CHANGED` only on a real
+  transition — never a generic "updated" event, since ingestion touches
+  `last_seen_at` on every server on every run and a naive audit-on-every-
+  write would be pure noise with no signal.
+- `GET /api/v1/events` and `GET /api/v1/servers/{id}/events` use a
+  simpler, unsigned keyset cursor than `servers`' HMAC-signed one — the
+  sort order here never varies (`created_at DESC, _id DESC`), and a
+  forged/stale cursor on a read-only log has no consequence worse than
+  seeing the wrong page. Finding and fixing the cursor was itself the
+  most instructive bug this slice produced: every repository in this
+  codebase stores `datetime` fields as ISO 8601 *strings* (`model_dump(...,
+  mode="json")`), and the first cursor implementation compared a parsed
+  Python `datetime` against that stored string in a MongoDB `$lt` query —
+  a cross-BSON-type comparison that silently returns wrong results rather
+  than raising. See `docs/adr/0006-audit-event-cursor-string-dates.md`.
+- `Server.profile_template` — the reusable deployment/configuration
+  template a server's profile was provisioned from: UCS Manager's Service
+  Profile Template, Intersight's Server Profile Template, HPE OneView's
+  Server Profile Template, or a Dell OME Deployment Template. Vendor-
+  neutral (`name` + opaque `external_id`), landed alongside slice 4
+  because it touches the same `ProviderServer` → `Server` ingestion path.
+
+330 backend tests (unit/integration/api) and the full frontend
+lint/typecheck/test/build pipeline pass.
+
+The classification/health-policy editor UIs, the 10k/50k performance
+pass, and real authentication are designed (see the session's approved
+plan) but land in subsequent slices — this document will gain a section
+and an ADR for each as they're implemented, rather than describing
+not-yet-existing code as done.
 
 ## Further reading
 

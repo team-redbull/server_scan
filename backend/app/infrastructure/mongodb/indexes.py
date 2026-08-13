@@ -37,6 +37,7 @@ SITES_COLLECTION = "sites"
 MANAGERS_COLLECTION = "managers"
 CLASSIFICATION_RULES_COLLECTION = "classification_rules"
 HEALTH_POLICIES_COLLECTION = "health_policies"
+AUDIT_EVENTS_COLLECTION = "audit_events"
 
 SERVER_INDEXES: list[IndexModel] = [
     IndexModel(
@@ -148,6 +149,30 @@ CLASSIFICATION_RULE_INDEXES: list[IndexModel] = [
     IndexModel([("scope.manager_type", ASCENDING)], name="scope_manager_type"),
 ]
 
+# Unlike the rule/policy/site/manager collections above, `audit_events` is
+# unbounded and append-only — it grows for the lifetime of the deployment,
+# never shrinks, and every read is a "most recent N, optionally filtered"
+# query. All three indexes end in `_id DESC` to match the keyset
+# pagination's fixed `(created_at DESC, _id DESC)` sort
+# (`app.infrastructure.mongodb.audit_event_repository`), so every one of
+# the three real read patterns — global feed, one server's history,
+# one actor's history — is an IXSCAN, never an in-memory sort.
+AUDIT_EVENT_INDEXES: list[IndexModel] = [
+    IndexModel([("created_at", DESCENDING), ("_id", DESCENDING)], name="created_at_id"),
+    IndexModel(
+        [("server_id", ASCENDING), ("created_at", DESCENDING), ("_id", DESCENDING)],
+        name="server_id_created_at_id",
+    ),
+    IndexModel(
+        [("event_type", ASCENDING), ("created_at", DESCENDING), ("_id", DESCENDING)],
+        name="event_type_created_at_id",
+    ),
+    IndexModel(
+        [("actor.id", ASCENDING), ("created_at", DESCENDING), ("_id", DESCENDING)],
+        name="actor_id_created_at_id",
+    ),
+]
+
 
 async def ensure_indexes(db: AsyncDatabase[dict[str, Any]]) -> None:
     """Create every declared index if missing. Safe to call on every
@@ -158,3 +183,4 @@ async def ensure_indexes(db: AsyncDatabase[dict[str, Any]]) -> None:
     await db[MANAGERS_COLLECTION].create_indexes(MANAGER_INDEXES)
     await db[HEALTH_POLICIES_COLLECTION].create_indexes(HEALTH_POLICY_INDEXES)
     await db[CLASSIFICATION_RULES_COLLECTION].create_indexes(CLASSIFICATION_RULE_INDEXES)
+    await db[AUDIT_EVENTS_COLLECTION].create_indexes(AUDIT_EVENT_INDEXES)

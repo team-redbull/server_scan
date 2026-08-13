@@ -40,8 +40,10 @@ from typing import TYPE_CHECKING, Protocol
 import structlog
 from pymongo.errors import DuplicateKeyError
 
+from app.application.services.audit_service import SYSTEM_INGEST_ACTOR, AuditService
 from app.application.services.pipeline import classification_from_result, health_from_state
 from app.domain.enums import MediaType, Vendor
+from app.domain.models.audit_event import EventType
 from app.domain.models.connectivity import (
     Connectivity,
     ConnectivityAttachment,
@@ -50,7 +52,7 @@ from app.domain.models.connectivity import (
 from app.domain.models.hardware import Cpu, Hardware, Memory, Power, Storage, StorageDrive
 from app.domain.models.manager import Manager
 from app.domain.models.network import BmcInfo, NetworkInfo
-from app.domain.models.server import Identity, Server
+from app.domain.models.server import Identity, ProfileTemplate, Server
 from app.domain.models.site import Site
 from app.domain.ports.provider import ProviderServer, ServerInventoryProvider
 from app.domain.ports.repository import ServerRepository
@@ -134,12 +136,14 @@ class IngestService:
         manager_repo: ManagerRepositoryPort,
         classification_service: ClassificationService | None = None,
         health_service: HealthPolicyService | None = None,
+        audit: AuditService | None = None,
     ) -> None:
         self._server_repo = server_repo
         self._site_repo = site_repo
         self._manager_repo = manager_repo
         self._classification_service = classification_service
         self._health_service = health_service
+        self._audit = audit
 
     async def ingest(
         self,
@@ -241,6 +245,7 @@ class IngestService:
             )
             if refetched is None:
                 raise
+            existing = refetched
             server = await self._build_server(
                 ps,
                 vendor=vendor,
@@ -249,9 +254,54 @@ class IngestService:
                 provider_type=provider_type,
             )
             await self._server_repo.upsert(server)
+            await self._emit_transition_events(existing, server)
             return False
 
+        await self._emit_transition_events(existing, server)
         return existing is None
+
+    async def _emit_transition_events(self, existing: Server | None, server: Server) -> None:
+        """Ingestion runs continuously and touches `last_seen_at` on every
+        server on every run, so a generic SERVER_UPDATED event would be
+        pure noise — the only ingestion-driven transitions worth an audit
+        entry are "this server is new" and "the engines' verdict about
+        this server actually changed", which is exactly what
+        `POST /servers/{id}/reclassify` and `.../health/recalculate`
+        (`app.api.v1.servers`) already audit for an explicit, operator-
+        triggered re-evaluation — this mirrors that same selectivity for
+        the automatic path.
+        """
+        if self._audit is None:
+            return
+
+        if existing is None:
+            await self._audit.record(
+                EventType.SERVER_CREATED,
+                actor=SYSTEM_INGEST_ACTOR,
+                server_id=server.id,
+                data={"vendor": server.identity.vendor.value, "name": server.name},
+            )
+            return
+
+        if server.classification.installation_type != existing.classification.installation_type:
+            await self._audit.record(
+                EventType.CLASSIFICATION_CHANGED,
+                actor=SYSTEM_INGEST_ACTOR,
+                server_id=server.id,
+                data={
+                    "from": existing.classification.installation_type.value,
+                    "to": server.classification.installation_type.value,
+                    "matched_rule_id": server.classification.matched_rule_id,
+                },
+            )
+
+        if server.health.overall != existing.health.overall:
+            await self._audit.record(
+                EventType.HEALTH_STATUS_CHANGED,
+                actor=SYSTEM_INGEST_ACTOR,
+                server_id=server.id,
+                data={"from": existing.health.overall.value, "to": server.health.overall.value},
+            )
 
     async def _build_server(
         self,
@@ -278,6 +328,9 @@ class IngestService:
             system_uuid=ps.system_uuid,
             nic_macs=nic_macs,
             external_ids={ps.manager_id: ps.external_id} if ps.manager_id else {},
+        )
+        profile_template = ProfileTemplate(
+            name=ps.profile_template_name, external_id=ps.profile_template_external_id
         )
 
         network = NetworkInfo(
@@ -360,6 +413,7 @@ class IngestService:
             model=ps.model,
             model_normalized=normalize_text(ps.model),
             identity=identity,
+            profile_template=profile_template,
             hardware=hardware,
             network=network,
             connectivity=connectivity,

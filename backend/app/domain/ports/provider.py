@@ -66,6 +66,14 @@ class ProviderServer:
     site_id: str | None = None
     manager_id: str | None = None
 
+    # The reusable profile/deployment template this server's configuration
+    # came from — UCS Manager's Service Profile Template, Intersight's
+    # Server Profile Template, OneView's Server Profile Template, or an
+    # OME Deployment Template. See `app.domain.models.server.
+    # ProfileTemplate`'s docstring for the exact per-vendor mapping.
+    profile_template_name: str | None = None
+    profile_template_external_id: str | None = None
+
     cpu_sockets: int = 0
     cpu_cores: int = 0
     cpu_threads: int = 0

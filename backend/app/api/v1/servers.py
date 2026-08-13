@@ -34,18 +34,23 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, Request
 
+from app.api.v1.maintenance_schemas import MaintenanceEnableRequest
 from app.api.v1.schemas import PageInfo, ServerDetail, ServerListResponse, ServerSummary
+from app.application.services.audit_service import AuditService
 from app.application.services.classification_service import ClassificationService
 from app.application.services.health_policy_service import HealthPolicyService
+from app.application.services.maintenance_service import MaintenanceService
 from app.application.services.pipeline import classification_from_result, health_from_state
 from app.config import Settings, get_settings
-from app.dependencies import get_mongo_holder, get_redis_holder
+from app.dependencies import get_current_actor, get_mongo_holder, get_redis_holder, get_request_id
+from app.domain.models.audit_event import Actor, EventType
 from app.domain.ports.regex_engine import RegexEngine
 from app.domain.services.classification import ClassifiableServer
 from app.domain.services.health.metrics import build_default_registry
 from app.domain.services.regex_engine import RegexModuleEngine
 from app.domain.services.search import build_filter_query, resolve_sort_field
 from app.errors import NotFoundError, PageSizeTooLargeError, ValidationAppError
+from app.infrastructure.mongodb.audit_event_repository import MongoAuditEventRepository
 from app.infrastructure.mongodb.classification_rule_repository import (
     MongoClassificationRuleRepository,
 )
@@ -134,6 +139,17 @@ def _health_policy_service(
         registry=_METRIC_REGISTRY,
         server_repo=server_repo,
     )
+
+
+def _audit_service(mongo: Annotated[MongoClientHolder, Depends(get_mongo_holder)]) -> AuditService:
+    return AuditService(repo=MongoAuditEventRepository(mongo))
+
+
+def _maintenance_service(
+    server_repo: Annotated[MongoServerRepository, Depends(_server_repo)],
+    audit: Annotated[AuditService, Depends(_audit_service)],
+) -> MaintenanceService:
+    return MaintenanceService(server_repo=server_repo, audit=audit)
 
 
 def _revision_pointer_key(server_id: str) -> str:
@@ -257,6 +273,9 @@ async def reclassify_server(
     repo: Annotated[MongoServerRepository, Depends(_server_repo)],
     cache: Annotated[CacheClient, Depends(_cache_client)],
     service: Annotated[ClassificationService, Depends(_classification_service)],
+    audit: Annotated[AuditService, Depends(_audit_service)],
+    actor: Annotated[Actor, Depends(get_current_actor)],
+    request_id: Annotated[str | None, Depends(get_request_id)],
 ) -> ServerDetail:
     """Re-runs the classification engine against this server's current
     identity fields and the *current* ruleset, and persists the result —
@@ -268,6 +287,7 @@ async def reclassify_server(
     if server is None:
         raise NotFoundError(f"No server with id {server_id!r}.", details={"server_id": server_id})
 
+    previous_type = server.classification.installation_type
     classifiable = ClassifiableServer(
         name=server.name,
         vendor=server.identity.vendor,
@@ -285,6 +305,19 @@ async def reclassify_server(
 
     await repo.upsert(server)
     await _invalidate_detail_cache(server_id, cache)
+
+    if server.classification.installation_type != previous_type:
+        await audit.record(
+            EventType.CLASSIFICATION_CHANGED,
+            actor=actor,
+            server_id=server_id,
+            request_id=request_id,
+            data={
+                "from": previous_type.value,
+                "to": server.classification.installation_type.value,
+                "matched_rule_id": server.classification.matched_rule_id,
+            },
+        )
     return ServerDetail.from_server(server)
 
 
@@ -294,6 +327,9 @@ async def recalculate_server_health(
     repo: Annotated[MongoServerRepository, Depends(_server_repo)],
     cache: Annotated[CacheClient, Depends(_cache_client)],
     service: Annotated[HealthPolicyService, Depends(_health_policy_service)],
+    audit: Annotated[AuditService, Depends(_audit_service)],
+    actor: Annotated[Actor, Depends(get_current_actor)],
+    request_id: Annotated[str | None, Depends(get_request_id)],
 ) -> ServerDetail:
     """Re-runs the health policy engine against this server's current
     facts and the *current* policy set, and persists the result. Same
@@ -304,11 +340,59 @@ async def recalculate_server_health(
     if server is None:
         raise NotFoundError(f"No server with id {server_id!r}.", details={"server_id": server_id})
 
+    previous_overall = server.health.overall
     state = await service.evaluate_server(server)
     server.health = health_from_state(state)
     server.revision += 1
     server.updated_at = utcnow()
 
     await repo.upsert(server)
+    await _invalidate_detail_cache(server_id, cache)
+
+    if server.health.overall != previous_overall:
+        await audit.record(
+            EventType.HEALTH_STATUS_CHANGED,
+            actor=actor,
+            server_id=server_id,
+            request_id=request_id,
+            data={
+                "from": previous_overall.value,
+                "to": server.health.overall.value,
+                "policy_ids": [e.policy_id for e in state.evaluations if e.active],
+            },
+        )
+    return ServerDetail.from_server(server)
+
+
+@router.put("/servers/{server_id}/maintenance", response_model=ServerDetail)
+async def enable_maintenance(
+    server_id: str,
+    payload: MaintenanceEnableRequest,
+    service: Annotated[MaintenanceService, Depends(_maintenance_service)],
+    cache: Annotated[CacheClient, Depends(_cache_client)],
+    actor: Annotated[Actor, Depends(get_current_actor)],
+    request_id: Annotated[str | None, Depends(get_request_id)],
+) -> ServerDetail:
+    server = await service.enable(
+        server_id,
+        reason=payload.reason,
+        ticket=payload.ticket,
+        expected_end=payload.expected_end,
+        actor=actor,
+        request_id=request_id,
+    )
+    await _invalidate_detail_cache(server_id, cache)
+    return ServerDetail.from_server(server)
+
+
+@router.delete("/servers/{server_id}/maintenance", response_model=ServerDetail)
+async def disable_maintenance(
+    server_id: str,
+    service: Annotated[MaintenanceService, Depends(_maintenance_service)],
+    cache: Annotated[CacheClient, Depends(_cache_client)],
+    actor: Annotated[Actor, Depends(get_current_actor)],
+    request_id: Annotated[str | None, Depends(get_request_id)],
+) -> ServerDetail:
+    server = await service.disable(server_id, actor=actor, request_id=request_id)
     await _invalidate_detail_cache(server_id, cache)
     return ServerDetail.from_server(server)

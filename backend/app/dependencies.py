@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from fastapi import Request
 
+from app.domain.models.audit_event import Actor, ActorType
 from app.infrastructure.mongodb import MongoClientHolder
 from app.infrastructure.redis import RedisClientHolder
 
@@ -24,3 +25,21 @@ def get_mongo_holder(request: Request) -> MongoClientHolder:
 def get_redis_holder(request: Request) -> RedisClientHolder:
     holder: RedisClientHolder = request.app.state.redis
     return holder
+
+
+def get_request_id(request: Request) -> str | None:
+    return getattr(request.state, "request_id", None)
+
+
+# Placeholder until real authentication lands (the platform's own release
+# gate — see the session's approved plan): every audit event recorded from
+# an API request needs *some* actor, and until there's a `Principal` to
+# extract one from, every request is attributed to this well-known
+# unauthenticated actor rather than left null. `data.get("actor_id")` will
+# stop returning this constant the moment auth is wired in — nothing about
+# the audit event *shape* changes, only what this dependency returns.
+_UNAUTHENTICATED_ACTOR = Actor(type=ActorType.USER, id="unauthenticated", display="API (no auth)")
+
+
+def get_current_actor(_request: Request) -> Actor:
+    return _UNAUTHENTICATED_ACTOR

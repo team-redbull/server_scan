@@ -209,6 +209,37 @@ def _fake_ip(rng: random.Random, site_index: int, host_index: int) -> str:
     return f"10.{site_index + 10}.{host_index // 256}.{host_index % 256}"
 
 
+# Per-vendor template-name pools, in each platform's own naming style —
+# UCS Manager's Service Profile Templates, Intersight's Server Profile
+# Templates, HPE OneView's Server Profile Templates, and Dell OME's
+# Deployment Templates (see `app.domain.models.server.ProfileTemplate`'s
+# docstring for the full per-vendor mapping this DTO field feeds into).
+_TEMPLATE_NAMES: dict[str, tuple[str, ...]] = {
+    "cisco": ("SPT-OCP-Worker-B200", "SPT-OCP-Master-C240", "SPT-UPI-Generic"),
+    "dell": ("DT-OCP-Worker-R760", "DT-OCP-Master-R760", "DT-UPI-Baseline"),
+    "hpe": ("SPT-OCP-Worker-DL380", "SPT-OCP-Master-DL380", "SPT-UPI-Baseline"),
+}
+
+
+def _profile_template(rng: random.Random, vendor: str) -> tuple[str | None, str | None]:
+    """Returns `(name, external_id)`. ~10% of fake servers get no
+    template at all (a server profile applied ad hoc, not from a
+    template — a real, common state on all four platforms), matching how
+    every other optional field in this generator models "sometimes
+    absent" rather than always-populated.
+    """
+    if rng.random() < 0.1:
+        return None, None
+    name = rng.choice(_TEMPLATE_NAMES[vendor])
+    if vendor == "cisco":
+        external_id = name  # UCS Manager references templates by name (srcTemplName)
+    elif vendor == "hpe":
+        external_id = f"/rest/server-profile-templates/{rng.getrandbits(32):08x}"
+    else:
+        external_id = str(rng.randint(1000, 9999))  # OME TemplateId
+    return name, external_id
+
+
 def _build_name(rng: random.Random, vendor: str, index: int) -> str:
     family = rng.choice(_NAME_FAMILIES)
     if family == "hosted_cluster":
@@ -316,6 +347,7 @@ def generate_servers(*, seed: int, count: int) -> Iterator[ProviderServer]:
         storage_drives, storage_total_bytes = _build_storage_drives(rng, drive_count)
 
         attachments = _build_attachments(rng, site_code=site_code) if vendor == "cisco" else ()
+        template_name, template_external_id = _profile_template(rng, vendor)
 
         tags: tuple[str, ...] = ()
         if rng.random() < 0.3:
@@ -333,6 +365,8 @@ def generate_servers(*, seed: int, count: int) -> Iterator[ProviderServer]:
             bmc_mac=bmc_mac,
             site_id=_site_id(site_code),
             manager_id=_manager_for(vendor, site_code),
+            profile_template_name=template_name,
+            profile_template_external_id=template_external_id,
             cpu_sockets=cpu_sockets,
             cpu_cores=cpu_cores,
             cpu_threads=cpu_threads,

@@ -27,16 +27,19 @@ from app.api.v1.classification_schemas import (
     RuleFlagsSchema,
     RuleScopeSchema,
 )
+from app.application.services.audit_service import AuditService
 from app.application.services.classification_service import (
     ClassificationService,
     validate_rule_write,
 )
 from app.config import Settings, get_settings
-from app.dependencies import get_mongo_holder
+from app.dependencies import get_current_actor, get_mongo_holder, get_request_id
+from app.domain.models.audit_event import Actor, EventType
 from app.domain.models.classification_rule import ClassificationRule, RuleFlags, RuleScope
 from app.domain.ports.regex_engine import RegexEngine
 from app.domain.services.regex_engine import RegexModuleEngine
 from app.errors import ConflictError, NotFoundError, ValidationAppError
+from app.infrastructure.mongodb.audit_event_repository import MongoAuditEventRepository
 from app.infrastructure.mongodb.classification_rule_repository import (
     MongoClassificationRuleRepository,
 )
@@ -76,6 +79,10 @@ def _flags_from_schema(flags: RuleFlagsSchema) -> RuleFlags:
     return RuleFlags(ignore_case=flags.ignore_case, multiline=flags.multiline, dotall=flags.dotall)
 
 
+def _audit_service(mongo: Annotated[MongoClientHolder, Depends(get_mongo_holder)]) -> AuditService:
+    return AuditService(repo=MongoAuditEventRepository(mongo))
+
+
 @router.get("", response_model=ClassificationRuleListResponse)
 async def list_rules(
     repo: Annotated[MongoClassificationRuleRepository, Depends(_rule_repo)],
@@ -97,6 +104,9 @@ async def create_rule(
     payload: ClassificationRuleCreate,
     repo: Annotated[MongoClassificationRuleRepository, Depends(_rule_repo)],
     engine: Annotated[RegexEngine, Depends(_regex_engine)],
+    audit: Annotated[AuditService, Depends(_audit_service)],
+    actor: Annotated[Actor, Depends(get_current_actor)],
+    request_id: Annotated[str | None, Depends(get_request_id)],
 ) -> ClassificationRuleResponse:
     now = utcnow()
     rule = ClassificationRule(
@@ -126,6 +136,16 @@ async def create_rule(
             details={"name": rule.name},
         ) from exc
 
+    await audit.record(
+        EventType.CLASSIFICATION_RULE_CREATED,
+        actor=actor,
+        request_id=request_id,
+        data={
+            "rule_id": rule.id,
+            "name": rule.name,
+            "installation_type": rule.installation_type.value,
+        },
+    )
     return ClassificationRuleResponse.from_rule(rule)
 
 
@@ -148,6 +168,9 @@ async def update_rule(
     payload: ClassificationRuleUpdate,
     repo: Annotated[MongoClassificationRuleRepository, Depends(_rule_repo)],
     engine: Annotated[RegexEngine, Depends(_regex_engine)],
+    audit: Annotated[AuditService, Depends(_audit_service)],
+    actor: Annotated[Actor, Depends(get_current_actor)],
+    request_id: Annotated[str | None, Depends(get_request_id)],
 ) -> ClassificationRuleResponse:
     existing = await repo.get_by_id(rule_id)
     if existing is None:
@@ -212,6 +235,12 @@ async def update_rule(
             details={"name": merged.name},
         ) from exc
 
+    await audit.record(
+        EventType.CLASSIFICATION_RULE_UPDATED,
+        actor=actor,
+        request_id=request_id,
+        data={"rule_id": merged.id, "changed_fields": sorted(update_fields)},
+    )
     return ClassificationRuleResponse.from_rule(merged)
 
 
@@ -219,6 +248,9 @@ async def update_rule(
 async def delete_rule(
     rule_id: str,
     repo: Annotated[MongoClassificationRuleRepository, Depends(_rule_repo)],
+    audit: Annotated[AuditService, Depends(_audit_service)],
+    actor: Annotated[Actor, Depends(get_current_actor)],
+    request_id: Annotated[str | None, Depends(get_request_id)],
 ) -> None:
     existing = await repo.get_by_id(rule_id)
     if existing is None:
@@ -231,6 +263,12 @@ async def delete_rule(
             details={"rule_id": rule_id},
         )
     await repo.delete(rule_id)
+    await audit.record(
+        EventType.CLASSIFICATION_RULE_DELETED,
+        actor=actor,
+        request_id=request_id,
+        data={"rule_id": rule_id, "name": existing.name},
+    )
 
 
 @router.post("/preview", response_model=ClassificationPreviewResponse)

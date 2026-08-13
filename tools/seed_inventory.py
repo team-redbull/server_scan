@@ -15,6 +15,7 @@ import asyncio
 
 import structlog
 
+from app.application.services.audit_service import AuditService
 from app.application.services.bootstrap import (
     ensure_default_classification_rules,
     ensure_default_health_policies,
@@ -27,6 +28,7 @@ from app.domain.services.health.metrics import build_default_registry
 from app.domain.services.regex_engine import RegexModuleEngine
 from app.infrastructure.logging import configure_logging
 from app.infrastructure.mongodb import MongoClientHolder
+from app.infrastructure.mongodb.audit_event_repository import MongoAuditEventRepository
 from app.infrastructure.mongodb.classification_rule_repository import (
     MongoClassificationRuleRepository,
 )
@@ -89,6 +91,7 @@ async def _run(*, count: int, seed: int) -> None:
                 registry=build_default_registry(),
                 server_repo=MongoServerRepository(mongo, cursor_secret=settings.cursor_secret),
             ),
+            audit=AuditService(repo=MongoAuditEventRepository(mongo)),
         )
         provider = FakeProvider(seed=seed, count=count)
 

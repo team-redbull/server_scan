@@ -37,7 +37,7 @@ from app.domain.models.health import Health
 from app.domain.models.maintenance import Maintenance
 from app.domain.models.network import NetworkInfo
 from app.domain.models.openshift import OpenShiftLifecycle
-from app.domain.models.server import Identity, Server
+from app.domain.models.server import Identity, ProfileTemplate, Server
 
 
 class ConnectivitySummary(BaseModel):
@@ -112,6 +112,7 @@ class ServerDetail(BaseModel):
     model: str | None
     model_normalized: str
     identity: Identity
+    profile_template: ProfileTemplate
     hardware: Hardware
     network: NetworkInfo
     connectivity: Connectivity
@@ -139,6 +140,7 @@ class ServerDetail(BaseModel):
             model=server.model,
             model_normalized=server.model_normalized,
             identity=server.identity,
+            profile_template=server.profile_template,
             hardware=server.hardware,
             network=server.network,
             connectivity=server.connectivity,

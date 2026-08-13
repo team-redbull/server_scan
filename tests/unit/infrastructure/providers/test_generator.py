@@ -130,3 +130,33 @@ def test_servers_reference_known_sites_and_managers() -> None:
     for s in servers:
         assert s.site_id in site_ids
         assert s.manager_id in manager_ids
+
+
+def test_some_servers_have_a_profile_template_and_some_do_not() -> None:
+    servers = list(generate_servers(seed=42, count=300))
+    with_template = [s for s in servers if s.profile_template_name is not None]
+    without_template = [s for s in servers if s.profile_template_name is None]
+    assert with_template
+    assert without_template
+
+
+def test_profile_template_name_and_external_id_are_both_set_or_both_none() -> None:
+    servers = list(generate_servers(seed=42, count=300))
+    for s in servers:
+        assert (s.profile_template_name is None) == (s.profile_template_external_id is None)
+
+
+def test_profile_template_external_id_form_matches_vendor() -> None:
+    servers = list(generate_servers(seed=42, count=300))
+    for s in servers:
+        if s.profile_template_name is None:
+            continue
+        if s.vendor == "cisco":
+            # UCS Manager references its Service Profile Template by name.
+            assert s.profile_template_external_id == s.profile_template_name
+        elif s.vendor == "hpe":
+            assert s.profile_template_external_id is not None
+            assert s.profile_template_external_id.startswith("/rest/server-profile-templates/")
+        elif s.vendor == "dell":
+            assert s.profile_template_external_id is not None
+            assert s.profile_template_external_id.isdigit()

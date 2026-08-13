@@ -36,16 +36,19 @@ from app.api.v1.health_policy_schemas import (
     HealthPolicyResponse,
     HealthPolicyUpdate,
 )
+from app.application.services.audit_service import AuditService
 from app.application.services.health_policy_service import (
     HealthPolicyService,
     validate_policy_write,
     validate_system_field_lock,
 )
 from app.config import Settings, get_settings
-from app.dependencies import get_mongo_holder
+from app.dependencies import get_current_actor, get_mongo_holder, get_request_id
+from app.domain.models.audit_event import Actor, EventType
 from app.domain.models.health_policy import HealthPolicy
 from app.domain.services.health.metrics import MetricRegistry, build_default_registry
 from app.errors import ConflictError, NotFoundError, ValidationAppError
+from app.infrastructure.mongodb.audit_event_repository import MongoAuditEventRepository
 from app.infrastructure.mongodb.client import MongoClientHolder
 from app.infrastructure.mongodb.health_policy_repository import MongoHealthPolicyRepository
 from app.infrastructure.mongodb.server_repository import MongoServerRepository
@@ -80,6 +83,10 @@ def _health_policy_service(
     registry: Annotated[MetricRegistry, Depends(_metric_registry)],
 ) -> HealthPolicyService:
     return HealthPolicyService(policy_repo=policy_repo, registry=registry, server_repo=server_repo)
+
+
+def _audit_service(mongo: Annotated[MongoClientHolder, Depends(get_mongo_holder)]) -> AuditService:
+    return AuditService(repo=MongoAuditEventRepository(mongo))
 
 
 def _validate_and_build(payload: dict[str, Any]) -> HealthPolicy:
@@ -123,6 +130,9 @@ async def create_policy(
     body: HealthPolicyCreate,
     policy_repo: Annotated[MongoHealthPolicyRepository, Depends(_policy_repo)],
     registry: Annotated[MetricRegistry, Depends(_metric_registry)],
+    audit: Annotated[AuditService, Depends(_audit_service)],
+    actor: Annotated[Actor, Depends(get_current_actor)],
+    request_id: Annotated[str | None, Depends(get_request_id)],
 ) -> HealthPolicyResponse:
     if await policy_repo.get_by_name(body.name) is not None:
         raise ConflictError(
@@ -142,6 +152,12 @@ async def create_policy(
     validate_policy_write(policy, registry=registry)
 
     await policy_repo.upsert(policy)
+    await audit.record(
+        EventType.HEALTH_POLICY_CREATED,
+        actor=actor,
+        request_id=request_id,
+        data={"policy_id": policy.id, "name": policy.name, "policy_key": policy.policy_key},
+    )
     return HealthPolicyResponse.from_policy(policy)
 
 
@@ -164,6 +180,9 @@ async def update_policy(
     body: HealthPolicyUpdate,
     policy_repo: Annotated[MongoHealthPolicyRepository, Depends(_policy_repo)],
     registry: Annotated[MetricRegistry, Depends(_metric_registry)],
+    audit: Annotated[AuditService, Depends(_audit_service)],
+    actor: Annotated[Actor, Depends(get_current_actor)],
+    request_id: Annotated[str | None, Depends(get_request_id)],
 ) -> HealthPolicyResponse:
     existing = await policy_repo.get_by_id(policy_id)
     if existing is None:
@@ -191,6 +210,17 @@ async def update_policy(
     validate_policy_write(merged, registry=registry)
 
     await policy_repo.upsert(merged)
+
+    # A transition from enabled to disabled is the specific, actionable
+    # event ("this policy stopped protecting servers") — everything else
+    # about the update is the generic UPDATED event.
+    just_disabled = existing.enabled and not merged.enabled
+    await audit.record(
+        EventType.HEALTH_POLICY_DISABLED if just_disabled else EventType.HEALTH_POLICY_UPDATED,
+        actor=actor,
+        request_id=request_id,
+        data={"policy_id": merged.id, "changed_fields": sorted(updates)},
+    )
     return HealthPolicyResponse.from_policy(merged)
 
 
@@ -198,6 +228,9 @@ async def update_policy(
 async def delete_policy(
     policy_id: str,
     policy_repo: Annotated[MongoHealthPolicyRepository, Depends(_policy_repo)],
+    audit: Annotated[AuditService, Depends(_audit_service)],
+    actor: Annotated[Actor, Depends(get_current_actor)],
+    request_id: Annotated[str | None, Depends(get_request_id)],
 ) -> None:
     existing = await policy_repo.get_by_id(policy_id)
     if existing is None:
@@ -209,6 +242,12 @@ async def delete_policy(
             "System health policies cannot be deleted.", details={"policy_id": policy_id}
         )
     await policy_repo.delete(policy_id)
+    await audit.record(
+        EventType.HEALTH_POLICY_DELETED,
+        actor=actor,
+        request_id=request_id,
+        data={"policy_id": policy_id, "name": existing.name},
+    )
 
 
 @router.post("/health-policies/preview", response_model=HealthPolicyPreviewResponse)

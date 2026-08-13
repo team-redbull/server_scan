@@ -36,6 +36,43 @@ class Identity(BaseModel):
     external_ids: dict[str, str] = Field(default_factory=dict)  # manager_id -> external id
 
 
+class ProfileTemplate(BaseModel):
+    """The reusable configuration/deployment template this server's
+    profile was provisioned from — vendor-neutral, but the underlying
+    concept exists (under different names) in every hardware manager this
+    platform will eventually integrate with:
+
+    - Cisco UCS Manager: a service profile (`lsServer`) instantiated from
+      a **Service Profile Template**, referenced by name via that
+      profile's own `srcTemplName` attribute.
+    - Cisco Intersight: a `server.Profile` derived from a **Server Profile
+      Template** (`server.ProfileTemplate`), referenced via the profile's
+      `SrcTemplate` relationship (a `{moid, object_type}` pair).
+    - HPE OneView: a Server Profile (`/rest/server-profiles`) derived from
+      a **Server Profile Template**, referenced by the profile's
+      `serverProfileTemplateUri`.
+    - Dell OpenManage Enterprise: a **Deployment Template** (OME's
+      Configuration/Deployment Template feature), referenced by
+      `TemplateId` at deploy time — OME's public API does not clearly
+      expose a persistent "which template was I deployed from" field on
+      the device resource itself, unlike the other three, so this may
+      stay unpopulated for Dell servers until that's confirmed against a
+      live OME instance.
+
+    `name` is always the vendor's own display name for the template — the
+    one thing constant across all four platforms. `external_id` is the
+    vendor-opaque reference (a template name for UCS Manager, a MoID for
+    Intersight, a URI for OneView) — kept as an opaque string rather than
+    parsed, the same "store what the vendor gave us, don't overinterpret
+    it" approach already used for `Identity.external_ids`. Which platform
+    a template reference came from is not duplicated here — it's already
+    recoverable via `Server.manager_id` -> the owning `Manager.type`.
+    """
+
+    name: str | None = None
+    external_id: str | None = None
+
+
 class Server(BaseModel):
     id: str = Field(alias="_id")
     schema_version: int = 1
@@ -46,6 +83,7 @@ class Server(BaseModel):
     model_normalized: str = ""
 
     identity: Identity = Field(default_factory=Identity)
+    profile_template: ProfileTemplate = Field(default_factory=ProfileTemplate)
     hardware: Hardware = Field(default_factory=Hardware)
     network: NetworkInfo = Field(default_factory=NetworkInfo)
     connectivity: Connectivity = Field(default_factory=Connectivity)
