@@ -17,8 +17,14 @@ export default defineConfig({
   server: {
     proxy: {
       // Everything except the SPA's own routes goes to the backend in dev.
+      // `/health` is deliberately a `^`-prefixed regex (Vite's syntax for
+      // "treat this key as a RegExp") anchored to a trailing slash, not a
+      // plain prefix match: a plain "/health" prefix would also swallow
+      // the SPA's own `/health-policies` client routes (slice 5) and
+      // proxy them to the backend's unrelated `/health/live`+`/health/
+      // ready` liveness endpoints, breaking a hard refresh on those pages.
       "/api": "http://localhost:8080",
-      "/health": "http://localhost:8080",
+      "^/health/": "http://localhost:8080",
       "/metrics": "http://localhost:8080",
     },
   },
