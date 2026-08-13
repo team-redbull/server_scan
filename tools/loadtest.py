@@ -122,10 +122,14 @@ async def main() -> None:
 
         server_count = (await client.get("/api/v1/servers", params={"page_size": "1"})).json()
 
-        print(f"target: {args.base_url}  concurrency={args.concurrency} "
-              f"requests_per_scenario={args.requests_per_scenario}")
-        print(f"servers collection sample check: {len(server_count.get('items', []))} item(s) "
-              "returned for page_size=1\n")
+        print(
+            f"target: {args.base_url}  concurrency={args.concurrency} "
+            f"requests_per_scenario={args.requests_per_scenario}"
+        )
+        print(
+            f"servers collection sample check: {len(server_count.get('items', []))} item(s) "
+            "returned for page_size=1\n"
+        )
 
         for scenario in _scenarios():
             name, latencies, errors, wall_seconds = await _run_scenario(

@@ -305,8 +305,10 @@ async def main() -> None:
             for description in failures:
                 print(f"  - {description}")
             raise SystemExit(1)
-        print("All query shapes with a supporting index used it. "
-              "See EXPECTED_COLLSCAN-marked shapes above for the deliberately unindexed ones.")
+        print(
+            "All query shapes with a supporting index used it. "
+            "See EXPECTED_COLLSCAN-marked shapes above for the deliberately unindexed ones."
+        )
     finally:
         await mongo.close()
 
