@@ -84,11 +84,22 @@ SERVER_INDEXES: list[IndexModel] = [
         [("identity.vendor", ASCENDING), ("name_normalized", ASCENDING), ("_id", ASCENDING)],
         name="vendor_name_id",
     ),
+    IndexModel(
+        [("maintenance.enabled", ASCENDING), ("name_normalized", ASCENDING), ("_id", ASCENDING)],
+        name="maintenance_enabled_name_id",
+    ),
     IndexModel([("updated_at", DESCENDING), ("_id", DESCENDING)], name="updated_at_id"),
-    IndexModel([("last_seen_at", ASCENDING)], name="last_seen_at"),
     # Unfiltered sorts (no `FILTER_FIELDS` value supplied) still need a
     # supporting index per `SORT_FIELDS` entry, or they fall back to an
-    # in-memory sort.
+    # in-memory sort. `last_seen_at` originally shipped as a single-field
+    # index with no `_id` tiebreak — unlike every other entry in this
+    # block — which meant an unfiltered `sort=last_seen_at` request forced
+    # a full COLLSCAN plus a blocking in-memory sort at 10k+ scale. Caught by
+    # `tools/verify_indexes.py` running `.explain()` against a real 50k-
+    # document collection — small enough test fixtures didn't expose it,
+    # since MongoDB's planner is happy to pick a COLLSCAN over a
+    # barely-selective index at low document counts anyway.
+    IndexModel([("last_seen_at", ASCENDING), ("_id", ASCENDING)], name="last_seen_at_id"),
     IndexModel([("name_normalized", ASCENDING), ("_id", ASCENDING)], name="name_id"),
     IndexModel([("identity.serial_normalized", ASCENDING), ("_id", ASCENDING)], name="serial_id"),
     IndexModel([("model_normalized", ASCENDING), ("_id", ASCENDING)], name="model_id"),

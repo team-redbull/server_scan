@@ -279,7 +279,7 @@ and exposed via reclassify/recalculate endpoints.
   neutral (`name` + opaque `external_id`), landed alongside slice 4
   because it touches the same `ProviderServer` → `Server` ingestion path.
 
-330 backend tests (unit/integration/api) and the full frontend
+334 backend tests (unit/integration/api) and the full frontend
 lint/typecheck/test/build pipeline pass.
 
 **Slice 5**: the classification-rule and health-policy admin UIs
@@ -325,10 +325,55 @@ health/`) — backend untouched this slice.
   errors (out-of-band priority, missing required scope field) surface
   through to the API exactly as the editor's error formatting expects.
 
-The 10k/50k performance pass and real authentication are designed (see
-the session's approved plan) but land in subsequent slices — this
-document will gain a section and an ADR for each as they're implemented,
-rather than describing not-yet-existing code as done.
+**Slice 6**: the 10k/50k performance pass — verifying, against real-scale
+data rather than test fixtures, that the platform's stated ~10k-with-
+headroom-to-50k target actually holds. See
+`docs/adr/0007-scale-verification-and-request-coalescing.md` for the full
+writeup; summary:
+
+- `tools/seed_inventory.py` scales linearly (~5.5ms/server through the
+  full classify+health-evaluate ingest pipeline) — seeded 50,000 servers
+  in the dev database in under 5 minutes.
+- `tools/verify_indexes.py` runs `.explain()` for every query shape
+  `GET /api/v1/servers` (plus classification/health resolution and
+  audit-event reads) can issue, against however many documents are
+  currently seeded, and fails if a shape with a supporting index falls
+  back to an unexpected `COLLSCAN`. Run against the 50k dataset, it found
+  two real index gaps that small-fixture `.explain()` tests could not
+  have caught: `last_seen_at`'s index was missing its `_id` tiebreak
+  (broke keyset-sortable unfiltered `sort=last_seen_at`), and
+  `maintenance.enabled` — a filter whitelisted in `FILTER_FIELDS` — had no
+  compound index at all, contradicting `indexes.py`'s own stated design
+  rule. Both fixed by adding the missing compound indexes
+  (`last_seen_at_id`, `maintenance_enabled_name_id`).
+- `tools/loadtest.py` measures real p50/p95/p99 latency under concurrent
+  load. It surfaced a cache-stampede tail-latency problem — many
+  concurrent identical `GET /api/v1/servers` requests each independently
+  missing the 15-second list-page cache and each re-running the same
+  expensive query, p99 up to ~4 seconds for a moderately common search
+  term. Fixed with `app.infrastructure.singleflight.coalesce`, an
+  in-process request-coalescing primitive: concurrent callers for the
+  same cache key share one in-flight computation instead of each issuing
+  their own. Re-measured p99 for the same scenario: ~156ms.
+- A related but distinct tail-latency case — a search term matching zero
+  or very few documents forces a full-collection scan since `list_page`'s
+  early-stop `limit` never triggers — was found, quantified (~700-800ms
+  p99 at 50k), and deliberately left open rather than risk-fixed under
+  this slice's time budget; the real fix trades this problem for a
+  different one (a blocking in-memory sort that scales with match count)
+  whose net direction needs real search-term distribution data this
+  platform doesn't have yet. See the ADR's "related, deliberately
+  undecided finding" section.
+- All of `GET /api/v1/servers`'s filter/sort/search combinations that do
+  have a supporting index confirmed IXSCAN (not COLLSCAN) at true 50k
+  scale after the fixes above; the unfiltered/`with_count=true` COLLSCANs
+  that remain are expected and bounded (a `limit`-capped preview scan, or
+  a count the frontend never actually requests).
+
+Real authentication is designed (see the session's approved plan) but
+lands in a subsequent slice — this document will gain a section and an
+ADR once it's implemented, rather than describing not-yet-existing code
+as done.
 
 ## Further reading
 

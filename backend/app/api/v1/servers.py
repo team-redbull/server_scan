@@ -64,6 +64,7 @@ from app.infrastructure.redis.cache import (
 )
 from app.infrastructure.redis.client import RedisClientHolder
 from app.infrastructure.redis.keys import list_key, server_key
+from app.infrastructure.singleflight import coalesce
 from app.utils.digest import stable_hash
 from app.utils.timeutil import utcnow
 
@@ -205,29 +206,39 @@ async def list_servers(
     if cached is not None:
         return ServerListResponse.model_validate(cached)
 
-    page = await repo.list_page(
-        filters=mongo_filters,
-        search=search,
-        sort=sort,
-        sort_desc=sort_desc,
-        cursor=cursor,
-        page_size=effective_page_size,
-        with_count=with_count,
-    )
-
-    response = ServerListResponse(
-        items=[ServerSummary.from_server(server) for server in page.items],
-        page=PageInfo(
-            next_cursor=page.next_cursor,
-            has_more=page.has_more,
+    # Coalesced, not just cached: concurrent identical requests that all
+    # arrive before the first one has written its result back (the same
+    # `cache_key`, within `LIST_PAGE_TTL_SECONDS`) share a single Mongo
+    # query instead of each re-running it — see
+    # `app.infrastructure.singleflight`'s docstring for the load-test
+    # finding (a low-selectivity search's p99 went from tens of ms to
+    # multi-second under concurrent load) that motivated this.
+    async def _compute() -> dict[str, object]:
+        page = await repo.list_page(
+            filters=mongo_filters,
+            search=search,
+            sort=sort,
+            sort_desc=sort_desc,
+            cursor=cursor,
             page_size=effective_page_size,
-            count=page.total_count,
-            count_capped=False,
-        ),
-    )
+            with_count=with_count,
+        )
+        response = ServerListResponse(
+            items=[ServerSummary.from_server(server) for server in page.items],
+            page=PageInfo(
+                next_cursor=page.next_cursor,
+                has_more=page.has_more,
+                page_size=effective_page_size,
+                count=page.total_count,
+                count_capped=False,
+            ),
+        )
+        dumped = response.model_dump(mode="json")
+        await cache.set(cache_key, dumped, ttl_seconds=LIST_PAGE_TTL_SECONDS)
+        return dumped
 
-    await cache.set(cache_key, response.model_dump(mode="json"), ttl_seconds=LIST_PAGE_TTL_SECONDS)
-    return response
+    response_dict = await coalesce(cache_key, _compute)
+    return ServerListResponse.model_validate(response_dict)
 
 
 @router.get("/servers/{server_id}", response_model=ServerDetail)
