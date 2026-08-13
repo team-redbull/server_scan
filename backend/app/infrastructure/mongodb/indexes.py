@@ -35,6 +35,8 @@ from pymongo.asynchronous.database import AsyncDatabase
 SERVERS_COLLECTION = "servers"
 SITES_COLLECTION = "sites"
 MANAGERS_COLLECTION = "managers"
+CLASSIFICATION_RULES_COLLECTION = "classification_rules"
+HEALTH_POLICIES_COLLECTION = "health_policies"
 
 SERVER_INDEXES: list[IndexModel] = [
     IndexModel(
@@ -100,6 +102,52 @@ MANAGER_INDEXES: list[IndexModel] = [
     IndexModel([("parent_manager_id", ASCENDING)], name="parent_manager_id"),
 ]
 
+# `(enabled, policy_key, priority DESC, order ASC, _id ASC)` mirrors the
+# exact family-resolution sort order `app.domain.services.health.evaluate.
+# resolve_families`/`_family_sort_key` applies in memory after loading —
+# loading the collection pre-sorted this way means the evaluator's own
+# sort is over an already-ordered stream, not a hidden collection scan.
+HEALTH_POLICY_INDEXES: list[IndexModel] = [
+    IndexModel([("name", ASCENDING)], name="uniq_name", unique=True),
+    IndexModel(
+        [
+            ("enabled", ASCENDING),
+            ("policy_key", ASCENDING),
+            ("priority", DESCENDING),
+            ("order", ASCENDING),
+            ("_id", ASCENDING),
+        ],
+        name="enabled_policy_key_priority_order_id",
+    ),
+    IndexModel([("policy_key", ASCENDING)], name="policy_key"),
+    IndexModel([("category", ASCENDING)], name="category"),
+    IndexModel([("scope.site_id", ASCENDING)], name="scope_site_id"),
+]
+
+# `(enabled, priority DESC, order ASC, _id ASC)` is literally the
+# classification resolution order (see `app.domain.services.classification.
+# _sort_key`, minus the in-memory specificity tiebreak that index can't
+# express) — the standard "load all enabled rules" query filters on
+# `enabled` and sorts on `(priority, order, _id)`, which is an IXSCAN over
+# this single compound index end to end. The three single-field indexes
+# below back admin filtering by scope (e.g. "show all rules scoped to this
+# site/vendor/manager type"), not the resolution path itself.
+CLASSIFICATION_RULE_INDEXES: list[IndexModel] = [
+    IndexModel([("name", ASCENDING)], name="uniq_name", unique=True),
+    IndexModel(
+        [
+            ("enabled", ASCENDING),
+            ("priority", DESCENDING),
+            ("order", ASCENDING),
+            ("_id", ASCENDING),
+        ],
+        name="enabled_priority_order_id",
+    ),
+    IndexModel([("scope.site_id", ASCENDING)], name="scope_site_id"),
+    IndexModel([("scope.vendor", ASCENDING)], name="scope_vendor"),
+    IndexModel([("scope.manager_type", ASCENDING)], name="scope_manager_type"),
+]
+
 
 async def ensure_indexes(db: AsyncDatabase[dict[str, Any]]) -> None:
     """Create every declared index if missing. Safe to call on every
@@ -108,3 +156,5 @@ async def ensure_indexes(db: AsyncDatabase[dict[str, Any]]) -> None:
     await db[SERVERS_COLLECTION].create_indexes(SERVER_INDEXES)
     await db[SITES_COLLECTION].create_indexes(SITE_INDEXES)
     await db[MANAGERS_COLLECTION].create_indexes(MANAGER_INDEXES)
+    await db[HEALTH_POLICIES_COLLECTION].create_indexes(HEALTH_POLICY_INDEXES)
+    await db[CLASSIFICATION_RULES_COLLECTION].create_indexes(CLASSIFICATION_RULE_INDEXES)

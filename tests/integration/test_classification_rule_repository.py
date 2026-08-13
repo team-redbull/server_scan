@@ -1,0 +1,200 @@
+"""Integration tests for `MongoClassificationRuleRepository` against the
+live dev MongoDB (see `tests/integration/conftest.py` for the
+skip-if-unreachable `mongo_holder` fixture). Covers CRUD round-trip, the
+unique `name` index, `list_all`'s resolution-order sort, and — the actual
+point of the `enabled_priority_order_id` compound index — that the
+standard "load all enabled rules in resolution order" query is an IXSCAN,
+never a COLLSCAN.
+"""
+
+from __future__ import annotations
+
+import json
+
+import pytest
+from pymongo.errors import DuplicateKeyError
+
+from app.domain.enums import InstallationType, Vendor
+from app.domain.models.classification_rule import ClassificationRule, RuleScope
+from app.infrastructure.mongodb import MongoClientHolder
+from app.infrastructure.mongodb.classification_rule_repository import (
+    MongoClassificationRuleRepository,
+    default_system_rules,
+)
+from app.infrastructure.mongodb.indexes import CLASSIFICATION_RULES_COLLECTION
+from app.utils.ids import new_id
+from app.utils.timeutil import utcnow
+
+pytestmark = pytest.mark.integration
+
+
+def _make_rule(
+    name: str,
+    *,
+    priority: int = 200,
+    order: int = 0,
+    enabled: bool = True,
+    source: str = "GLOBAL_CUSTOM",
+    scope: RuleScope | None = None,
+    pattern: str = r"^ocp-.*",
+    field: str = "name",
+    installation_type: InstallationType = InstallationType.HOSTED_CLUSTER,
+) -> ClassificationRule:
+    now = utcnow()
+    return ClassificationRule(
+        _id=new_id("classification_rule"),
+        name=name,
+        installation_type=installation_type,
+        scope=scope or RuleScope(),
+        field=field,
+        pattern=pattern,
+        source=source,
+        priority=priority,
+        order=order,
+        enabled=enabled,
+        created_at=now,
+        updated_at=now,
+    )
+
+
+async def test_insert_and_get_by_id_round_trip(mongo_holder: MongoClientHolder) -> None:
+    repo = MongoClassificationRuleRepository(mongo_holder)
+    rule = _make_rule("rule-round-trip")
+
+    await repo.upsert(rule)
+    fetched = await repo.get_by_id(rule.id)
+
+    assert fetched is not None
+    assert fetched.id == rule.id
+    assert fetched.name == rule.name
+    assert fetched.pattern == rule.pattern
+
+
+async def test_get_by_id_missing_returns_none(mongo_holder: MongoClientHolder) -> None:
+    repo = MongoClassificationRuleRepository(mongo_holder)
+    assert await repo.get_by_id("crul_does_not_exist") is None
+
+
+async def test_get_by_name_round_trip(mongo_holder: MongoClientHolder) -> None:
+    repo = MongoClassificationRuleRepository(mongo_holder)
+    rule = _make_rule("rule-by-name")
+    await repo.upsert(rule)
+
+    fetched = await repo.get_by_name("rule-by-name")
+    assert fetched is not None
+    assert fetched.id == rule.id
+
+    assert await repo.get_by_name("does-not-exist") is None
+
+
+async def test_delete_returns_true_when_present_false_when_absent(
+    mongo_holder: MongoClientHolder,
+) -> None:
+    repo = MongoClassificationRuleRepository(mongo_holder)
+    rule = _make_rule("rule-to-delete")
+    await repo.upsert(rule)
+
+    assert await repo.delete(rule.id) is True
+    assert await repo.get_by_id(rule.id) is None
+    assert await repo.delete(rule.id) is False
+
+
+async def test_duplicate_name_raises_duplicate_key_error(mongo_holder: MongoClientHolder) -> None:
+    repo = MongoClassificationRuleRepository(mongo_holder)
+    first = _make_rule("shared-name")
+    second = _make_rule("shared-name")
+
+    await repo.upsert(first)
+    with pytest.raises(DuplicateKeyError):
+        await repo.upsert(second)
+
+
+async def test_list_all_enabled_only_excludes_disabled(mongo_holder: MongoClientHolder) -> None:
+    repo = MongoClassificationRuleRepository(mongo_holder)
+    await repo.upsert(_make_rule("enabled-rule", enabled=True))
+    await repo.upsert(_make_rule("disabled-rule", enabled=False))
+
+    rules = await repo.list_all(enabled_only=True)
+
+    assert [r.name for r in rules] == ["enabled-rule"]
+
+
+async def test_list_all_sorts_by_priority_desc_order_asc_id_asc(
+    mongo_holder: MongoClientHolder,
+) -> None:
+    repo = MongoClassificationRuleRepository(mongo_holder)
+    low_priority = _make_rule("low-priority", priority=100)
+    high_priority = _make_rule("high-priority", priority=300)
+    mid_priority_first_order = _make_rule("mid-order-0", priority=200, order=0)
+    mid_priority_second_order = _make_rule("mid-order-1", priority=200, order=1)
+
+    # Insert in an order that doesn't match expected output, to prove the
+    # sort (not insertion order) drives the result.
+    for rule in (mid_priority_second_order, low_priority, high_priority, mid_priority_first_order):
+        await repo.upsert(rule)
+
+    rules = await repo.list_all()
+
+    assert [r.name for r in rules] == [
+        "high-priority",
+        "mid-order-0",
+        "mid-order-1",
+        "low-priority",
+    ]
+
+
+async def test_default_system_rules_round_trip(mongo_holder: MongoClientHolder) -> None:
+    repo = MongoClassificationRuleRepository(mongo_holder)
+    for rule in default_system_rules():
+        await repo.upsert(rule)
+
+    rules = await repo.list_all(enabled_only=True)
+    assert len(rules) == 4
+    dell_hosted = next(r for r in rules if r.name == "dell-vendor-hosted-cluster")
+    assert dell_hosted.scope.vendor == Vendor.DELL
+    assert dell_hosted.priority == 300
+
+
+# --- Index assertions ---
+
+
+async def test_declared_indexes_exist(mongo_holder: MongoClientHolder) -> None:
+    repo = MongoClassificationRuleRepository(mongo_holder)
+    await repo.upsert(_make_rule("index-probe"))  # ensure collection exists
+
+    cursor = await mongo_holder.db[CLASSIFICATION_RULES_COLLECTION].list_indexes()
+    index_docs = await cursor.to_list(length=None)
+    index_names = {doc["name"] for doc in index_docs}
+
+    assert "uniq_name" in index_names
+    assert "enabled_priority_order_id" in index_names
+    assert "scope_site_id" in index_names
+    assert "scope_vendor" in index_names
+    assert "scope_manager_type" in index_names
+
+
+async def test_load_enabled_rules_in_resolution_order_uses_index_scan(
+    mongo_holder: MongoClientHolder,
+) -> None:
+    """The whole point of the `enabled_priority_order_id` compound index:
+    the standard "load all enabled rules in resolution order" query —
+    filter `{enabled: true}`, sort `(priority DESC, order ASC, _id ASC)`
+    — must be an IXSCAN, never a COLLSCAN/blocking in-memory SORT stage.
+    """
+    repo = MongoClassificationRuleRepository(mongo_holder)
+    for i in range(20):
+        await repo.upsert(_make_rule(f"rule-{i:03d}", priority=100 + i, enabled=i % 2 == 0))
+
+    collection = mongo_holder.db[CLASSIFICATION_RULES_COLLECTION]
+    explain = await (
+        collection.find({"enabled": True})
+        .sort([("priority", -1), ("order", 1), ("_id", 1)])
+        .explain()
+    )
+    explain_str = json.dumps(explain)
+
+    assert "COLLSCAN" not in explain_str
+    assert "IXSCAN" in explain_str
+    # No blocking in-memory sort stage: the index itself must already
+    # produce the requested order.
+    assert '"stage": "SORT"' not in explain_str

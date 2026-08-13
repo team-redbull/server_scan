@@ -35,11 +35,22 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query, Request
 
 from app.api.v1.schemas import PageInfo, ServerDetail, ServerListResponse, ServerSummary
+from app.application.services.classification_service import ClassificationService
+from app.application.services.health_policy_service import HealthPolicyService
+from app.application.services.pipeline import classification_from_result, health_from_state
 from app.config import Settings, get_settings
 from app.dependencies import get_mongo_holder, get_redis_holder
+from app.domain.ports.regex_engine import RegexEngine
+from app.domain.services.classification import ClassifiableServer
+from app.domain.services.health.metrics import build_default_registry
+from app.domain.services.regex_engine import RegexModuleEngine
 from app.domain.services.search import build_filter_query, resolve_sort_field
 from app.errors import NotFoundError, PageSizeTooLargeError, ValidationAppError
+from app.infrastructure.mongodb.classification_rule_repository import (
+    MongoClassificationRuleRepository,
+)
 from app.infrastructure.mongodb.client import MongoClientHolder
+from app.infrastructure.mongodb.health_policy_repository import MongoHealthPolicyRepository
 from app.infrastructure.mongodb.server_repository import MongoServerRepository
 from app.infrastructure.redis.cache import (
     LIST_PAGE_TTL_SECONDS,
@@ -49,6 +60,7 @@ from app.infrastructure.redis.cache import (
 from app.infrastructure.redis.client import RedisClientHolder
 from app.infrastructure.redis.keys import list_key, server_key
 from app.utils.digest import stable_hash
+from app.utils.timeutil import utcnow
 
 router = APIRouter(prefix="/api/v1", tags=["servers"])
 
@@ -92,6 +104,36 @@ def _server_repo(
 
 def _cache_client(redis: Annotated[RedisClientHolder, Depends(get_redis_holder)]) -> CacheClient:
     return CacheClient(redis)
+
+
+_METRIC_REGISTRY = build_default_registry()
+
+
+def _regex_engine(settings: Annotated[Settings, Depends(get_settings)]) -> RegexEngine:
+    return RegexModuleEngine(
+        max_pattern_length=settings.regex_max_pattern_length,
+        match_timeout_seconds=settings.regex_match_timeout_seconds,
+    )
+
+
+def _classification_service(
+    mongo: Annotated[MongoClientHolder, Depends(get_mongo_holder)],
+    engine: Annotated[RegexEngine, Depends(_regex_engine)],
+) -> ClassificationService:
+    return ClassificationService(
+        rule_repo=MongoClassificationRuleRepository(mongo), engine=engine, mongo=mongo
+    )
+
+
+def _health_policy_service(
+    mongo: Annotated[MongoClientHolder, Depends(get_mongo_holder)],
+    server_repo: Annotated[MongoServerRepository, Depends(_server_repo)],
+) -> HealthPolicyService:
+    return HealthPolicyService(
+        policy_repo=MongoHealthPolicyRepository(mongo),
+        registry=_METRIC_REGISTRY,
+        server_repo=server_repo,
+    )
 
 
 def _revision_pointer_key(server_id: str) -> str:
@@ -196,3 +238,77 @@ async def get_server(
         detail_key, detail.model_dump(mode="json"), ttl_seconds=SERVER_DETAIL_TTL_SECONDS
     )
     return detail
+
+
+async def _invalidate_detail_cache(server_id: str, cache: CacheClient) -> None:
+    """`server_key` embeds `revision`, so bumping `revision` on write
+    already makes the previous cache entry unreachable — but the pointer
+    entry (`_revision_pointer_key`) still points at the old revision until
+    it expires on its own TTL, which would cost one extra (harmless, but
+    avoidable) Mongo round trip on the very next `GET`. Deleting it here
+    means the next read goes straight to the new revision's key.
+    """
+    await cache.delete(_revision_pointer_key(server_id))
+
+
+@router.post("/servers/{server_id}/reclassify", response_model=ServerDetail)
+async def reclassify_server(
+    server_id: str,
+    repo: Annotated[MongoServerRepository, Depends(_server_repo)],
+    cache: Annotated[CacheClient, Depends(_cache_client)],
+    service: Annotated[ClassificationService, Depends(_classification_service)],
+) -> ServerDetail:
+    """Re-runs the classification engine against this server's current
+    identity fields and the *current* ruleset, and persists the result —
+    the same classification step ingestion runs automatically, exposed
+    here so editing a rule can be followed by "show me the effect on this
+    server" without waiting for the server's next ingest cycle.
+    """
+    server = await repo.get_by_id(server_id)
+    if server is None:
+        raise NotFoundError(f"No server with id {server_id!r}.", details={"server_id": server_id})
+
+    classifiable = ClassifiableServer(
+        name=server.name,
+        vendor=server.identity.vendor,
+        manager_type=None,  # Server carries no manager_type field today
+        site_id=server.site_id,
+        serial=server.identity.serial,
+        model=server.model,
+    )
+    result = await service.classify_server(classifiable)
+    server.classification = classification_from_result(
+        result, previous_version=server.classification.classification_version
+    )
+    server.revision += 1
+    server.updated_at = utcnow()
+
+    await repo.upsert(server)
+    await _invalidate_detail_cache(server_id, cache)
+    return ServerDetail.from_server(server)
+
+
+@router.post("/servers/{server_id}/health/recalculate", response_model=ServerDetail)
+async def recalculate_server_health(
+    server_id: str,
+    repo: Annotated[MongoServerRepository, Depends(_server_repo)],
+    cache: Annotated[CacheClient, Depends(_cache_client)],
+    service: Annotated[HealthPolicyService, Depends(_health_policy_service)],
+) -> ServerDetail:
+    """Re-runs the health policy engine against this server's current
+    facts and the *current* policy set, and persists the result. Same
+    rationale as `reclassify_server`: proves "I edited a threshold, did
+    this server's health change" without waiting for its next ingest.
+    """
+    server = await repo.get_by_id(server_id)
+    if server is None:
+        raise NotFoundError(f"No server with id {server_id!r}.", details={"server_id": server_id})
+
+    state = await service.evaluate_server(server)
+    server.health = health_from_state(state)
+    server.revision += 1
+    server.updated_at = utcnow()
+
+    await repo.upsert(server)
+    await _invalidate_detail_cache(server_id, cache)
+    return ServerDetail.from_server(server)

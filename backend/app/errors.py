@@ -63,11 +63,13 @@ class ErrorCode:
     # --- Classification ---
     REGEX_UNSAFE = "REGEX_UNSAFE"
     REGEX_INVALID = "REGEX_INVALID"
+    RULE_SCOPE_INVALID = "RULE_SCOPE_INVALID"
 
     # --- Health policies ---
     METRIC_OPERATOR_MISMATCH = "METRIC_OPERATOR_MISMATCH"
     UNKNOWN_METRIC = "UNKNOWN_METRIC"
     TEMPLATE_INVALID = "TEMPLATE_INVALID"
+    CONDITION_INVALID = "CONDITION_INVALID"
 
     # --- Managers ---
     MANAGER_HAS_CHILDREN = "MANAGER_HAS_CHILDREN"
@@ -188,3 +190,57 @@ class CursorInvalidError(AppError):
 class CursorFilterMismatchError(AppError):
     status_code = 400
     code = ErrorCode.CURSOR_FILTER_MISMATCH
+
+
+# --- Classification ---
+
+
+class RegexUnsafeAppError(AppError):
+    status_code = 422
+    code = ErrorCode.REGEX_UNSAFE
+
+
+class RegexInvalidAppError(AppError):
+    status_code = 422
+    code = ErrorCode.REGEX_INVALID
+
+
+class RuleScopeInvalidError(AppError):
+    status_code = 422
+    code = ErrorCode.RULE_SCOPE_INVALID
+
+
+# --- Health policies ---
+
+
+class MetricOperatorMismatchError(AppError):
+    status_code = 422
+    code = ErrorCode.METRIC_OPERATOR_MISMATCH
+
+
+class UnknownMetricError(AppError):
+    status_code = 422
+    code = ErrorCode.UNKNOWN_METRIC
+
+
+class TemplateInvalidError(AppError):
+    status_code = 422
+    code = ErrorCode.TEMPLATE_INVALID
+
+
+class ConditionInvalidError(AppError):
+    status_code = 422
+    code = ErrorCode.CONDITION_INVALID
+
+
+# --- Managers ---
+
+
+class ManagerHasChildrenError(AppError):
+    status_code = 409
+    code = ErrorCode.MANAGER_HAS_CHILDREN
+
+
+class InvalidManagerHierarchyError(AppError):
+    status_code = 422
+    code = ErrorCode.INVALID_MANAGER_HIERARCHY

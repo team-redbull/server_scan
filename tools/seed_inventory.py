@@ -15,10 +15,22 @@ import asyncio
 
 import structlog
 
+from app.application.services.bootstrap import (
+    ensure_default_classification_rules,
+    ensure_default_health_policies,
+)
+from app.application.services.classification_service import ClassificationService
+from app.application.services.health_policy_service import HealthPolicyService
 from app.application.services.ingest import IngestService
 from app.config import get_settings
+from app.domain.services.health.metrics import build_default_registry
+from app.domain.services.regex_engine import RegexModuleEngine
 from app.infrastructure.logging import configure_logging
 from app.infrastructure.mongodb import MongoClientHolder
+from app.infrastructure.mongodb.classification_rule_repository import (
+    MongoClassificationRuleRepository,
+)
+from app.infrastructure.mongodb.health_policy_repository import MongoHealthPolicyRepository
 from app.infrastructure.mongodb.indexes import ensure_indexes
 from app.infrastructure.mongodb.manager_repository import MongoManagerRepository
 from app.infrastructure.mongodb.server_repository import MongoServerRepository
@@ -52,11 +64,31 @@ async def _run(*, count: int, seed: int) -> None:
     await mongo.connect()
     try:
         await ensure_indexes(mongo.db)
+        # Idempotent — see `ensure_default_*`'s docstring. Seeded here (not
+        # just in app startup) so `seed_inventory` also works as a
+        # standalone script against a fresh database with no API server
+        # ever having run against it.
+        rule_repo = MongoClassificationRuleRepository(mongo)
+        policy_repo = MongoHealthPolicyRepository(mongo)
+        await ensure_default_classification_rules(rule_repo)
+        await ensure_default_health_policies(policy_repo)
 
+        regex_engine = RegexModuleEngine(
+            max_pattern_length=settings.regex_max_pattern_length,
+            match_timeout_seconds=settings.regex_match_timeout_seconds,
+        )
         ingest_service = IngestService(
             server_repo=MongoServerRepository(mongo, cursor_secret=settings.cursor_secret),
             site_repo=MongoSiteRepository(mongo),
             manager_repo=MongoManagerRepository(mongo),
+            classification_service=ClassificationService(
+                rule_repo=rule_repo, engine=regex_engine, mongo=mongo
+            ),
+            health_service=HealthPolicyService(
+                policy_repo=policy_repo,
+                registry=build_default_registry(),
+                server_repo=MongoServerRepository(mongo, cursor_secret=settings.cursor_secret),
+            ),
         )
         provider = FakeProvider(seed=seed, count=count)
 

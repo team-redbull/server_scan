@@ -7,32 +7,40 @@ against an existing document only by `(vendor, serial_normalized)` when a
 serial is present; with no serial, it is always treated as a new server.
 The full identity-correlation ladder described in
 `app.domain.models.server.Identity`'s docstring (system_uuid first, then
-BMC MAC, then NIC MACs, then per-manager `external_id`, ...) is slice 2's
-job — this keeps ingestion working end-to-end now without pretending to
-solve a problem slice 2 owns.
+BMC MAC, then NIC MACs, then per-manager `external_id`, ...) is a later
+slice's job — this keeps ingestion working end-to-end now without
+pretending to solve a problem outside this module's scope.
 
-Field ownership: every field this module writes is ingestion-owned
-(identity, hardware, network, connectivity, name/model, `search_tokens`,
+Field ownership: every field this module writes directly is
+ingestion-owned (identity, hardware, network, connectivity, name/model,
 `source_provider`, `last_seen_at`). It never touches `tags` beyond what
-the provider reports, and never touches `classification`/`health`/
-`maintenance` at all (those are written by their own engines in later
-slices) — a re-ingest of an already-classified, already-in-maintenance
-server must not silently reset either back to its zero value. Because
-`upsert` fully replaces the document (`replace_one`), this module must
-carry forward `existing.classification`/`existing.health`/
-`existing.maintenance`/`existing.openshift` verbatim when updating, not
-just its own fields.
+the provider reports, and never touches `maintenance`/`openshift` at all
+(those belong to their own future engines) — those two are always carried
+forward verbatim from the existing document on update, never reset to
+zero. `classification` and `health` are the one exception: when
+`classification_service`/`health_service` are supplied (see
+`IngestService.__init__`), this module calls them itself, right after
+building the rest of the document and before computing `search_tokens`
+(which reads `classification.installation_type`) — so a server is
+classified and health-evaluated in the same write that ingests it, one
+upsert per server rather than a second round-trip. Both services are
+optional and default to `None` specifically so ingestion keeps working
+before either engine is wired up (and so tests of this module in
+isolation don't need to construct them) — with no service supplied, the
+previous behavior applies: carry the existing classification/health
+forward unchanged, or leave them at their zero value for a new server.
 """
 
 from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 import structlog
 from pymongo.errors import DuplicateKeyError
 
+from app.application.services.pipeline import classification_from_result, health_from_state
 from app.domain.enums import MediaType, Vendor
 from app.domain.models.connectivity import (
     Connectivity,
@@ -46,12 +54,17 @@ from app.domain.models.server import Identity, Server
 from app.domain.models.site import Site
 from app.domain.ports.provider import ProviderServer, ServerInventoryProvider
 from app.domain.ports.repository import ServerRepository
+from app.domain.services.classification import ClassifiableServer
 from app.domain.services.normalize import normalize_text
 from app.domain.services.search_tokens import build_search_tokens
 from app.domain.value_objects.bmc_address import parse_bmc_address
 from app.domain.value_objects.mac_address import normalize_mac
 from app.utils.ids import new_id
 from app.utils.timeutil import utcnow
+
+if TYPE_CHECKING:
+    from app.application.services.classification_service import ClassificationService
+    from app.application.services.health_policy_service import HealthPolicyService
 
 logger = structlog.get_logger(__name__)
 
@@ -119,10 +132,14 @@ class IngestService:
         server_repo: ServerRepository,
         site_repo: SiteRepositoryPort,
         manager_repo: ManagerRepositoryPort,
+        classification_service: ClassificationService | None = None,
+        health_service: HealthPolicyService | None = None,
     ) -> None:
         self._server_repo = server_repo
         self._site_repo = site_repo
         self._manager_repo = manager_repo
+        self._classification_service = classification_service
+        self._health_service = health_service
 
     async def ingest(
         self,
@@ -202,7 +219,7 @@ class IngestService:
             else None
         )
 
-        server = self._build_server(
+        server = await self._build_server(
             ps,
             vendor=vendor,
             serial_normalized=serial_normalized,
@@ -224,7 +241,7 @@ class IngestService:
             )
             if refetched is None:
                 raise
-            server = self._build_server(
+            server = await self._build_server(
                 ps,
                 vendor=vendor,
                 serial_normalized=serial_normalized,
@@ -236,7 +253,7 @@ class IngestService:
 
         return existing is None
 
-    def _build_server(
+    async def _build_server(
         self,
         ps: ProviderServer,
         *,
@@ -322,10 +339,11 @@ class IngestService:
             power=Power(psus=[]),
         )
 
-        # User/engine-owned state carried forward verbatim on update — see
-        # module docstring's field-ownership note. Simply omitted (rather
-        # than passed as None) when there's no existing document, so
-        # Pydantic's own `default_factory` supplies the zero value.
+        # `maintenance`/`openshift` are always carried forward verbatim —
+        # this module never touches either. `classification`/`health`
+        # default to the same carry-forward (or the zero value for a new
+        # server) and are only overwritten below if the corresponding
+        # engine service was supplied — see module docstring.
         carried_forward: dict[str, object] = {}
         if existing is not None:
             carried_forward = {
@@ -355,5 +373,31 @@ class IngestService:
             updated_at=now,
             **carried_forward,
         )
+
+        if self._classification_service is not None:
+            classifiable = ClassifiableServer(
+                name=ps.name,
+                vendor=vendor,
+                # No `manager_type` on `Server`/`ProviderServer` today (only
+                # `manager_id`) — a manager-scoped classification rule
+                # cannot currently match during ingest. Documented gap, not
+                # silently wrong: the same limitation is already recorded
+                # in `ClassificationService`'s and `HealthPolicyService`'s
+                # own docstrings.
+                manager_type=None,
+                site_id=ps.site_id,
+                serial=ps.serial,
+                model=ps.model,
+            )
+            result = await self._classification_service.classify_server(classifiable)
+            previous_version = existing.classification.classification_version if existing else 0
+            server.classification = classification_from_result(
+                result, previous_version=previous_version
+            )
+
+        if self._health_service is not None:
+            state = await self._health_service.evaluate_server(server)
+            server.health = health_from_state(state)
+
         server.search_tokens = build_search_tokens(server)
         return server

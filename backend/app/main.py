@@ -23,11 +23,21 @@ from starlette.middleware.base import RequestResponseEndpoint
 from starlette.responses import Response
 
 from app.api.health import router as health_router
+from app.api.v1.classification_rules import router as classification_rules_router
+from app.api.v1.health_policies import router as health_policies_router
 from app.api.v1.servers import router as servers_router
+from app.application.services.bootstrap import (
+    ensure_default_classification_rules,
+    ensure_default_health_policies,
+)
 from app.config import get_settings
 from app.exception_handlers import register_exception_handlers
 from app.infrastructure.logging import configure_logging
 from app.infrastructure.mongodb import MongoClientHolder
+from app.infrastructure.mongodb.classification_rule_repository import (
+    MongoClassificationRuleRepository,
+)
+from app.infrastructure.mongodb.health_policy_repository import MongoHealthPolicyRepository
 from app.infrastructure.mongodb.indexes import ensure_indexes
 from app.infrastructure.redis import RedisClientHolder
 from app.middleware.request_context import RequestContextMiddleware
@@ -49,6 +59,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     mongo = MongoClientHolder(settings)
     await mongo.connect()
     await ensure_indexes(mongo.db)
+    # Idempotent — see `ensure_default_*`'s docstring for why "seed only
+    # if missing by name" is required here, not just convenient.
+    await ensure_default_classification_rules(MongoClassificationRuleRepository(mongo))
+    await ensure_default_health_policies(MongoHealthPolicyRepository(mongo))
     app.state.mongo = mongo
 
     redis = RedisClientHolder(settings)
@@ -85,6 +99,8 @@ def create_app() -> FastAPI:
     register_exception_handlers(app)
     app.include_router(health_router)
     app.include_router(servers_router)
+    app.include_router(classification_rules_router)
+    app.include_router(health_policies_router)
 
     if settings.metrics_enabled:
 

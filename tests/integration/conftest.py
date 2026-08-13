@@ -17,7 +17,7 @@ from app.infrastructure.mongodb import MongoClientHolder
 from app.infrastructure.mongodb.indexes import ensure_indexes
 from app.infrastructure.redis import RedisClientHolder
 
-_TEST_COLLECTIONS = ("servers", "sites", "managers")
+_TEST_COLLECTIONS = ("servers", "sites", "managers", "classification_rules", "health_policies")
 
 
 @pytest.fixture
