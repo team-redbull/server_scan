@@ -415,33 +415,53 @@ integration that isn't `FakeProvider`. See
   MACs, fabric attachments, and CIMC/BMC address are all wired up; CPU
   model string and per-drive storage detail are explicit v1 scope cuts
   (see the ADR), not silent gaps.
-- A new credential-resolution seam, `app.domain.ports.credentials.
+- A connection-resolution seam, `app.domain.ports.credentials.
   CredentialResolver`, and its one implementation,
-  `FilesystemCredentialResolver` — reads `{credentials_dir}/
-  {credential_ref}/{username,password}` as separate files, matching how
-  Kubernetes projects a `Secret` as a volume. `Manager.credential_ref`
-  existed since slice 1 as an opaque name with nothing reading it; this
-  is what actually resolves it.
+  `EnvConnectionResolver` — one endpoint plus login per `ManagerType`,
+  read from settings (`INVENTORY_UCS_MANAGER_IP`/`_USERNAME`/`_PASSWORD`,
+  and the same shape for OneView, OME, UCS Central and Intersight). That
+  is the whole of a collector's connection config: no `Manager` document
+  to create first, no credentials volume to mount. Resolution is keyed on
+  the manager *type*, not a per-manager reference, because this platform
+  runs one endpoint per vendor — UCS Manager's multi-domain story is the
+  UCS Central parent enumerating its domains at collection time.
+  A half-configured vendor raises `ManagerNotConfiguredError` naming the
+  missing variables rather than attempting a login that fails as "bad
+  credentials", and `ManagerConnection.__repr__` redacts the password so
+  it cannot leak through a traceback.
 - `tools/run_collector.py --manager-type UCS_MANAGER` — the CLI a
-  Kubernetes `CronJob` invokes: looks up every enabled `Manager` of that
-  type, resolves credentials, runs each through the same `IngestService`
-  pipeline the fake-data seed script uses (classify, health-evaluate,
-  audit, upsert — one write per server), and isolates one manager's
-  failure from the others.
-- `deploy/openshift/ucs-manager-collector-cronjob.yaml` and the Helm
-  chart's parameterized equivalent (`collectors.ucsManager.managers`, a
-  list — onboarding a new UCS Manager domain is one values.yaml entry,
-  no template editing) — both share the API's own container image
-  (`Containerfile` now also copies `tools/`) rather than building a
-  second one.
-- Verified with unit tests against `ucsmsdk`'s real attribute names
-  (`tests/unit/infrastructure/providers/test_ucs_manager_mapping.py`) —
-  not yet verified end-to-end against a live UCS Manager domain or
-  Cisco's UCS Platform Emulator; that's the next real-world validation
-  step before this is trusted in production.
-- `OPENMANAGE`/`INTERSIGHT`/`ONEVIEW`/`UCS_CENTRAL` managers still have
-  no collector — `tools.run_collector` raises a clear
+  Kubernetes `CronJob` invokes: resolves that type's connection, runs it
+  through the same `IngestService` pipeline the fake-data seed script
+  uses (classify, health-evaluate, audit, upsert — one write per server),
+  and writes back a `Manager` document as a projection of the config so
+  the API can resolve `Server.manager_id`. `--dry-run` prints what the
+  provider reports and writes nothing; `--debug-xml` dumps every XML
+  request/response.
+- The Helm chart's `collectors.*` values render into a single `Secret`,
+  injected with `envFrom` so passwords are not readable in the pod spec;
+  `collectors.existingSecret` defers to a Secret owned by Vault or
+  External Secrets instead. The collector shares the API's own container
+  image (`Containerfile` also copies `tools/`) rather than building a
+  second one. The parallel plain-OpenShift manifest set was removed —
+  it duplicated the chart with nothing checking the two agreed, and had
+  already drifted; `helm template` covers that case on demand.
+- **Validated end to end against a live Cisco UCS Platform Emulator**
+  (UCSPE 4.2(2aS9)) — see ADR-0009's validation sections for what that
+  proved, disproved and could not settle. Several defects were only
+  visible against real hardware: a queried MO class that does not exist
+  and aborted every run, a BMC filter that matched nothing, a whole
+  class of adapter interface never collected (leaving most servers with
+  no MACs or fabric attachments), fabric path counts that were always
+  zero because UCS state strings were passed through unmapped, and
+  servers named after their chassis slot rather than their service
+  profile — which silently defeated both site parsing and
+  classification.
+- `OPENMANAGE`/`INTERSIGHT`/`ONEVIEW`/`UCS_CENTRAL` have configuration
+  slots but no collector — `tools.run_collector` raises a clear
   `NotImplementedError` for them rather than silently doing nothing.
+  Intersight reuses the same three settings with different meanings: it
+  signs requests with an API key, so `username` is the API Key ID and
+  `password` the secret key.
 
 Real authentication is designed (see the session's approved plan) but
 lands in a subsequent slice — this document will gain a section and an

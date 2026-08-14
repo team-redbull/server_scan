@@ -77,10 +77,22 @@ engine, maintenance + audit trail, classification/health admin UIs, a
 10k/50k performance pass, and Playwright E2E coverage.
 
 Beyond the numbered slices, the **first real vendor collector — Cisco UCS
-Manager** — is built and pushed
-(`docs/adr/0009-ucs-manager-collector.md`). This is the actual frontier
-of the project right now: real data acquisition, not the API/UI shell
-around it.
+Manager** — is built, and has now been **validated end to end against a
+live Cisco UCS Platform Emulator** (UCSPE 4.2(2aS9)): full collector run,
+then the REST API and UI over the result.
+`docs/adr/0009-ucs-manager-collector.md` records what that proved, what
+it disproved, and what it still could not settle. Several defects it
+found would have been invisible without real hardware — a nonexistent MO
+class that aborted every run, a BMC filter that matched nothing, a whole
+class of adapter interface never collected, fabric path counts that were
+always zero, and servers named after their chassis slot rather than
+their service profile (which silently defeated both site parsing and
+classification).
+
+Also since: sites and vendors are closed enums, a server's site is parsed
+from its own name, vendor manager connections come from environment
+configuration rather than MongoDB documents plus mounted secrets, and the
+UI was rebuilt around a per-site overview as the landing page.
 
 ### The collector architecture (read this before touching a collector)
 
@@ -92,34 +104,41 @@ fake` — the Phase-1 synthetic-data provider — already exercises), and
 each manager *type* gets its own Kubernetes `CronJob` running
 `tools/run_collector.py --manager-type <TYPE>`. A run:
 
-1. Looks up every enabled `Manager` document of that type from MongoDB.
-2. Resolves real credentials from a mounted `Secret` via
-   `app.domain.ports.credentials.CredentialResolver` (currently one
-   implementation, `FilesystemCredentialResolver` — reads
-   `{credentials_dir}/{credential_ref}/{username,password}`, matching
-   how Kubernetes projects a Secret as a volume).
-3. Talks to the vendor API, normalizes into `ProviderServer`.
-4. Runs that through `app.application.services.ingest.IngestService` —
+1. Resolves that type's endpoint + login from settings via
+   `app.infrastructure.credentials.env.EnvConnectionResolver`
+   (`INVENTORY_UCS_MANAGER_IP`/`_USERNAME`/`_PASSWORD`, same shape for
+   `ONEVIEW`, `OME`, `UCS_CENTRAL`, `INTERSIGHT`). **One endpoint and one
+   login per manager type — that is the whole connection config.** There
+   is no `Manager` document to create and no credentials directory to
+   mount; both were removed. A half-configured vendor raises
+   `ManagerNotConfiguredError` naming the missing variables.
+2. Talks to the vendor API, normalizes into `ProviderServer`.
+3. Runs that through `app.application.services.ingest.IngestService` —
    the exact same pipeline the fake-data seeder and every other
    provider use: classify, health-evaluate, audit, upsert, one write per
    server.
 
+A `Manager` document is still written on each run, but it is a
+*projection* of that configuration (`tools.run_collector.manager_for`)
+so the API can resolve `Server.manager_id` to something readable — never
+its source. Intersight reuses the same three fields with different
+meanings: it signs requests with an API key, so `username` is the API Key
+ID and `password` the secret key.
+
 A collector never talks to the FastAPI process; the API never talks to a
 vendor manager. MongoDB is the only thing connecting them. See
-`README.md`'s diagram and `docs/adr/0009-ucs-manager-collector.md` for
-the concrete UCS Manager build (what's confirmed against real `ucsmsdk`
-source vs. what's still an assumption pending a real domain/emulator
-test).
+`README.md`'s diagram and `docs/adr/0009-ucs-manager-collector.md`, whose
+validation sections record what a live UCS Platform Emulator proved,
+disproved and could not settle.
 
 **Only UCS Manager has a real collector.** `OPENMANAGE`, `INTERSIGHT`,
-`ONEVIEW`, and `UCS_CENTRAL` are known `ManagerType` values with no
+`ONEVIEW`, and `UCS_CENTRAL` have configuration slots but no
 implementation — `tools/run_collector.py`'s `_PROVIDER_FACTORIES` raises
 a clear `NotImplementedError` for them, not a silent no-op. Building the
 next one means: implement `ServerInventoryProvider` for it under
 `app.infrastructure.providers.<vendor>`, add it to
-`_PROVIDER_FACTORIES`, add a CronJob manifest (mirror
-`deploy/openshift/ucs-manager-collector-cronjob.yaml` and the Helm
-template).
+`_PROVIDER_FACTORIES`, and add a CronJob template mirroring
+`deploy/helm/server-inventory/templates/ucs-manager-collector-cronjob.yaml`.
 
 ### What's explicitly NOT done yet (in rough priority order the user has confirmed)
 
@@ -139,7 +158,7 @@ template).
    `docs/adr/0010-image-publishing-and-versioning.md`), versioned
    automatically from Conventional Commits — but nothing *deploys* those
    images anywhere yet (no GitOps/ArgoCD wiring, no automatic manifest
-   update). No Kubernetes/OpenShift manifests exist for the frontend
+   update). No Kubernetes manifests exist for the frontend
    (only the backend API has a Deployment/Route, despite the frontend
    having a solid Containerfile since slice 1 — see `deploy/README.md`);
    the `INVENTORY_CURSOR_SECRET` insecure default is only a code
@@ -157,6 +176,24 @@ template).
 Full detail lives in `docs/adr/`; this is just the index of what's
 non-obvious enough to bite you.
 
+- **A server's site is parsed from its name**
+  (`app.domain.value_objects.site.parse_site_code`), never taken from
+  configuration — `ocp4-prod-one-infra-01` -> `one`. Token-based, not a
+  substring search (`ocp4-stone-01` contains "one" but names no site),
+  and an ambiguous name yields `None` rather than a guess. `None` is a
+  real state the UI shows as "Unassigned".
+- **`Vendor` is exactly dell/cisco/hp — there is no `UNKNOWN`.** Every
+  server arrives through a vendor-specific collector, so the vendor is
+  known by construction; an unrecognized value raises and is counted in
+  `IngestSummary.errors` rather than polluting per-vendor counts.
+- **A collector's whole connection config is env** — one endpoint and
+  login per `ManagerType`. No `Manager` document is read to decide where
+  to connect and there is no credentials directory; see the collector
+  architecture section above.
+- A UCS server's name comes from its **service profile**, not
+  `computeBlade.name`, which is empty in practice. Getting this wrong
+  names every server after its chassis slot, which carries neither a
+  site token nor a classifiable pattern.
 - Every repository stores `datetime` fields as ISO 8601 **strings**
   (`model_dump(mode="json")`), never native BSON dates. Any range/cursor
   query must compare against that stored string type, not a parsed
@@ -167,6 +204,9 @@ non-obvious enough to bite you.
   Redis a hard dependency for correctness.
 - Pagination is keyset (HMAC-signed cursor for `/servers`), never
   `skip`/`offset`.
+- Sites/vendors as closed sets, name-derived sites and the UI rebuild are
+  `docs/adr/0011`; env-based manager connections and the single manifest
+  set are `docs/adr/0012`.
 - Health-policy override/shadowing (`policy_key` families) is the
   platform's headline design decision — read `docs/adr/0005` before
   touching anything in `app.domain.services.health`.
@@ -224,10 +264,15 @@ The most recent user direction was: real vendor collectors first,
 deployment/CD gaps and auth deliberately parked. The natural next steps,
 in the order the user has been steering toward:
 
-1. Validate the UCS Manager collector end-to-end against UCSPE or real
-   hardware, and fix whatever the confirmed-vs-assumed gaps in
-   `docs/adr/0009` turn out to be wrong about (CPU model, storage
-   detail, fabric interconnect identity, the memory-unit assumption).
+1. ~~Validate the UCS Manager collector against UCSPE~~ — **done**, and
+   it found five real defects (see `docs/adr/0009`'s validation
+   sections). What it could *not* settle is still open: the
+   `total_memory` MB assumption (UCSPE reports one synthetic value for
+   every model and contradicts itself elsewhere), a fully *associated*
+   service profile (the emulator's stopped at `config-failure` for want
+   of a boot policy, vNICs and a UUID pool), and the original scope cuts
+   — CPU model string, per-drive storage detail, fabric interconnect
+   identity. Real hardware settles those.
 2. Build the next vendor collector. Ask the user which one before
    assuming — their last stated preference was "easiest to actually
    test," which favored UCS's real emulator; re-evaluate that tradeoff

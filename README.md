@@ -27,7 +27,10 @@ collectors. Built so far, in order:
    load testing, not just fixture-sized tests).
 7. Playwright E2E coverage of the critical admin flows.
 8. The first real vendor collector: **Cisco UCS Manager**, deployed as a
-   Kubernetes CronJob.
+   Kubernetes CronJob and validated against a live UCS Platform Emulator.
+9. A UI rebuilt around what an operator actually scans for: a per-site
+   overview as the landing page, and a three-column server list (name,
+   model, state) with everything else on the detail page.
 
 See `docs/architecture.md` for the full per-slice writeup and
 `docs/adr/` for the individual design decisions.
@@ -41,18 +44,23 @@ OneView) gets its own small collector program, and each collector runs as
 its own **Kubernetes `CronJob`** — one CronJob per manager *type*, not per
 physical manager. On a schedule, a CronJob's pod:
 
-1. Looks up every enabled `Manager` document of its type from MongoDB
-   (`site_id`, connection endpoint, a credential *reference* — never a
-   plaintext secret in that document).
-2. Resolves the real credentials from a mounted Kubernetes `Secret`
-   (`app.infrastructure.credentials.filesystem.FilesystemCredentialResolver`).
-3. Talks to that vendor's real API and normalizes what it reports into
+1. Reads that vendor's endpoint and login from configuration — one set
+   per manager type (`INVENTORY_UCS_MANAGER_IP` / `_USERNAME` /
+   `_PASSWORD`, and the same shape for OneView, OME, UCS Central and
+   Intersight). No `Manager` document to create, no secret volume to
+   mount; in Kubernetes these arrive from a `Secret` via `envFrom`.
+2. Talks to that vendor's real API and normalizes what it reports into
    the platform's vendor-neutral `ProviderServer` shape
    (`app.domain.ports.provider`).
-4. Feeds that through the exact same ingestion pipeline every part of the
+3. Feeds that through the exact same ingestion pipeline every part of the
    platform already exercises with fake data
    (`app.application.services.ingest.IngestService`) — classify, health-
    evaluate, audit, and upsert into MongoDB, all in one write per server.
+
+A server's **site** is not configured anywhere: it is parsed from the
+server's own name (`ocp4-prod-one-infra-01` -> site `one`), so a
+misconfigured manager cannot mislabel everything it collects. A name with
+no site token is surfaced as "Unassigned" rather than defaulted.
 
 ```
  UCS Manager CronJob ─┐
@@ -79,32 +87,36 @@ health engine, or the frontend needs to change. `docs/adr/0009-ucs-
 manager-collector.md` is the detailed writeup of how the first one
 (UCS Manager) was actually built.
 
-Right now, only UCS Manager has a real collector. The other three
-manager types exist in the domain model (`ManagerType` enum, the
-`Manager` collection) but `tools/run_collector.py` raises a clear
-`NotImplementedError` for them rather than silently doing nothing.
+Right now, only UCS Manager has a real collector, and it has been
+validated end to end against a live Cisco UCS Platform Emulator (see
+`docs/adr/0009`'s validation sections). The other manager types have
+configuration slots but no provider — `tools/run_collector.py` raises a
+clear `NotImplementedError` for them rather than silently doing nothing.
 
 ### Running a collector by hand
 
-A collector needs two things: an enabled `Manager` document of that type
-in MongoDB (endpoint + `credential_ref`), and a credentials directory
-laid out the way Kubernetes projects a Secret —
-`{credentials_dir}/{credential_ref}/username` and `/password`.
+A collector needs three environment variables — where the manager is, and
+a login. Set them in `.env` (see `.env.example`) or inline:
 
 ```bash
+export INVENTORY_UCS_MANAGER_IP=ucsm.example.com   # bare host, never a URL
+export INVENTORY_UCS_MANAGER_USERNAME=inventory-svc
+export INVENTORY_UCS_MANAGER_PASSWORD=...
+
 # See what a manager reports, without writing anything at all:
-INVENTORY_CREDENTIALS_DIR=/path/to/creds \
-  uv run python -m tools.run_collector --manager-type UCS_MANAGER --dry-run
+uv run python -m tools.run_collector --manager-type UCS_MANAGER --dry-run
 
 # ...one server only, plus every XML request/response on the wire:
-INVENTORY_CREDENTIALS_DIR=/path/to/creds \
-  uv run python -m tools.run_collector --manager-type UCS_MANAGER \
+uv run python -m tools.run_collector --manager-type UCS_MANAGER \
   --dry-run --limit 1 --debug-xml
 
 # The real thing — classify, health-evaluate, audit and upsert:
-INVENTORY_CREDENTIALS_DIR=/path/to/creds \
-  uv run python -m tools.run_collector --manager-type UCS_MANAGER
+uv run python -m tools.run_collector --manager-type UCS_MANAGER
 ```
+
+A vendor with any of its three values missing is rejected as a
+configuration error naming exactly what to set, rather than attempted as
+a login that fails as "bad credentials".
 
 `--dry-run` prints the `ProviderServer` each manager reports *before* the
 ingestion pipeline reshapes it, including which site each name resolves
@@ -177,6 +189,6 @@ tests/           unit / integration / api tests
 tools/           operational CLIs: fake-data seeder, index/load verification,
                  the real-collector runner (tools/run_collector.py)
 scripts/         dev environment helpers
-deploy/          OpenShift YAML + a Helm chart (API, and per-vendor collector CronJobs)
+deploy/          Helm chart (API, and per-vendor collector CronJobs)
 docs/            architecture notes and ADRs
 ```
