@@ -302,11 +302,6 @@ jobs:
           git tag -a "$NEW_TAG" -m "$NEW_TAG"
           git push origin "$NEW_TAG"
 
-      # GHCR requires a lowercase image path; github.repository isn't.
-      - name: Lowercase image namespace
-        run: |
-          echo "IMAGE_NAMESPACE=$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_ENV"
-
       - name: Log in to GHCR
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
@@ -323,7 +318,9 @@ jobs:
         id: meta_api
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
-          images: ghcr.io/${{ env.IMAGE_NAMESPACE }}-api
+          # docker/metadata-action lowercases `images` itself, which is
+          # what GHCR requires — no separate normalisation step needed.
+          images: ghcr.io/${{ github.repository }}-api
           tags: |
             type=semver,pattern={{version}},value=${{ steps.version.outputs.version_tag }}
             type=semver,pattern={{major}}.{{minor}},value=${{ steps.version.outputs.version_tag }}
@@ -347,7 +344,7 @@ jobs:
         id: meta_frontend
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
-          images: ghcr.io/${{ env.IMAGE_NAMESPACE }}-frontend
+          images: ghcr.io/${{ github.repository }}-frontend
           tags: |
             type=semver,pattern={{version}},value=${{ steps.version.outputs.version_tag }}
             type=semver,pattern={{major}}.{{minor}},value=${{ steps.version.outputs.version_tag }}

@@ -463,6 +463,22 @@ integration that isn't `FakeProvider`. See
   signs requests with an API key, so `username` is the API Key ID and
   `password` the secret key.
 
+### CI supply chain
+
+Every GitHub Action is pinned to a commit SHA rather than a tag, because
+a tag can be re-pointed by whoever controls the action's repository and
+this repo's `publish` job holds `contents: write` plus a GHCR token. The
+release-tagging step is `PaulHatch/semantic-version` (node24) followed by
+an explicit `git tag && git push`, with a guard between them that refuses
+an empty, duplicate or backwards version — it replaced an action that
+declares the now-removed node20 and had no upgrade available.
+
+Nothing updates itself: Dependabot was configured and removed after it
+edited `requirements.txt`, a generated air-gap export, as though it were
+a source manifest. Keeping the pins current is a documented manual pass
+(`CLAUDE.md`'s "Keeping CI current"), and the reasoning behind all of it
+is `docs/adr/0013`.
+
 Real authentication is designed (see the session's approved plan) but
 lands in a subsequent slice — this document will gain a section and an
 ADR once it's implemented, rather than describing not-yet-existing code

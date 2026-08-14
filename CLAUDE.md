@@ -94,6 +94,13 @@ from its own name, vendor manager connections come from environment
 configuration rather than MongoDB documents plus mounted secrets, and the
 UI was rebuilt around a per-site overview as the landing page.
 
+The supply-chain pass after that (`docs/adr/0013`) SHA-pinned every CI
+action, replaced the release-tagging action before Node 20 removal breaks
+it, moved the base image from UBI 9.4 to 9.8, and removed
+`python-multipart` — an unused direct dependency carrying seven CVEs.
+`pip-audit` and `npm audit` are both clean as of that commit. **It also
+left a standing obligation: see "Keeping CI current" below.**
+
 ### The collector architecture (read this before touching a collector)
 
 There is no single sync process. Each hardware vendor gets its own
@@ -206,7 +213,8 @@ non-obvious enough to bite you.
   `skip`/`offset`.
 - Sites/vendors as closed sets, name-derived sites and the UI rebuild are
   `docs/adr/0011`; env-based manager connections and the single manifest
-  set are `docs/adr/0012`.
+  set are `docs/adr/0012`; CI action pinning, the removed Dependabot and
+  the manual-maintenance obligation are `docs/adr/0013`.
 - Health-policy override/shadowing (`policy_key` families) is the
   platform's headline design decision — read `docs/adr/0005` before
   touching anything in `app.domain.services.health`.
@@ -257,6 +265,33 @@ reports success but a subsequent command can't reach Mongo, that's very
 likely this — check `podman ps` before assuming a real regression. Real
 CI (GitHub Actions) does not have this problem; it gets fresh, real
 service containers per run.
+
+## Keeping CI current (a standing chore, not a one-off)
+
+Every action in `.github/workflows/ci.yml` is pinned to a commit SHA, so
+**nothing updates itself**. Dependabot was tried and deliberately removed
+(`docs/adr/0013` explains why), which makes this a manual pass — roughly
+quarterly, or before any release you care about:
+
+1. **Are the pins current?** For each `uses:` line, compare the trailing
+   `# vX.Y.Z` comment against the action's latest release. Verify the new
+   tag actually resolves before pinning it — this repo has been broken
+   twice by assuming a rolling major tag exists (`github-tag-action` has
+   no `v6`; `setup-uv` has no `v8`/`v9`/`v10`).
+2. **Is anything vulnerable?**
+   `uv run --with pip-audit pip-audit --skip-editable` and, in
+   `frontend/`, `npm audit`. This is a different question from step 1 —
+   the `python-multipart` finding was a *direct* dependency that no
+   version-bump tooling had flagged.
+3. **Is anything unused?** The fix for that finding was deletion, not an
+   upgrade. Check whether a vulnerable package is actually reached before
+   bumping it.
+4. **Any runtime deprecations?** Actions declare a Node version
+   (`using: node20`). GitHub removes old ones on a schedule, and an
+   unmaintained action can have no upgrade path at all — that is what
+   forced the tagging-action replacement in ADR-0010.
+5. **Base images:** `Containerfile` pins `ubi9/ubi-minimal` to a minor
+   stream (9.8). Check for a newer 9.x.
 
 ## Where to continue right now
 

@@ -177,8 +177,15 @@ version decided automatically from
 [Conventional Commits](https://www.conventionalcommits.org/) since the
 last release (`feat:` → minor, `feat!:`/a `BREAKING CHANGE:` footer →
 major, anything else → patch), plus rolling `latest` and `sha-<commit>`
-tags. See `docs/adr/0010-image-publishing-and-versioning.md` for the
-full design and `deploy/` for the manifests that consume these images.
+tags. Note the patch number advances once per *commit*, not once per
+push, so a push of three `fix:` commits moves it by three. See
+`docs/adr/0010-image-publishing-and-versioning.md` for the full design
+and `deploy/` for the manifests that consume these images.
+
+Every action in the workflow is pinned to a commit SHA rather than a
+tag, and none of it updates itself — `docs/adr/0013` explains why, and
+`CLAUDE.md`'s "Keeping CI current" is the periodic pass that keeps it
+from going stale.
 
 ## Project layout
 
