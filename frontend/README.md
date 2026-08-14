@@ -16,7 +16,8 @@ npm run dev         # dev server with HMR, proxies /api,/health,/metrics to :808
 npm run build        # type-check (tsc -b) + production build
 npm run typecheck    # type-check only
 npm run lint          # oxlint, type-aware rules enabled (.oxlintrc.json)
-npm run test          # vitest
+npm run test          # vitest (excludes e2e/ — see playwright.config.ts)
+npm run test:e2e      # Playwright — needs the dev stack, backend, and this dev server all running
 ```
 
 ## Stack notes
