@@ -31,12 +31,34 @@ this; the job just needs `permissions: packages: write` declared.
 
 ### Versioning: Conventional Commits, automatic, patch-by-default
 
-`mathieudutour/github-tag-action@v6` scans every commit since the last
-tag and picks the bump: a `BREAKING CHANGE:` footer or `!` after the
-type (`feat!:`) → major, `feat:` → minor, anything else (`fix:`,
-unprefixed, ...) → patch (`default_bump: patch`). It pushes the new git
-tag itself (`permissions: contents: write`) and outputs `new_tag` (e.g.
-`v1.4.2`) for the image-tagging steps to consume.
+`PaulHatch/semantic-version` scans every commit since the last `v*` tag
+and picks the bump: a `BREAKING CHANGE:` footer or `!` after the type
+(`feat!:`) → major, `feat:` → minor, anything else (`fix:`, unprefixed,
+...) → patch. Its default `major_pattern`/`minor_pattern` are already
+those Conventional Commits shapes, so nothing is configured beyond
+`tag_prefix: "v"`. It outputs `version_tag` (e.g. `v1.4.2`) for the
+image-tagging steps to consume.
+
+It calculates only — pushing the tag is a separate `git tag && git push`
+step, which is why the job still needs `permissions: contents: write`.
+A guard step sits between the two: it refuses to continue if the
+computed tag is empty, already exists, or does not sort strictly after
+the current latest tag. A wrong version is worse than a failed build,
+because publishing images under an existing or backwards tag is not
+recoverable by re-running.
+
+**Superseded:** this was originally `mathieudutour/github-tag-action@v6`,
+which did the same job in one step. It declares `using: node20`; Node 20
+reached end of life in April 2026, GitHub's runners began force-running
+such actions on Node 24 in June 2026, and that fallback is removed in
+autumn 2026, at which point the action stops executing and this job
+publishes nothing. There was no upgrade available — its last release was
+March 2024 and its default branch still declares node20. Two other
+candidates were rejected: `anothrNick/github-tag-action` is
+Docker-based (immune to the deprecation) but bumps on `#major`/`#minor`
+tokens rather than Conventional Commits, which would have silently
+changed the versioning rule, and `cycjimmy/semantic-release-action`
+declares an even older node16.
 
 Chosen over hand-picking a version per push (defeats the point of
 automating this) and over "always bump patch, tag major/minor by hand"
@@ -85,11 +107,15 @@ option later if arm64 is ever actually needed, not before.
   (it changes the published version), not just a style nicety. Past
   commits don't need to be rewritten; the tag action only looks forward
   from the last tag.
-- The very first run of this job has no prior tag to compare against —
-  `mathieudutour/github-tag-action` starts from `0.0.0` (or `0.1.0`
-  depending on its own defaulting — verify the actual first tag it
-  produces on the first real run and adjust expectations, don't assume
-  in advance).
+- With no prior tag, `PaulHatch/semantic-version` starts from `0.0.x`.
+  That case is behind us — the repository already has `v2.0.4` — but the
+  guard step would catch anything unexpected before it published.
+- The two actions count patches differently: the previous one bumped
+  once per *run*, this one derives the patch number from the commits
+  since the last version-changing commit. A push containing three
+  `fix:` commits therefore advances the patch by three rather than one.
+  Both are monotonically increasing and valid semver, so this is a
+  numbering difference, not a correctness one.
 - Both `ghcr.io/team-redbull/server_scan-api` and
   `ghcr.io/team-redbull/server_scan-frontend` inherit the repository's
   visibility (private repo → private package) by default; no separate

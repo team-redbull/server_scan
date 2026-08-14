@@ -244,7 +244,7 @@ jobs:
     needs: [lint, test, frontend, e2e]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     permissions:
-      contents: write # mathieudutour/github-tag-action pushes the new git tag
+      contents: write # the "Tag the release" step below pushes the new git tag
       packages: write # docker/login-action pushes images to ghcr.io
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -252,16 +252,55 @@ jobs:
           fetch-depth: 0 # full history — the tag action scans every commit since the last tag
 
       # `feat!:`/`BREAKING CHANGE:` -> major, `feat:` -> minor, anything
-      # else -> patch. Pinned to an exact release: this action has no
-      # rolling v6 tag (see ADR-0010).
+      # else -> patch, read from the commits since the last `v*` tag.
+      #
+      # Replaced mathieudutour/github-tag-action, which did the same job
+      # but declares `using: node20`. Node 20 reached end of life in April
+      # 2026, GitHub's runners have force-run such actions on Node 24
+      # since June 2026, and that fallback is removed in autumn 2026 — at
+      # which point the action stops running and this job publishes
+      # nothing. There was no version to upgrade to: its last release was
+      # March 2024 and its default branch still declares node20.
+      #
+      # This one runs on node24 and its default patterns are already
+      # Conventional Commits (`/!:|BREAKING CHANGE:/`, `/feat(\(.+\))?:/`),
+      # so the versioning rule is unchanged. The one thing it does not do
+      # is push the tag, hence the two steps below.
       - name: Determine next version from Conventional Commits
         id: version
-        uses: mathieudutour/github-tag-action@a22cf08638b34d5badda920f9daf6e72c477b07b # v6.2
+        uses: PaulHatch/semantic-version@9f72830310d5ed81233b641ee59253644cd8a8fc # v6.0.2
         with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          default_bump: patch
-          release_branches: main
-          fetch_all_tags: true
+          tag_prefix: "v"
+
+      # A wrong version is worse than a failed build: it would publish
+      # images under a tag that already exists or that moves backwards,
+      # and neither is recoverable by re-running. Fail loudly instead.
+      - name: Verify the computed version moves forward
+        env:
+          NEW_TAG: ${{ steps.version.outputs.version_tag }}
+        run: |
+          set -euo pipefail
+          previous="$(git tag --list 'v*' --sort=-v:refname | head -1)"
+          echo "previous tag: ${previous:-<none>}  ->  computed: $NEW_TAG"
+          if [ -z "$NEW_TAG" ]; then
+            echo "::error::version step produced an empty tag"; exit 1
+          fi
+          if git rev-parse -q --verify "refs/tags/$NEW_TAG" >/dev/null; then
+            echo "::error::$NEW_TAG already exists — refusing to re-tag"; exit 1
+          fi
+          if [ -n "$previous" ] && [ "$(printf '%s\n%s\n' "$previous" "$NEW_TAG" | sort -V | tail -1)" != "$NEW_TAG" ]; then
+            echo "::error::$NEW_TAG is not newer than $previous"; exit 1
+          fi
+
+      - name: Tag the release
+        env:
+          NEW_TAG: ${{ steps.version.outputs.version_tag }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$NEW_TAG" -m "$NEW_TAG"
+          git push origin "$NEW_TAG"
 
       # GHCR requires a lowercase image path; github.repository isn't.
       - name: Lowercase image namespace
@@ -286,9 +325,9 @@ jobs:
         with:
           images: ghcr.io/${{ env.IMAGE_NAMESPACE }}-api
           tags: |
-            type=semver,pattern={{version}},value=${{ steps.version.outputs.new_tag }}
-            type=semver,pattern={{major}}.{{minor}},value=${{ steps.version.outputs.new_tag }}
-            type=semver,pattern={{major}},value=${{ steps.version.outputs.new_tag }}
+            type=semver,pattern={{version}},value=${{ steps.version.outputs.version_tag }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ steps.version.outputs.version_tag }}
+            type=semver,pattern={{major}},value=${{ steps.version.outputs.version_tag }}
             type=raw,value=latest
             type=sha,prefix=sha-
 
@@ -310,9 +349,9 @@ jobs:
         with:
           images: ghcr.io/${{ env.IMAGE_NAMESPACE }}-frontend
           tags: |
-            type=semver,pattern={{version}},value=${{ steps.version.outputs.new_tag }}
-            type=semver,pattern={{major}}.{{minor}},value=${{ steps.version.outputs.new_tag }}
-            type=semver,pattern={{major}},value=${{ steps.version.outputs.new_tag }}
+            type=semver,pattern={{version}},value=${{ steps.version.outputs.version_tag }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ steps.version.outputs.version_tag }}
+            type=semver,pattern={{major}},value=${{ steps.version.outputs.version_tag }}
             type=raw,value=latest
             type=sha,prefix=sha-
 
