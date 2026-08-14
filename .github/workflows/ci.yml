@@ -233,7 +233,13 @@ jobs:
       # default, not a bug.
       - name: Determine next version from Conventional Commits
         id: version
-        uses: mathieudutour/github-tag-action@v6
+        # Pinned to the exact release, not a rolling `v6` — unlike v3/v4/
+        # v5, this action's maintainer never published a rolling `v6` tag
+        # (only the specific v6.0/v6.1/v6.2 releases), which is exactly
+        # what broke this step the first time ("unable to resolve action
+        # ...@v6, unable to find version v6"); confirmed directly against
+        # the GitHub API's tag list, not assumed.
+        uses: mathieudutour/github-tag-action@v6.2
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           default_bump: patch
