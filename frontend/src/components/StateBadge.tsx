@@ -1,53 +1,48 @@
 import type { HealthSeverity, MaintenanceState } from "@/types/server";
 
 /**
- * The one column an operator actually scans for. It merges two facts that
- * were previously separate columns — health severity and "is this box in
- * maintenance" — because they answer the same question ("does this need
- * me?") and reading two columns to answer one question is what made the
- * old table slow to scan.
+ * The one column an operator actually scans for: health severity, plus a
+ * maintenance marker when the server is under active work.
  *
- * Maintenance deliberately WINS over severity rather than rendering
- * alongside it: a critical alert on a server someone is actively working
- * on is expected, and showing it as CRITICAL trains people to ignore red.
- * The underlying severity is still on the detail page; this cell answers
- * "should I act", not "what is every fact about this row".
+ * Maintenance is shown ALONGSIDE severity rather than replacing it. An
+ * earlier version let maintenance win and hid the severity behind a
+ * tooltip, on the theory that a critical alert on a box someone is
+ * already working on trains people to ignore red. That reasoning is real,
+ * but hiding the severity is the wrong fix for it: "critical, and someone
+ * is on it" and "in maintenance, otherwise fine" are different situations
+ * and the table should not render them identically. The maintenance chip
+ * uses a hue outside the severity set, so the two vocabularies never
+ * collide — the row reads as "Critical + Maint", not as a fourth severity.
  *
- * Colorblind safety: every state carries a distinct GLYPH and a distinct
- * WORD, so color is a third, redundant signal rather than the only one.
- * Roughly 1 in 12 men cannot separate the red and green here, and this is
- * a table where that distinction is the entire point.
+ * Colorblind safety: every severity carries a DISTINCT glyph and its own
+ * word, so colour is a third, redundant signal. The glyphs must stay
+ * mutually distinct — an earlier version gave HEALTHY and INFO the same
+ * filled circle, which silently made them identical to anyone who cannot
+ * separate green from blue, i.e. exactly the readers the glyph exists for.
  */
 
-type State = "MAINTENANCE" | HealthSeverity;
-
-interface StateStyle {
+interface SeverityStyle {
   label: string;
-  /** Redundant non-color signal. Geometric shapes, not colored dots —
-   * shape survives both grayscale printing and color blindness. */
+  /** Distinct per severity — see the note above. Geometric shapes, so the
+   * distinction survives greyscale as well as colour blindness. */
   glyph: string;
   className: string;
 }
 
-const STATES: Record<State, StateStyle> = {
+const SEVERITIES: Record<HealthSeverity, SeverityStyle> = {
   CRITICAL: {
     label: "Critical",
-    glyph: "▲",
+    glyph: "◆",
     className: "bg-[var(--tint-critical)] text-[var(--text-on-critical)]",
   },
   WARNING: {
     label: "Warning",
-    glyph: "◆",
+    glyph: "▲",
     className: "bg-[var(--tint-warning)] text-[var(--text-on-warning)]",
-  },
-  MAINTENANCE: {
-    label: "Maintenance",
-    glyph: "⏸",
-    className: "bg-[var(--tint-maintenance)] text-[var(--text-on-maintenance)]",
   },
   INFO: {
     label: "Info",
-    glyph: "●",
+    glyph: "■",
     className: "bg-[var(--tint-info)] text-[var(--text-on-info)]",
   },
   HEALTHY: {
@@ -62,10 +57,6 @@ const STATES: Record<State, StateStyle> = {
   },
 };
 
-function resolveState(severity: HealthSeverity, maintenance: MaintenanceState): State {
-  return maintenance.enabled ? "MAINTENANCE" : severity;
-}
-
 export function StateBadge({
   severity,
   maintenance,
@@ -73,26 +64,29 @@ export function StateBadge({
   severity: HealthSeverity;
   maintenance: MaintenanceState;
 }) {
-  const state = resolveState(severity, maintenance);
-  const style = STATES[state];
-
-  // `title` carries the fact the merge hides — the real severity behind a
-  // maintenance flag — so it is recoverable on hover without spending a
-  // column on it.
-  const title =
-    state === "MAINTENANCE"
-      ? `In maintenance${maintenance.reason ? `: ${maintenance.reason}` : ""} (health: ${severity})`
-      : undefined;
+  const style = SEVERITIES[severity];
 
   return (
-    <span
-      title={title}
-      className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap ${style.className}`}
-    >
-      <span aria-hidden="true" className="text-[0.7em] leading-none">
-        {style.glyph}
+    <span className="inline-flex items-center gap-2">
+      <span
+        className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap ${style.className}`}
+      >
+        <span aria-hidden="true" className="text-[0.7em] leading-none">
+          {style.glyph}
+        </span>
+        {style.label}
       </span>
-      {style.label}
+      {maintenance.enabled && (
+        <span
+          title={maintenance.reason ?? undefined}
+          className="inline-flex items-center gap-1 rounded-full bg-[var(--tint-maintenance)] px-2 py-0.5 text-xs font-medium whitespace-nowrap text-[var(--text-on-maintenance)]"
+        >
+          <span aria-hidden="true" className="text-[0.7em] leading-none">
+            ⏸
+          </span>
+          Maint
+        </span>
+      )}
     </span>
   );
 }

@@ -12,6 +12,7 @@ import { useNavigate } from "react-router";
 
 import type { ServerListParams } from "@/api/servers";
 import { StateBadge } from "@/components/StateBadge";
+import type { HealthSeverity } from "@/types/server";
 import type { ServerSummary } from "@/types/server";
 
 /**
@@ -31,6 +32,19 @@ import type { ServerSummary } from "@/types/server";
  * background responds to hover, which is instant feedback rather than
  * animation.
  */
+
+/** The row accent for a severity: a 2px left edge on the rows that need
+ * attention and nothing on the rest. Scanning fifty rows for a colour in
+ * the middle of a table is slower than following one vertical edge, and
+ * accenting every row (including healthy ones) would put the signal back
+ * to zero. */
+const ROW_ACCENT: Record<HealthSeverity, string> = {
+  CRITICAL: "border-l-2 border-l-[var(--color-status-critical)]",
+  WARNING: "border-l-2 border-l-[var(--color-status-warning)]",
+  INFO: "border-l-2 border-l-transparent",
+  HEALTHY: "border-l-2 border-l-transparent",
+  UNKNOWN: "border-l-2 border-l-transparent",
+};
 
 export type SortableField = "name" | "model" | "updated_at";
 
@@ -132,6 +146,9 @@ export function InventoryTable({ servers, sortField, sortDesc, onSortChange }: I
                   )}
                 </th>
               ))}
+              <th scope="col" className="w-6 border-b border-[var(--border-subtle)]">
+                <span className="sr-only">Open</span>
+              </th>
             </tr>
           ))}
         </thead>
@@ -150,19 +167,30 @@ export function InventoryTable({ servers, sortField, sortDesc, onSortChange }: I
                 }
               }}
               tabIndex={0}
-              className="cursor-pointer border-b border-[var(--border-subtle)] last:border-0 hover:bg-[var(--surface-hover)] focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[var(--color-status-info)]"
+              className={`group cursor-pointer border-b border-[var(--border-subtle)] transition-colors duration-[var(--duration-instant)] ease-[var(--ease-out-strong)] last:border-0 hover:bg-[var(--surface-hover)] focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[var(--color-status-info)] ${ROW_ACCENT[row.original.health.overall]}`}
             >
               {row.getVisibleCells().map((cell) => (
                 <td key={cell.id} className="px-4 py-2.5 whitespace-nowrap">
                   {flexRender(cell.column.columnDef.cell, cell.getContext())}
                 </td>
               ))}
+              {/* Disclosure affordance: appears on hover so the row reads
+                  as "leads somewhere" without adding permanent chrome to
+                  every one of fifty rows. */}
+              <td className="w-6 pr-3 text-right">
+                <span
+                  aria-hidden="true"
+                  className="inline-block text-[var(--text-muted)] opacity-0 transition-opacity duration-[var(--duration-fast)] ease-[var(--ease-out-strong)] group-hover:opacity-100"
+                >
+                  ›
+                </span>
+              </td>
             </tr>
           ))}
           {servers.length === 0 && (
             <tr>
               <td
-                colSpan={columns.length}
+                colSpan={columns.length + 1}
                 className="px-4 py-12 text-center text-sm text-[var(--text-muted)]"
               >
                 No servers match the current filters.

@@ -17,7 +17,7 @@ export function AppNav() {
 
   return (
     <nav className="border-b border-[var(--border-subtle)] bg-[var(--surface-raised)]">
-      <div className="mx-auto flex max-w-7xl items-center gap-6 px-8 py-3">
+      <div className="mx-auto flex max-w-7xl items-center gap-6 px-8">
         {LINKS.map((link) => {
           const isActive =
             link.to === "/" ? location.pathname === "/" : location.pathname.startsWith(link.to);
@@ -25,13 +25,21 @@ export function AppNav() {
             <Link
               key={link.to}
               to={link.to}
-              className={`text-sm font-medium ${
+              className={`relative py-3 text-sm font-medium ${
                 isActive
                   ? "text-[var(--text-primary)]"
                   : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
               }`}
             >
               {link.label}
+              {/* A 2px bar, not just a colour change: "where am I" should
+                  not depend on distinguishing two greys. */}
+              {isActive && (
+                <span
+                  aria-hidden="true"
+                  className="absolute inset-x-0 -bottom-px h-0.5 bg-[var(--color-status-info)]"
+                />
+              )}
             </Link>
           );
         })}
