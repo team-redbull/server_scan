@@ -1,3 +1,4 @@
+import { SEVERITY_GLYPH } from "@/components/severity";
 import type { HealthSeverity, MaintenanceState } from "@/types/server";
 
 /**
@@ -20,18 +21,6 @@ import type { HealthSeverity, MaintenanceState } from "@/types/server";
  * filled circle, which silently made them identical to anyone who cannot
  * separate green from blue, i.e. exactly the readers the glyph exists for.
  */
-
-/** The one place a severity's shape is decided. Anything that shows a
- * severity — the table's State cell, the site cards' critical/warning
- * counts — reads its glyph from here, so a shape can never come to mean
- * one thing on one screen and something else on another. */
-export const SEVERITY_GLYPH: Record<HealthSeverity, string> = {
-  CRITICAL: "\u25C6",
-  WARNING: "\u25B2",
-  INFO: "\u25A0",
-  HEALTHY: "\u25CF",
-  UNKNOWN: "\u25CB",
-};
 
 interface SeverityStyle {
   label: string;

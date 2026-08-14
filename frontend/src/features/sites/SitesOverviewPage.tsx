@@ -4,7 +4,7 @@ import { Link } from "react-router";
 import { listSites } from "@/api/sites";
 import type { SiteStats } from "@/api/sites";
 import { queryKeys } from "@/api/queryKeys";
-import { SEVERITY_GLYPH } from "@/components/StateBadge";
+import { SEVERITY_GLYPH } from "@/components/severity";
 
 /**
  * The landing page: five sites, each summarising what is in it.
