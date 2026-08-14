@@ -8,7 +8,12 @@
 # Red Hat-supported; only the interpreter build is a community artifact.
 # See docs/adr for the full tradeoff.
 
-FROM registry.access.redhat.com/ubi9/ubi-minimal:9.4 AS base
+# Pinned to a minor stream (9.8), not a frozen build id and not a
+# floating `latest`. The stream keeps receiving Red Hat's CVE fixes
+# within 9.8, so the image gets patched without a commit here, while the
+# pin still keeps a rebuild reproducible to a known OS minor. Dependabot
+# (.github/dependabot.yml) raises the next minor as a reviewable PR.
+FROM registry.access.redhat.com/ubi9/ubi-minimal:9.8 AS base
 
 ARG PYTHON_VERSION=3.13.15
 ARG PYTHON_BUILD_STANDALONE_RELEASE=20260807
