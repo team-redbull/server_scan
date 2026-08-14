@@ -163,7 +163,36 @@ jobs:
 
       - name: Install Playwright browsers
         working-directory: frontend
-        run: npx playwright install --with-deps chromium
+        # Deliberately NOT `--with-deps`, which Playwright's own CI docs
+        # otherwise recommend. On this runner it cost ~10 minutes for zero
+        # benefit, and the CI log says exactly why: every actual browser
+        # library (libnss3, libatk*, libgbm1, libcups2t64, libdrm2,
+        # libxkbcommon0, libasound2t64, fonts-liberation,
+        # fonts-noto-color-emoji, ...) reports "is already the newest
+        # version" — the ubuntu-24.04 image ships all of them. The only
+        # packages `--with-deps` actually adds are CJK/Cyrillic/Thai font
+        # sets (fonts-ipafont-gothic, fonts-wqy-zenhei, fonts-unifont,
+        # fonts-tlwg-loma-otf, xfonts-*), and fetching those 21 MB from
+        # azure.archive.ubuntu.com ran at 35 kB/s: "Fetched 21.1 MB in
+        # 10min 2s". The apt mirror, not the browser download, was the
+        # whole cost — Playwright's own tracking issue for this
+        # (microsoft/playwright#23388) names the same unstable mirror.
+        #
+        # This admin UI renders Latin text only, and Latin + emoji fonts
+        # are already present, so the missing font sets would at worst
+        # show tofu boxes in a failure screenshot of non-Latin text that
+        # this app never displays. If a *real* library ever goes missing
+        # from a future runner image, Playwright fails with an explicit
+        # "missing dependencies" error naming the package — add a
+        # `npx playwright install-deps chromium` step then, rather than
+        # paying the font tax on every run pre-emptively.
+        #
+        # `--only-shell` skips the 184 MB headed "Chrome for Testing"
+        # build and installs just chromium-headless-shell, which is what
+        # actually runs here: the `chromium` project uses
+        # `devices["Desktop Chrome"]`, which sets no `channel`, and these
+        # tests run headless.
+        run: npx playwright install chromium --only-shell
 
       - name: Start backend
         run: |
