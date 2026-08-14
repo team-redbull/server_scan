@@ -100,6 +100,43 @@ def _nic_macs(adapter_ifs: list[Any]) -> tuple[str, ...]:
     return tuple(macs)
 
 
+# UCS reports interface state in its own vocabulary; the platform's
+# `ConnectivityAttachment.oper_state` is documented as UP | DOWN | UNKNOWN
+# and `compute_connectivity_facts` counts those exact strings. Passing the
+# raw UCS value straight through left every fabric path counted as neither
+# up nor down — verified against UCSPE 4.2, where a server with four
+# attachments reported `fabric_paths_up: 0, fabric_paths_down: 0` — which
+# silently disabled the connectivity health signal for every UCS server.
+#
+# `admin-down` maps to DISABLED rather than DOWN on purpose: it means the
+# port was administratively disabled (the normal state of an adapter port
+# on a server with no service profile associated), not that a cable or
+# link failed. `compute_connectivity_facts` counts neither, so an
+# unassociated server does not masquerade as a connectivity fault.
+_OPER_STATE_MAP = {
+    "operable": "UP",
+    "up": "UP",
+    "link-up": "UP",
+    "admin-down": "DISABLED",
+    "disabled": "DISABLED",
+    "inoperable": "DOWN",
+    "down": "DOWN",
+    "link-down": "DOWN",
+    "failed": "DOWN",
+    "sfp-not-present": "DOWN",
+}
+
+_ADMIN_STATE_MAP = {"enabled": "ENABLED", "disabled": "DISABLED"}
+
+
+def _oper_state(mo: Any) -> str:
+    return _OPER_STATE_MAP.get(str(getattr(mo, "oper_state", "") or "").lower(), "UNKNOWN")
+
+
+def _admin_state(mo: Any) -> str:
+    return _ADMIN_STATE_MAP.get(str(getattr(mo, "admin_state", "") or "").lower(), "UNKNOWN")
+
+
 def _attachments(adapter_ifs: list[Any]) -> tuple[ProviderAttachment, ...]:
     attachments: list[ProviderAttachment] = []
     for mo in adapter_ifs:
@@ -111,19 +148,21 @@ def _attachments(adapter_ifs: list[Any]) -> tuple[ProviderAttachment, ...]:
                 type="FABRIC_INTERCONNECT",
                 provider="UCS_MANAGER",
                 fabric=switch_id,
-                # Not populated for v1 — see module docstring's ASSUMED
-                # section: resolving the fabric interconnect's own
-                # name/model/serial needs a `networkElement`/`fabricSwitch`
-                # lookup this pass didn't confirm the shape of.
+                # Not populated: resolving the fabric interconnect's own
+                # name/model/serial needs a `networkElement` lookup this
+                # collector does not make.
                 fabric_name=None,
                 fabric_id=None,
                 fabric_model=None,
                 fabric_serial=None,
                 server_interface=getattr(mo, "name", None) or getattr(mo, "id", None),
                 server_port=None,
-                fabric_port=None,
-                admin_state=getattr(mo, "admin_state", "") or "",
-                oper_state=getattr(mo, "oper_state", "") or "",
+                # Physical ports (`adaptorExtEthIf`) carry `peer_dn` — the
+                # fabric-side port this adapter port is cabled to. Logical
+                # vNICs (`adaptorHostEthIf`) have no such peer.
+                fabric_port=getattr(mo, "peer_dn", None) or None,
+                admin_state=_admin_state(mo),
+                oper_state=_oper_state(mo),
                 speed_mbps=None,
             )
         )

@@ -315,7 +315,7 @@ class TestListServers:
         servers = await _collect(_provider(client))
 
         assert len(servers) == 50
-        assert len([c for c in client.calls if c.startswith("query_classid:")]) == 5
+        assert len([c for c in client.calls if c.startswith("query_classid:")]) == 6
 
     async def test_skips_non_equipped_servers(self) -> None:
         domain = _domain()

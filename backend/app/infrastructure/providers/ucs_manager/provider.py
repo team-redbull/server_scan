@@ -120,6 +120,49 @@ def _group_by_owning_server_dn(
     return grouped
 
 
+# `MgmtIfConsts.ACCESS_*` values that are never a BMC address, whatever
+# their position in the tree. Everything else (`out-of-band`, and the
+# `unspecified` a real blade reports) is accepted.
+_NON_BMC_ACCESS = frozenset({"in-band", "internal", "virtual"})
+
+
+def _bmc_interface(mgmt_ifs: list[Any], *, server_dn: str) -> Any | None:
+    """The server's own CIMC management interface, out of every `mgmtIf`
+    that lives somewhere under its DN.
+
+    Selected by position in the tree, not by `access`. An earlier version
+    filtered on `access == "out-of-band"`, which turns out to select
+    nothing on a real domain: verified against UCSPE 4.2, a blade's own
+    management interfaces report `access="unspecified"` (with
+    `subject="blade"`), and the only two `out-of-band` interfaces in the
+    whole domain belong to the fabric interconnects themselves
+    (`subject="switch"`), which are not under any server's DN at all.
+
+    A compute unit owns exactly one management controller at
+    `{server_dn}/mgmt`; the interfaces beneath it are the CIMC's. The
+    other `mgmtIf`s under a server hang off its adapters
+    (`{server_dn}/adaptor-N/mgmt/...`, `access="internal"`) and are not
+    the BMC. `access == "out-of-band"` is still preferred when present,
+    for domains that do set it.
+    """
+    own_controller_prefix = f"{server_dn}/mgmt/"
+    own = [
+        mo
+        for mo in mgmt_ifs
+        if str(getattr(mo, "dn", "")).startswith(own_controller_prefix)
+        # `in-band` management rides the data path rather than the CIMC,
+        # so its address is not the BMC address even though it hangs off
+        # the same controller. `internal` is adapter-internal plumbing.
+        and str(getattr(mo, "access", "") or "").lower() not in _NON_BMC_ACCESS
+    ]
+    if not own:
+        return None
+    return next(
+        (mo for mo in own if getattr(mo, "access", None) == "out-of-band"),
+        own[0],
+    )
+
+
 class UcsManagerProvider:
     provider_type = ManagerType.UCS_MANAGER.value
 
@@ -173,7 +216,17 @@ class UcsManagerProvider:
             rack_units = await client.query_classid("computeRackUnit")
             ls_servers = await client.query_classid("lsServer")
             mgmt_ifs = await client.query_classid("mgmtIf")
-            adapter_host_eth_ifs = await client.query_classid("adaptorHostEthIf")
+            # Both adapter interface classes, unioned per server. They are
+            # complementary, not alternatives: `adaptorExtEthIf` is the
+            # physical adapter port (present on every discovered server,
+            # burned-in MAC, cabled to a fabric interconnect), while
+            # `adaptorHostEthIf` is a logical vNIC that only exists once a
+            # service profile is associated. Verified against UCSPE 4.2:
+            # of 14 servers, 12 had only ext-eth ports and 2 had only
+            # host-eth — querying either class alone left most of the
+            # fleet with no MACs and no fabric attachments at all.
+            adapter_ifs_all = await client.query_classid("adaptorExtEthIf")
+            adapter_ifs_all += await client.query_classid("adaptorHostEthIf")
 
             profile_by_dn: dict[str, Any] = {}
             template_dn_by_name: dict[str, str] = {}
@@ -194,18 +247,11 @@ class UcsManagerProvider:
             server_dns = [mo.dn for mo in servers]
             mgmt_ifs_by_server = _group_by_owning_server_dn(mgmt_ifs, server_dns=server_dns)
             adapter_ifs_by_server = _group_by_owning_server_dn(
-                adapter_host_eth_ifs, server_dns=server_dns
+                adapter_ifs_all, server_dns=server_dns
             )
 
             for server_mo in servers:
-                mgmt_if = next(
-                    (
-                        m
-                        for m in mgmt_ifs_by_server[server_mo.dn]
-                        if getattr(m, "access", None) == "out-of-band"
-                    ),
-                    None,
-                )
+                mgmt_if = _bmc_interface(mgmt_ifs_by_server[server_mo.dn], server_dn=server_mo.dn)
                 yield compute_unit_to_provider_server(
                     server_mo,
                     manager_id=self._manager.id,

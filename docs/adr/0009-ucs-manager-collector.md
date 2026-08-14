@@ -270,3 +270,89 @@ implementation happens to assume.
 **Still unverified, and only settleable against UCSPE or real hardware:**
 the `total_memory` MB assumption, plus the original scope cuts (CPU model,
 storage detail, fabric interconnect identity).
+
+## Validated against real hardware (UCSPE 4.2(2aS9))
+
+Everything above was built without a live domain. It has now been run
+end-to-end against a Cisco UCS Platform Emulator instance
+(UCSPE 4.2(2aS9), 5 blades + 9 rack units, 14 servers): full collector
+run via `tools/run_collector.py`, then the REST API and UI over the
+result. **14 fetched, 14 created, 0 errors.**
+
+### Confirmed on real hardware
+
+- **`lsServiceProfileTemplate` does not exist.** Querying it returns
+  `UcsException: ERR-xml-parse-error … no class named
+  lsServiceProfileTemplate`, which aborts the run for the whole domain —
+  exactly the failure the Corrections section predicted from SDK
+  metadata. Partitioning `lsServer` by `type` is correct.
+- **`mgmtIf` / `adaptorHostEthIf` are not children of a compute unit.**
+  `query_children(in_dn="sys/chassis-3/blade-1", class_id="mgmtIf",
+  hierarchy=True)` returns **0 objects**, while a domain-wide
+  `query_classid` + DN-prefix join finds 6 under that same blade. Real
+  DNs: `sys/chassis-3/blade-1/mgmt/if-1`,
+  `sys/rack-unit-1/adaptor-1/host-eth-1`. `hierarchy=False` returns 0
+  too, so the depth — not the flag — was the problem.
+- `presence` is `equipped` on all 14; `switch_id` is exactly `A`/`B`;
+  `admin_state` is `enabled`. The prefix check and the A/B/NONE handling
+  hold.
+- `normalize_mac` correctly rejects the all-zero MAC that UCSPE reports
+  for blade CIMCs (`00:00:00:00:00:00` -> `None`), so a meaningless
+  address never reaches the document.
+
+### Wrong, and fixed as a result
+
+- **The BMC interface filter selected nothing.** `access == "out-of-band"`
+  matched no server interface: a blade's own management interfaces report
+  `access="unspecified"` (`subject="blade"`), and the only two
+  `out-of-band` interfaces in the entire domain belong to the fabric
+  interconnects (`subject="switch"`), which sit under no server's DN.
+  Selection is now by position — the interfaces under the server's own
+  `{dn}/mgmt/` controller, excluding `in-band`/`internal`/`virtual`,
+  preferring `out-of-band` when a domain does set it. This populated real
+  CIMC MACs (Cisco OUI `00:25:b5:…`) on all 9 rack units.
+- **Only querying `adaptorHostEthIf` left most of the fleet with no
+  network data at all.** `adaptorHostEthIf` is a *logical vNIC* that only
+  exists once a service profile is associated; `adaptorExtEthIf` is the
+  *physical* adapter port, present on every discovered server. In this
+  domain the two are strictly complementary — 12 servers had only
+  ext-eth, 2 had only host-eth, none had both. Collecting both and
+  unioning them per server took the fleet from 6 MACs / 6 attachments
+  across 2 servers to **66 MACs / 66 attachments across all 14**, with
+  zero servers left without network data. `adaptorExtEthIf.peer_dn` also
+  gives the fabric-side port, now mapped to
+  `ProviderAttachment.fabric_port`.
+- **Fabric path counts were always zero.** `ConnectivityAttachment.
+  oper_state` is documented `UP | DOWN | UNKNOWN` and
+  `compute_connectivity_facts` counts those exact strings, but the
+  provider passed UCS's own vocabulary through untouched (`operable`,
+  `admin-down`). A server with four attachments stored
+  `fabric_paths_up: 0, fabric_paths_down: 0` — silently disabling the
+  connectivity health signal for every UCS server. UCS states are now
+  mapped explicitly. `admin-down` maps to `DISABLED`, not `DOWN`: it is
+  the normal state of an adapter port on a server with no service
+  profile, and `compute_connectivity_facts` counts neither, so an
+  unassociated server does not masquerade as a connectivity fault.
+
+### Still not settled
+
+- **The `total_memory` MB assumption remains unproven.** UCSPE reports
+  `49152` for all 14 servers regardless of model — consistent with 48 GB
+  in MB, but a single synthetic value across every model is weak
+  evidence, and the emulator contradicts itself elsewhere (the same
+  blade's four equipped `memoryUnit`s report `capacity=65536` each,
+  summing to 262144, and its `memoryArray.max_capacity` is 12288). Only
+  real hardware will settle this.
+- **Service-profile and template mapping is still unexercised.** This
+  domain has zero `lsServer` objects — every server reports
+  `association="none"` and an empty `assigned_to_dn` — so
+  `profile_template_name`/`_external_id` and the
+  `oper_src_templ_name` preference have never run against real data.
+- `cpu_model` and storage detail remain unmapped (`num_of_cpus`/
+  `num_of_cores`/`num_of_threads` do populate correctly).
+- Server `name` falls back to the DN (`sys/chassis-3/blade-1`) when a
+  server has no service profile, since UCS leaves `name` empty. That in
+  turn means `parse_site_code` finds no site token and every server lands
+  in the "Unassigned" bucket — correct behaviour for these names, but it
+  means a UCS-sourced fleet only gets real sites once hostnames carry
+  them.
