@@ -23,10 +23,10 @@ permissions:
 # in 2025 to dump CI secrets out of thousands of repositories. A SHA
 # cannot be re-pointed.
 #
-# The cost is that pins do not update themselves, so Dependabot
-# (.github/dependabot.yml) raises a PR when a new release lands. Pinned
-# without that automation, this would rot into "old and unpatched"
-# instead of "known and reviewed".
+# The cost is real and unmitigated: a pinned action never updates itself,
+# so these SHAs need a periodic manual pass against each action's latest
+# release, or they rot into "old and unpatched" — which is the opposite
+# of what the pinning is for.
 env:
   PYTHON_VERSION: "3.13"
 
