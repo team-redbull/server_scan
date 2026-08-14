@@ -45,7 +45,14 @@ is a real mistake, not a style preference.
    after committing to confirm), and **never** include a
    `Co-Authored-By` trailer or any "Generated with"/"🤖" footer, even
    though the harness's own default PR/commit templates suggest one —
-   this project overrides that default.
+   this project overrides that default. **The commit message's first
+   line should follow Conventional Commits** (`feat:`, `fix:`, `feat!:`/
+   a `BREAKING CHANGE:` footer for anything actually breaking) when the
+   change is more than a patch — since ADR-0010, this is what CI reads
+   to decide the next published image version, not just a style
+   nicety. Unprefixed/other messages still work and just default to a
+   patch bump, so this is a should, not a hard gate — but treat it as
+   real signal, not decoration.
 3. **Use multiple parallel agents where work naturally decomposes** —
    planning, executing, and testing each other's work — rather than
    doing everything serially in one thread, when a task splits into
@@ -126,18 +133,21 @@ template).
    next vendor. Testability without real hardware varies a lot by
    vendor — that mattered enough to be the deciding factor for going
    UCS-first; check it again before committing to a build order.
-2. **Deployment/CD gaps**, explicitly deferred by the user in favor of
-   collectors: no CI job builds/pushes a container image or deploys
-   anything (CI only lints/tests); no Kubernetes/OpenShift manifests
-   exist for the frontend (only the backend API has a Deployment/Route,
-   despite the frontend having a solid Containerfile since slice 1 —
-   `deploy/README.md` needs a real update, it's currently stale); the
-   `INVENTORY_CURSOR_SECRET` insecure default is only a code comment,
-   not enforced at startup; no rate-limiting middleware anywhere; Mongo
-   HA/backup and Redis persistence are explicitly documented as "the
-   platform's problem" but nobody has actually stood either up; no
-   alerting rules or dashboards on top of the Prometheus metrics that
-   already exist.
+2. **Remaining deployment/CD gaps**, explicitly deferred by the user in
+   favor of collectors: CI now builds and publishes both images to GHCR
+   on every push to main (`.github/workflows/ci.yml`'s `publish` job,
+   `docs/adr/0010-image-publishing-and-versioning.md`), versioned
+   automatically from Conventional Commits — but nothing *deploys* those
+   images anywhere yet (no GitOps/ArgoCD wiring, no automatic manifest
+   update). No Kubernetes/OpenShift manifests exist for the frontend
+   (only the backend API has a Deployment/Route, despite the frontend
+   having a solid Containerfile since slice 1 — see `deploy/README.md`);
+   the `INVENTORY_CURSOR_SECRET` insecure default is only a code
+   comment, not enforced at startup; no rate-limiting middleware
+   anywhere; Mongo HA/backup and Redis persistence are explicitly
+   documented as "the platform's problem" but nobody has actually stood
+   either up; no alerting rules or dashboards on top of the Prometheus
+   metrics that already exist.
 3. **Real authentication** — the release gate, explicitly last. Swaps
    the current permissive `AuthProvider` for a real one; touches every
    router.

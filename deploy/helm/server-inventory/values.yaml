@@ -1,6 +1,10 @@
 backend:
   image:
-    repository: server-inventory-api
+    # Published by .github/workflows/ci.yml's `publish` job on every push
+    # to main (see docs/adr/0010-image-publishing-and-versioning.md) —
+    # pin `tag` to a real vX.Y.Z release for anything beyond local
+    # experimentation; `latest` always means whatever main last built.
+    repository: ghcr.io/team-redbull/server_scan-api
     tag: latest
     pullPolicy: IfNotPresent
   replicaCount: 2

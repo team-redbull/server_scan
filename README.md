@@ -127,6 +127,19 @@ At scale, `tools/verify_indexes.py` and `tools/loadtest.py` verify query
 plans and latency against a real 10k/50k-server seeded dataset — see
 `docs/adr/0007-scale-verification-and-request-coalescing.md`.
 
+## Container images
+
+Every push to `main` that passes the full test suite builds and
+publishes both images (API/collectors, and the frontend) to GHCR —
+`ghcr.io/team-redbull/server_scan-api` and
+`ghcr.io/team-redbull/server_scan-frontend` — tagged with a semantic
+version decided automatically from
+[Conventional Commits](https://www.conventionalcommits.org/) since the
+last release (`feat:` → minor, `feat!:`/a `BREAKING CHANGE:` footer →
+major, anything else → patch), plus rolling `latest` and `sha-<commit>`
+tags. See `docs/adr/0010-image-publishing-and-versioning.md` for the
+full design and `deploy/` for the manifests that consume these images.
+
 ## Project layout
 
 ```

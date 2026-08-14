@@ -24,7 +24,10 @@ spec:
       # correctly under any assigned UID without requiring anyuid.
       containers:
         - name: api
-          image: server-inventory-api:latest # replaced by the pipeline/GitOps tool per environment
+          # Published by CI on every push to main — see
+          # docs/adr/0010-image-publishing-and-versioning.md. Pin to a
+          # real vX.Y.Z tag for anything beyond local experimentation.
+          image: ghcr.io/team-redbull/server_scan-api:latest
           ports:
             - name: http
               containerPort: 8080

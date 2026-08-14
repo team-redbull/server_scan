@@ -52,7 +52,10 @@ spec:
           # assigns the UID at admission time.
           containers:
             - name: collector
-              image: server-inventory-api:latest # replaced by the pipeline/GitOps tool per environment
+              # Same image as the API Deployment — see Containerfile's
+              # comment on why tools/ rides along in it. Published by CI
+              # on every push to main (docs/adr/0010).
+              image: ghcr.io/team-redbull/server_scan-api:latest
               command: ["python3", "-m", "tools.run_collector", "--manager-type", "UCS_MANAGER"]
               env:
                 - name: INVENTORY_ENVIRONMENT
