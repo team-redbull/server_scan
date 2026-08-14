@@ -31,7 +31,7 @@ test.describe("Maintenance", () => {
     await page.getByRole("button", { name: "Start maintenance" }).click();
     await expect(page.getByRole("button", { name: "End maintenance" })).toBeVisible();
 
-    await page.goto("/");
+    await page.goto("/servers");
     // Not `.check()`: this checkbox's `onChange` drives a react-router
     // `setSearchParams` update, which can commit as a transition — the
     // DOM's `checked` property can genuinely flicker back to its old value

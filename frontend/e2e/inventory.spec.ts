@@ -2,8 +2,9 @@ import { expect, test } from "@playwright/test";
 
 test.describe("Inventory", () => {
   test("lists servers and filters by search", async ({ page }) => {
-    await page.goto("/");
-    await expect(page.getByRole("heading", { name: "Server Inventory" })).toBeVisible();
+    // "/" is the sites overview now; the server list lives at /servers.
+    await page.goto("/servers");
+    await expect(page.getByRole("heading", { name: "Servers" })).toBeVisible();
 
     const rows = page.locator("tbody tr");
     await expect(rows.first()).toBeVisible();
@@ -28,7 +29,7 @@ test.describe("Inventory", () => {
   });
 
   test("navigates to a server's detail page and renders every tab", async ({ page }) => {
-    await page.goto("/");
+    await page.goto("/servers");
     const firstLink = page.locator("tbody tr").first().getByRole("link");
     const name = await firstLink.innerText();
     await firstLink.click();

@@ -21,6 +21,18 @@ import type { HealthSeverity, MaintenanceState } from "@/types/server";
  * separate green from blue, i.e. exactly the readers the glyph exists for.
  */
 
+/** The one place a severity's shape is decided. Anything that shows a
+ * severity — the table's State cell, the site cards' critical/warning
+ * counts — reads its glyph from here, so a shape can never come to mean
+ * one thing on one screen and something else on another. */
+export const SEVERITY_GLYPH: Record<HealthSeverity, string> = {
+  CRITICAL: "\u25C6",
+  WARNING: "\u25B2",
+  INFO: "\u25A0",
+  HEALTHY: "\u25CF",
+  UNKNOWN: "\u25CB",
+};
+
 interface SeverityStyle {
   label: string;
   /** Distinct per severity — see the note above. Geometric shapes, so the
@@ -32,27 +44,27 @@ interface SeverityStyle {
 const SEVERITIES: Record<HealthSeverity, SeverityStyle> = {
   CRITICAL: {
     label: "Critical",
-    glyph: "◆",
+    glyph: SEVERITY_GLYPH.CRITICAL,
     className: "bg-[var(--tint-critical)] text-[var(--text-on-critical)]",
   },
   WARNING: {
     label: "Warning",
-    glyph: "▲",
+    glyph: SEVERITY_GLYPH.WARNING,
     className: "bg-[var(--tint-warning)] text-[var(--text-on-warning)]",
   },
   INFO: {
     label: "Info",
-    glyph: "■",
+    glyph: SEVERITY_GLYPH.INFO,
     className: "bg-[var(--tint-info)] text-[var(--text-on-info)]",
   },
   HEALTHY: {
     label: "Healthy",
-    glyph: "●",
+    glyph: SEVERITY_GLYPH.HEALTHY,
     className: "bg-[var(--tint-healthy)] text-[var(--text-on-healthy)]",
   },
   UNKNOWN: {
     label: "Unknown",
-    glyph: "○",
+    glyph: SEVERITY_GLYPH.UNKNOWN,
     className: "bg-[var(--tint-unknown)] text-[var(--text-on-unknown)]",
   },
 };

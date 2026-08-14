@@ -4,6 +4,7 @@ import { Link } from "react-router";
 import { listSites } from "@/api/sites";
 import type { SiteStats } from "@/api/sites";
 import { queryKeys } from "@/api/queryKeys";
+import { SEVERITY_GLYPH } from "@/components/StateBadge";
 
 /**
  * The landing page: five sites, each summarising what is in it.
@@ -84,13 +85,13 @@ function SiteCard({ site }: { site: SiteStats }) {
       <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
         {critical > 0 && (
           <span className="inline-flex items-center gap-1.5 font-medium text-[var(--text-on-critical)]">
-            <span aria-hidden="true">▲</span>
+            <span aria-hidden="true">{SEVERITY_GLYPH.CRITICAL}</span>
             <span className="tabular">{critical}</span> critical
           </span>
         )}
         {warning > 0 && (
           <span className="inline-flex items-center gap-1.5 font-medium text-[var(--text-on-warning)]">
-            <span aria-hidden="true">◆</span>
+            <span aria-hidden="true">{SEVERITY_GLYPH.WARNING}</span>
             <span className="tabular">{warning}</span> warning
           </span>
         )}
@@ -102,7 +103,7 @@ function SiteCard({ site }: { site: SiteStats }) {
         )}
         {critical === 0 && warning === 0 && site.total > 0 && (
           <span className="inline-flex items-center gap-1.5 text-[var(--text-on-healthy)]">
-            <span aria-hidden="true">●</span> all healthy
+            <span aria-hidden="true">{SEVERITY_GLYPH.HEALTHY}</span> all healthy
           </span>
         )}
         {site.total === 0 && <span className="text-[var(--text-muted)]">empty</span>}

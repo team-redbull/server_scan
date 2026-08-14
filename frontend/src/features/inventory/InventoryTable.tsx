@@ -8,7 +8,7 @@ import type { SortingState } from "@tanstack/react-table";
 // not a workaround — so we build on that rather than the fully-new API.
 import { legacyCreateColumnHelper, useLegacyTable } from "@tanstack/react-table/legacy";
 import type { LegacyColumnDef } from "@tanstack/react-table/legacy";
-import { useNavigate } from "react-router";
+import { Link, useNavigate } from "react-router";
 
 import type { ServerListParams } from "@/api/servers";
 import { StateBadge } from "@/components/StateBadge";
@@ -67,11 +67,18 @@ const columns: LegacyColumnDef<ServerSummary, any>[] = [
     id: "name",
     header: "Name",
     cell: (info) => (
-      // Not a blue underlined link: with every row linked, per-row link
-      // styling turns the column into a wall of blue and stops signalling
-      // anything. The whole row is clickable (see `<tr>` below), so the
-      // name just needs to read as the primary identifier.
-      <span className="font-medium text-[var(--text-primary)]">{info.getValue()}</span>
+      // A real anchor, so ctrl/middle-click opens a server in a new tab
+      // and assistive tech announces it as a link — the row's own
+      // `onClick` is a convenience on top of this, never a replacement
+      // for it. Styled as normal text rather than a blue underlined link:
+      // with every row linked, per-row link colouring turns the column
+      // into a wall of blue and stops signalling anything.
+      <Link
+        to={`/servers/${info.row.original.id}`}
+        className="font-medium text-[var(--text-primary)] underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-status-info)]"
+      >
+        {info.getValue()}
+      </Link>
     ),
     enableSorting: true,
   }),
@@ -133,7 +140,10 @@ export function InventoryTable({ servers, sortField, sortDesc, onSortChange }: I
                     <button
                       type="button"
                       onClick={header.column.getToggleSortingHandler()}
-                      className="inline-flex items-center gap-1 rounded-sm hover:text-[var(--text-primary)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-status-info)]"
+                      // `uppercase` repeated here on purpose: Tailwind preflight sets
+                      // `text-transform: none` on <button>, so a sortable header would
+                      // otherwise render in a different case from a non-sortable one.
+                      className="inline-flex items-center gap-1 rounded-sm uppercase hover:text-[var(--text-primary)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-status-info)]"
                     >
                       {flexRender(header.column.columnDef.header, header.getContext())}
                       <span aria-hidden="true" className="text-[0.65rem]">
@@ -154,19 +164,25 @@ export function InventoryTable({ servers, sortField, sortDesc, onSortChange }: I
         </thead>
         <tbody>
           {table.getRowModel().rows.map((row) => (
-            // The whole row is the click target, not just the name: a
-            // 3px-tall text link is a poor target when you are aiming at
-            // one of fifty rows. `cursor-pointer` plus the hover fill is
-            // what signals it.
+            // The whole row is a click target on top of the name link: a
+            // single line of text is a poor target when aiming at one of
+            // fifty rows. The name `<Link>` remains the accessible
+            // primitive — this row handler defers to it for anything the
+            // browser already handles natively.
             <tr
               key={row.id}
-              onClick={() => void navigate(`/servers/${row.original.id}`)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  void navigate(`/servers/${row.original.id}`);
+              onClick={(event) => {
+                // Let the real anchor handle its own clicks, and never
+                // hijack a modified click — ctrl/cmd/middle-click must
+                // still open a new tab rather than navigating this one.
+                if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.shiftKey) {
+                  return;
                 }
+                if ((event.target as HTMLElement).closest("a")) {
+                  return;
+                }
+                void navigate(`/servers/${row.original.id}`);
               }}
-              tabIndex={0}
               className={`group cursor-pointer border-b border-[var(--border-subtle)] transition-colors duration-[var(--duration-instant)] ease-[var(--ease-out-strong)] last:border-0 hover:bg-[var(--surface-hover)] focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[var(--color-status-info)] ${ROW_ACCENT[row.original.health.overall]}`}
             >
               {row.getVisibleCells().map((cell) => (
