@@ -11,12 +11,18 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-from tools.run_collector import _build_provider, _parse_args, _run_one_manager
+from tools.run_collector import (
+    _build_provider,
+    _dry_run_one_manager,
+    _parse_args,
+    _run_one_manager,
+)
 
 from app.domain.enums import ManagerType
 from app.domain.models.common import AuditFields
 from app.domain.models.manager import Manager
 from app.domain.ports.credentials import CredentialNotFoundError, ManagerCredentials
+from app.domain.ports.provider import ProviderServer
 
 pytestmark = pytest.mark.unit
 
@@ -180,6 +186,71 @@ class TestRunOneManager:
         assert result is None
 
 
+def _factory(provider: Any) -> Any:
+    """A stand-in for `_build_provider` that hands back a ready-made
+    provider, so the dry-run path can be tested without a UCS domain."""
+
+    async def build(_manager: Any, **_kwargs: Any) -> Any:
+        return provider
+
+    return build
+
+
+class TestDryRun:
+    async def test_dry_run_reports_servers_without_ingesting(self, capsys: Any) -> None:
+        """The whole point of --dry-run is that it never reaches the
+        pipeline: no classification, no health evaluation, no audit
+        events, no upsert.
+        """
+
+        class FakeProvider:
+            provider_type = "UCS_MANAGER"
+
+            async def health_check(self) -> None:
+                return None
+
+            async def list_servers(self) -> Any:
+                for name in ("ocp4-prod-one-infra-01", "ocp4-hypershift-five-01"):
+                    yield ProviderServer(external_id=f"dn/{name}", vendor="cisco", name=name)
+
+        count = await _dry_run_one_manager(
+            _manager(),
+            credential_resolver=FakeCredentialResolver(),  # type: ignore[arg-type]
+            timeout_seconds=5.0,
+            limit=None,
+            provider_factory=_factory(FakeProvider()),
+        )
+        assert count == 2
+        out = capsys.readouterr().out
+        # The site each name resolves to is shown, since that is derived
+        # at ingest and is otherwise invisible until after a real write.
+        assert "ocp4-prod-one-infra-01" in out
+        assert "one" in out
+        assert "five" in out
+        assert "Nothing was written" in out
+
+    async def test_dry_run_respects_limit(self, capsys: Any) -> None:
+        class FakeProvider:
+            provider_type = "UCS_MANAGER"
+
+            async def health_check(self) -> None:
+                return None
+
+            async def list_servers(self) -> Any:
+                for i in range(10):
+                    yield ProviderServer(external_id=f"dn/{i}", vendor="cisco", name=f"srv-{i}")
+
+        count = await _dry_run_one_manager(
+            _manager(),
+            credential_resolver=FakeCredentialResolver(),  # type: ignore[arg-type]
+            timeout_seconds=5.0,
+            limit=3,
+            provider_factory=_factory(FakeProvider()),
+        )
+        assert count == 3
+        assert "stopped at --limit 3" in capsys.readouterr().out
+
+
 class TestParseArgs:
     def test_manager_type_is_required(self) -> None:
         with pytest.raises(SystemExit):
@@ -191,3 +262,9 @@ class TestParseArgs:
 
     def test_accepts_a_known_manager_type(self) -> None:
         assert _parse_args(["--manager-type", "UCS_MANAGER"]).manager_type == "UCS_MANAGER"
+
+    def test_dry_run_and_debug_flags_default_off(self) -> None:
+        args = _parse_args(["--manager-type", "UCS_MANAGER"])
+        assert args.dry_run is False
+        assert args.debug_xml is False
+        assert args.limit is None

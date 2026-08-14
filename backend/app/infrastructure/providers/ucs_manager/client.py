@@ -43,6 +43,7 @@ catches `OSError` alongside the SDK trees, so callers only ever see one
 from __future__ import annotations
 
 import asyncio
+import os
 from typing import Any
 from urllib.parse import urlparse
 
@@ -100,6 +101,14 @@ class UcsManagerClient:
         self._handle = UcsHandle(
             _validate_endpoint(endpoint), username, password, timeout=timeout_seconds
         )
+        # `ucsmsdk`'s own request/response XML dump, for seeing exactly
+        # what came off the wire. Read from the environment rather than
+        # threaded through every constructor, because it is a debugging
+        # switch, not a property of a manager — `tools/run_collector.py
+        # --debug-xml` sets it. Never on by default: the dump includes
+        # full inventory payloads and would bury a real collector run.
+        if os.environ.get("INVENTORY_UCS_DUMP_XML") == "1":
+            self._handle.set_dump_xml()
 
     async def login(self) -> None:
         try:

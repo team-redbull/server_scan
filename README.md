@@ -84,6 +84,34 @@ manager types exist in the domain model (`ManagerType` enum, the
 `Manager` collection) but `tools/run_collector.py` raises a clear
 `NotImplementedError` for them rather than silently doing nothing.
 
+### Running a collector by hand
+
+A collector needs two things: an enabled `Manager` document of that type
+in MongoDB (endpoint + `credential_ref`), and a credentials directory
+laid out the way Kubernetes projects a Secret —
+`{credentials_dir}/{credential_ref}/username` and `/password`.
+
+```bash
+# See what a manager reports, without writing anything at all:
+INVENTORY_CREDENTIALS_DIR=/path/to/creds \
+  uv run python -m tools.run_collector --manager-type UCS_MANAGER --dry-run
+
+# ...one server only, plus every XML request/response on the wire:
+INVENTORY_CREDENTIALS_DIR=/path/to/creds \
+  uv run python -m tools.run_collector --manager-type UCS_MANAGER \
+  --dry-run --limit 1 --debug-xml
+
+# The real thing — classify, health-evaluate, audit and upsert:
+INVENTORY_CREDENTIALS_DIR=/path/to/creds \
+  uv run python -m tools.run_collector --manager-type UCS_MANAGER
+```
+
+`--dry-run` prints the `ProviderServer` each manager reports *before* the
+ingestion pipeline reshapes it, including which site each name resolves
+to — so a naming problem is visible without a write. `--debug-xml` turns
+on `ucsmsdk`'s own request/response dump (passwords are masked by the
+SDK); it is very verbose, so pair it with `--limit`.
+
 ## Local development
 
 Requires [uv](https://docs.astral.sh/uv/), Node 24+, and a container

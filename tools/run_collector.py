@@ -19,6 +19,8 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import os
+from collections.abc import Awaitable, Callable
 
 import structlog
 
@@ -33,6 +35,7 @@ from app.domain.ports.credentials import CredentialNotFoundError
 from app.domain.ports.provider import ServerInventoryProvider
 from app.domain.services.health.metrics import build_default_registry
 from app.domain.services.regex_engine import RegexModuleEngine
+from app.domain.value_objects.site import parse_site_code
 from app.infrastructure.credentials import FilesystemCredentialResolver
 from app.infrastructure.logging import configure_logging
 from app.infrastructure.mongodb import MongoClientHolder
@@ -72,6 +75,29 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         choices=sorted(ManagerType.__members__),
         help="Only Manager documents of this type are collected from.",
     )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help=(
+            "Print what each manager reports and exit without writing anything. "
+            "Nothing is classified, health-evaluated, audited or upserted."
+        ),
+    )
+    parser.add_argument(
+        "--debug-xml",
+        action="store_true",
+        help=(
+            "Dump every XML request and response ucsmsdk exchanges with the "
+            "manager. Very verbose — pair it with --dry-run --limit."
+        ),
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        metavar="N",
+        help="With --dry-run, stop after N servers per manager.",
+    )
     return parser.parse_args(argv)
 
 
@@ -89,6 +115,60 @@ async def _build_provider(
         )
     credentials = await credential_resolver.resolve(manager.credential_ref)
     return factory(manager=manager, credentials=credentials, timeout_seconds=timeout_seconds)
+
+
+async def _dry_run_one_manager(
+    manager: Manager,
+    *,
+    credential_resolver: FilesystemCredentialResolver,
+    timeout_seconds: float,
+    limit: int | None,
+    provider_factory: Callable[..., Awaitable[ServerInventoryProvider]] | None = None,
+) -> int:
+    """Print what `manager` reports, writing nothing. Returns the count.
+
+    Deliberately bypasses `IngestService` entirely rather than passing it
+    some no-op repository: the point of a dry run is to see what the
+    *provider* produces, before classification, health evaluation and
+    correlation have had a chance to reshape it. Anything printed here is
+    the raw `ProviderServer` the collector would hand to the pipeline.
+    """
+    build = provider_factory or _build_provider
+    provider = await build(
+        manager, credential_resolver=credential_resolver, timeout_seconds=timeout_seconds
+    )
+    print(f"\n=== {manager.name} ({manager.type.value} @ {manager.endpoint}) ===")
+
+    count = 0
+    async for ps in provider.list_servers():
+        if limit is not None and count >= limit:
+            print(f"  … stopped at --limit {limit}")
+            break
+        count += 1
+        site = parse_site_code(ps.name)
+        print(
+            f"\n[{count}] {ps.name}"
+            f"\n     external_id : {ps.external_id}"
+            f"\n     site (from name): {site.value if site else '— none in name'}"
+            f"\n     vendor/model: {ps.vendor} / {ps.model}"
+            f"\n     serial/uuid : {ps.serial} / {ps.system_uuid}"
+            f"\n     cpu         : {ps.cpu_sockets} sockets, {ps.cpu_cores} cores,"
+            f" {ps.cpu_threads} threads"
+            f"\n     memory      : {ps.memory_total_bytes / 1024**3:.1f} GiB"
+            f"\n     bmc         : {ps.bmc_address_raw or '—'} (mac {ps.bmc_mac or '—'})"
+            f"\n     profile tmpl: {ps.profile_template_name or '—'}"
+            f" [{ps.profile_template_external_id or '—'}]"
+            f"\n     nic macs    : {', '.join(ps.nic_macs) if ps.nic_macs else '—'}"
+            f"\n     attachments : {len(ps.attachments)}"
+        )
+        for a in ps.attachments:
+            print(
+                f"        fabric {a.fabric}  if={a.server_interface}"
+                f"  admin={a.admin_state} oper={a.oper_state}"
+                f"  peer={a.fabric_port or '—'}"
+            )
+    print(f"\n{manager.name}: {count} server(s) reported. Nothing was written.")
+    return count
 
 
 async def _run_one_manager(
@@ -117,7 +197,9 @@ async def _run_one_manager(
         return None
 
 
-async def _run(*, manager_type: ManagerType) -> int:
+async def _run(
+    *, manager_type: ManagerType, dry_run: bool = False, limit: int | None = None
+) -> int:
     settings = get_settings()
     configure_logging(
         level=settings.log_level,
@@ -128,9 +210,36 @@ async def _run(*, manager_type: ManagerType) -> int:
     mongo = MongoClientHolder(settings)
     await mongo.connect()
     try:
+        manager_repo = MongoManagerRepository(mongo)
+        credential_resolver = FilesystemCredentialResolver(settings.credentials_dir)
+
+        all_managers = await manager_repo.list_all()
+        managers = [m for m in all_managers if m.type == manager_type and m.enabled]
+        if not managers:
+            logger.warning("collector.no_managers", manager_type=manager_type.value)
+            print(f"No enabled Manager documents of type {manager_type.value} found.")
+            return 0
+
+        if dry_run:
+            # No indexes, no ingest pipeline, no repositories beyond the
+            # manager lookup this needed to find an endpoint at all.
+            failures = 0
+            for manager in managers:
+                try:
+                    await _dry_run_one_manager(
+                        manager,
+                        credential_resolver=credential_resolver,
+                        timeout_seconds=settings.collector_connect_timeout_seconds,
+                        limit=limit,
+                    )
+                except Exception:
+                    logger.exception("collector.dry_run_failed", manager_id=manager.id)
+                    print(f"manager={manager.name} FAILED (see logs)")
+                    failures += 1
+            return 1 if failures else 0
+
         await ensure_indexes(mongo.db)
 
-        manager_repo = MongoManagerRepository(mongo)
         rule_repo = MongoClassificationRuleRepository(mongo)
         policy_repo = MongoHealthPolicyRepository(mongo)
         regex_engine = RegexModuleEngine(
@@ -150,15 +259,6 @@ async def _run(*, manager_type: ManagerType) -> int:
             ),
             audit=AuditService(repo=MongoAuditEventRepository(mongo)),
         )
-        credential_resolver = FilesystemCredentialResolver(settings.credentials_dir)
-
-        all_managers = await manager_repo.list_all()
-        managers = [m for m in all_managers if m.type == manager_type and m.enabled]
-        if not managers:
-            logger.warning("collector.no_managers", manager_type=manager_type.value)
-            print(f"No enabled Manager documents of type {manager_type.value} found.")
-            return 0
-
         failures = 0
         for manager in managers:
             summary = await _run_one_manager(
@@ -185,7 +285,17 @@ async def _run(*, manager_type: ManagerType) -> int:
 
 def main(argv: list[str] | None = None) -> None:
     args = _parse_args(argv)
-    exit_code = asyncio.run(_run(manager_type=ManagerType(args.manager_type)))
+    if args.debug_xml:
+        # Read by `UcsManagerClient`; set here so it covers every provider
+        # this run constructs.
+        os.environ["INVENTORY_UCS_DUMP_XML"] = "1"
+    exit_code = asyncio.run(
+        _run(
+            manager_type=ManagerType(args.manager_type),
+            dry_run=args.dry_run,
+            limit=args.limit,
+        )
+    )
     raise SystemExit(exit_code)
 
 
