@@ -45,6 +45,14 @@ RUN groupadd -g 1001 app && useradd -u 1001 -g app -d /app -s /sbin/nologin app
 COPY --from=deps /opt/venv /opt/venv
 WORKDIR /app
 COPY backend/app ./app
+# `tools/` (seed_inventory, run_collector) rides along in the same image
+# as the API rather than getting its own Containerfile — it's a thin CLI
+# layer over the same `app` package with the same dependency set, so a
+# second image would just duplicate this entire build for zero practical
+# isolation benefit. The CronJob manifests that invoke `tools.
+# run_collector` override this image's ENTRYPOINT/CMD; they don't build
+# or reference a different image.
+COPY tools ./tools
 
 ENV PATH="/opt/venv/bin:${PATH}" \
     PYTHONUNBUFFERED=1 \

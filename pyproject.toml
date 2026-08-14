@@ -18,6 +18,7 @@ dependencies = [
     "regex==2026.7.19",
     "uvicorn[standard]==0.34.0",
     "python-multipart==0.0.9",
+    "ucsmsdk==0.9.27",
 ]
 
 [dependency-groups]
@@ -72,4 +73,10 @@ plugins = ["pydantic.mypy"]
 
 [[tool.mypy.overrides]]
 module = ["testcontainers.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# ucsmsdk ships no type stubs and isn't py.typed (Cisco's own package,
+# not something a `types-ucsmsdk` stub-only package exists for on PyPI).
+module = ["ucsmsdk.*"]
 ignore_missing_imports = true

@@ -28,3 +28,31 @@ config:
 route:
   enabled: true
   host: "" # empty lets OpenShift generate one from the Service name
+
+# Real vendor collectors, run as CronJobs against the same image as the
+# API (tools/run_collector.py --manager-type <type>). One block per
+# manager type; only ucsManager is implemented so far (see
+# tools/run_collector.py's _PROVIDER_FACTORIES).
+collectors:
+  ucsManager:
+    enabled: false # opt-in: needs real Manager documents + Secrets to do anything useful
+    schedule: "*/30 * * * *"
+    backoffLimit: 1
+    activeDeadlineSeconds: 900
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        memory: 512Mi
+    # One entry per UCS Manager domain to collect from. `credentialRef`
+    # must match the `credential_ref` set on that domain's `Manager`
+    # document; `secretName` is a pre-existing Secret (this chart doesn't
+    # create it) with `username`/`password` keys. Adding a manager here
+    # is the whole onboarding step — no other template needs editing.
+    managers: []
+    # managers:
+    #   - credentialRef: ucsm-dc1
+    #     secretName: ucsm-dc1-credentials
+    #   - credentialRef: ucsm-dc2
+    #     secretName: ucsm-dc2-credentials

@@ -1,0 +1,73 @@
+{{- if .Values.collectors.ucsManager.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ .Release.Name }}-collector-ucs-manager
+  labels:
+    app.kubernetes.io/name: {{ .Release.Name }}-collector-ucs-manager
+    app.kubernetes.io/component: collector
+    app.kubernetes.io/part-of: server-inventory
+spec:
+  schedule: {{ .Values.collectors.ucsManager.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 5
+  jobTemplate:
+    spec:
+      backoffLimit: {{ .Values.collectors.ucsManager.backoffLimit }}
+      activeDeadlineSeconds: {{ .Values.collectors.ucsManager.activeDeadlineSeconds }}
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: collector
+              image: "{{ .Values.backend.image.repository }}:{{ .Values.backend.image.tag }}"
+              imagePullPolicy: {{ .Values.backend.image.pullPolicy }}
+              command: ["python3", "-m", "tools.run_collector", "--manager-type", "UCS_MANAGER"]
+              env:
+                - name: INVENTORY_ENVIRONMENT
+                  value: production
+                - name: INVENTORY_MONGO_URI
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.db.secretName }}
+                      key: mongo-uri
+                - name: INVENTORY_REDIS_URI
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.db.secretName }}
+                      key: redis-uri
+                - name: INVENTORY_CREDENTIALS_DIR
+                  value: /etc/inventory/credentials
+              envFrom:
+                - configMapRef:
+                    name: {{ .Release.Name }}-api-config
+              volumeMounts:
+                - name: manager-credentials
+                  mountPath: /etc/inventory/credentials
+                  readOnly: true
+              resources:
+                {{- toYaml .Values.collectors.ucsManager.resources | nindent 16 }}
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: ["ALL"]
+                readOnlyRootFilesystem: true
+                runAsNonRoot: true
+          volumes:
+            - name: manager-credentials
+              projected:
+                sources:
+                  {{- if not .Values.collectors.ucsManager.managers }}
+                  {{- fail "collectors.ucsManager.enabled is true but collectors.ucsManager.managers is empty — add at least one {credentialRef, secretName} entry." }}
+                  {{- end }}
+                  {{- range .Values.collectors.ucsManager.managers }}
+                  - secret:
+                      name: {{ .secretName | quote }}
+                      items:
+                        - key: username
+                          path: {{ .credentialRef }}/username
+                        - key: password
+                          path: {{ .credentialRef }}/password
+                  {{- end }}
+{{- end }}

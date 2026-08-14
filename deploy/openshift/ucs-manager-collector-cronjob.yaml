@@ -1,0 +1,101 @@
+# Runs tools/run_collector.py --manager-type UCS_MANAGER on a schedule,
+# against every enabled Manager document of that type. Uses the exact
+# same image as the API Deployment (see Containerfile's comment on why
+# tools/ rides along in that image rather than getting its own) — only
+# the container's command/args differ.
+#
+# Credentials: one `secret` source per UCS Manager domain, each projected
+# under its own credential_ref subdirectory at /etc/inventory/credentials
+# (see app.infrastructure.credentials.filesystem's docstring for the
+# exact {ref}/{username,password} shape `tools.run_collector` reads).
+# Adding a new UCS Manager domain means creating its own Secret AND
+# adding a `sources` entry below — a deliberate Phase 1 tradeoff (no
+# secret-store/operator dependency, fully explicit) that becomes a real
+# maintenance cost past a handful of managers; see deploy/README.md.
+#
+# This file has exactly one example manager (ucsm-dc1). The Helm chart's
+# ucs-manager-collector-cronjob.yaml template generates this same shape
+# from a `collectors.ucsManager.managers` list instead, and is the better
+# fit once there's more than one or two UCS Manager domains to collect
+# from — prefer it over hand-editing multiple copies of this file.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: server-inventory-collector-ucs-manager
+  labels:
+    app.kubernetes.io/name: server-inventory-collector-ucs-manager
+    app.kubernetes.io/component: collector
+    app.kubernetes.io/part-of: server-inventory
+spec:
+  # Every 30 minutes — a starting point, not a tuned value. Balance
+  # "inventory shouldn't go stale for long" against UCS Manager's
+  # documented 256-concurrent-session cap and how many managers/servers
+  # this actually has to walk; adjust per real fleet size.
+  schedule: "*/30 * * * *"
+  concurrencyPolicy: Forbid # a still-running collection blocks the next tick rather than overlapping it
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 5
+  jobTemplate:
+    spec:
+      # tools/run_collector.py does not retry within a run (a failed
+      # manager is logged and skipped, not retried) — this is the outer,
+      # whole-Job retry. One retry re-runs every manager, including ones
+      # that already succeeded; harmless (ingestion is upsert-idempotent)
+      # but not free, so this stays low rather than defaulting to 6.
+      backoffLimit: 1
+      activeDeadlineSeconds: 900
+      template:
+        spec:
+          restartPolicy: Never
+          # No securityContext.runAsUser: same reasoning as
+          # backend-deployment.yaml — OpenShift's restricted-v2 SCC
+          # assigns the UID at admission time.
+          containers:
+            - name: collector
+              image: server-inventory-api:latest # replaced by the pipeline/GitOps tool per environment
+              command: ["python3", "-m", "tools.run_collector", "--manager-type", "UCS_MANAGER"]
+              env:
+                - name: INVENTORY_ENVIRONMENT
+                  value: production
+                - name: INVENTORY_MONGO_URI
+                  valueFrom:
+                    secretKeyRef:
+                      name: server-inventory-db
+                      key: mongo-uri
+                - name: INVENTORY_REDIS_URI
+                  valueFrom:
+                    secretKeyRef:
+                      name: server-inventory-db
+                      key: redis-uri
+                - name: INVENTORY_CREDENTIALS_DIR
+                  value: /etc/inventory/credentials
+              envFrom:
+                - configMapRef:
+                    name: server-inventory-api-config
+              volumeMounts:
+                - name: manager-credentials
+                  mountPath: /etc/inventory/credentials
+                  readOnly: true
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 256Mi
+                limits:
+                  memory: 512Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: ["ALL"]
+                readOnlyRootFilesystem: true
+                runAsNonRoot: true
+          volumes:
+            - name: manager-credentials
+              projected:
+                sources:
+                  - secret:
+                      name: ucsm-dc1-credentials # example — one Secret per manager; see module comment above
+                      items:
+                        - key: username
+                          path: ucsm-dc1/username
+                        - key: password
+                          path: ucsm-dc1/password

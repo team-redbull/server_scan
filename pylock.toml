@@ -167,6 +167,13 @@ wheels = [
 ]
 
 [[packages]]
+name = "pyparsing"
+version = "3.3.2"
+index = "https://pypi.org/simple"
+sdist = { url = "https://files.pythonhosted.org/packages/f3/91/9c6ee907786a473bf81c5f53cf703ba0957b23ab84c264080fb5a450416f/pyparsing-3.3.2.tar.gz", upload-time = 2026-01-21T03:57:59Z, size = 6851574, hashes = { sha256 = "c777f4d763f140633dcb6d8a3eda953bf7a214dc4eff598413c070bcdc117cbc" } }
+wheels = [{ url = "https://files.pythonhosted.org/packages/10/bd/c038d7cc38edc1aa5bf91ab8068b63d4308c66c4c8bb3cbba7dfbc049f9c/pyparsing-3.3.2-py3-none-any.whl", upload-time = 2026-01-21T03:57:55Z, size = 122781, hashes = { sha256 = "850ba148bd908d7e2411587e247a1e4f0327839c40e2e5e6d05a007ecc69911d" } }]
+
+[[packages]]
 name = "python-dotenv"
 version = "1.2.2"
 index = "https://pypi.org/simple"
@@ -246,6 +253,20 @@ wheels = [
 ]
 
 [[packages]]
+name = "setuptools"
+version = "84.0.0"
+index = "https://pypi.org/simple"
+sdist = { url = "https://files.pythonhosted.org/packages/6d/44/f5da03a8ef95d369145c5bb53050e7877c9f3d312e128605fd9504829143/setuptools-84.0.0.tar.gz", upload-time = 2026-08-08T18:27:58Z, size = 1168449, hashes = { sha256 = "f4695c21257f0d9b537ec2692c941d02ee143b7cc1276941349a546573b2ef73" } }
+wheels = [{ url = "https://files.pythonhosted.org/packages/95/9c/c510029fc6ef33a6275cd2c5d3cecd6613dfd6aa401d57c54f1c18852ccf/setuptools-84.0.0-py3-none-any.whl", upload-time = 2026-08-08T18:27:56Z, size = 818216, hashes = { sha256 = "51a52592b3b99e102b609654876bd65f19f999935166d1352678931132b0c670" } }]
+
+[[packages]]
+name = "six"
+version = "1.17.0"
+index = "https://pypi.org/simple"
+sdist = { url = "https://files.pythonhosted.org/packages/94/e7/b2c673351809dca68a0e064b6af791aa332cf192da575fd474ed7d6f16a2/six-1.17.0.tar.gz", upload-time = 2024-12-04T17:35:28Z, size = 34031, hashes = { sha256 = "ff70335d468e7eb6ec65b95b99d3a2836546063f63acc5171de367e834932a81" } }
+wheels = [{ url = "https://files.pythonhosted.org/packages/b7/ce/149a00dd41f10bc29e5921b496af8b574d8413afcd5e30dfa0ed46c2cc5e/six-1.17.0-py2.py3-none-any.whl", upload-time = 2024-12-04T17:35:26Z, size = 11050, hashes = { sha256 = "4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274" } }]
+
+[[packages]]
 name = "starlette"
 version = "1.6.0"
 index = "https://pypi.org/simple"
@@ -272,6 +293,13 @@ version = "0.4.4"
 index = "https://pypi.org/simple"
 sdist = { url = "https://files.pythonhosted.org/packages/a3/26/b09b8010994eccc3c09092e6b34058f36a460eea2d4c3e8b910c695975a0/typing_inspection-0.4.4.tar.gz", upload-time = 2026-08-12T12:37:25Z, size = 76928, hashes = { sha256 = "547274fa6b0a561ccf549cc9524b999a578e737d015d8709d021f9d0d13bea47" } }
 wheels = [{ url = "https://files.pythonhosted.org/packages/67/81/4add07e5172b7ac40d8ed5ff580409a7801a4fe26d529bdd915401dabfbe/typing_inspection-0.4.4-py3-none-any.whl", upload-time = 2026-08-12T12:37:24Z, size = 14750, hashes = { sha256 = "65b8397ba37ccbce054456aaccddfc91e6e3083c92824df348d96ca832f3f147" } }]
+
+[[packages]]
+name = "ucsmsdk"
+version = "0.9.27"
+index = "https://pypi.org/simple"
+sdist = { url = "https://files.pythonhosted.org/packages/9a/83/35b7d3c671bd196d3b8db17aacb765fa019bb3f63f5e6ae898c018a23525/ucsmsdk-0.9.27.tar.gz", upload-time = 2026-08-10T09:19:31Z, size = 4665738, hashes = { sha256 = "bbeea64d9837438229ac680015d216fc7187ee01d5f12521f88b09d0cb4ee48a" } }
+wheels = [{ url = "https://files.pythonhosted.org/packages/a9/25/f5d69a74ecd8640927eb8d6ab28649dc3da216496a5965fe3ede36d28f19/ucsmsdk-0.9.27-py2.py3-none-any.whl", upload-time = 2026-08-10T09:19:29Z, size = 6895393, hashes = { sha256 = "c7d49cfbf64331af44a69a906b478464def60ce0b1fa6c7f9cad430c53b1fe19" } }]
 
 [[packages]]
 name = "uvicorn"

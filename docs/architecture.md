@@ -403,6 +403,46 @@ summary:
   seeded dataset + the frontend dev server, running the full suite
   headless with `--with-deps` Chromium.
 
+**First real collector**: Cisco UCS Manager — the first vendor
+integration that isn't `FakeProvider`. See
+`docs/adr/0009-ucs-manager-collector.md` for the full writeup; summary:
+
+- `app.infrastructure.providers.ucs_manager` implements the same
+  `ServerInventoryProvider` seam `FakeProvider` already does, over
+  Cisco's official `ucsmsdk` Python SDK (synchronous — wrapped in
+  `asyncio.to_thread` throughout, since no async UCS SDK exists).
+  Identity, hardware summary, service-profile/template resolution, NIC
+  MACs, fabric attachments, and CIMC/BMC address are all wired up; CPU
+  model string and per-drive storage detail are explicit v1 scope cuts
+  (see the ADR), not silent gaps.
+- A new credential-resolution seam, `app.domain.ports.credentials.
+  CredentialResolver`, and its one implementation,
+  `FilesystemCredentialResolver` — reads `{credentials_dir}/
+  {credential_ref}/{username,password}` as separate files, matching how
+  Kubernetes projects a `Secret` as a volume. `Manager.credential_ref`
+  existed since slice 1 as an opaque name with nothing reading it; this
+  is what actually resolves it.
+- `tools/run_collector.py --manager-type UCS_MANAGER` — the CLI a
+  Kubernetes `CronJob` invokes: looks up every enabled `Manager` of that
+  type, resolves credentials, runs each through the same `IngestService`
+  pipeline the fake-data seed script uses (classify, health-evaluate,
+  audit, upsert — one write per server), and isolates one manager's
+  failure from the others.
+- `deploy/openshift/ucs-manager-collector-cronjob.yaml` and the Helm
+  chart's parameterized equivalent (`collectors.ucsManager.managers`, a
+  list — onboarding a new UCS Manager domain is one values.yaml entry,
+  no template editing) — both share the API's own container image
+  (`Containerfile` now also copies `tools/`) rather than building a
+  second one.
+- Verified with unit tests against `ucsmsdk`'s real attribute names
+  (`tests/unit/infrastructure/providers/test_ucs_manager_mapping.py`) —
+  not yet verified end-to-end against a live UCS Manager domain or
+  Cisco's UCS Platform Emulator; that's the next real-world validation
+  step before this is trusted in production.
+- `OPENMANAGE`/`INTERSIGHT`/`ONEVIEW`/`UCS_CENTRAL` managers still have
+  no collector — `tools.run_collector` raises a clear
+  `NotImplementedError` for them rather than silently doing nothing.
+
 Real authentication is designed (see the session's approved plan) but
 lands in a subsequent slice — this document will gain a section and an
 ADR once it's implemented, rather than describing not-yet-existing code

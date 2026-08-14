@@ -83,6 +83,16 @@ class Settings(BaseSettings):
     # --- Metrics ---
     metrics_enabled: bool = True
 
+    # --- Collectors (tools/run_collector.py, not the API process) ---
+    # Directory a Kubernetes Secret-volume projects `Manager.credential_ref`
+    # secrets under — see `app.infrastructure.credentials.filesystem`'s
+    # docstring for the exact `{dir}/{credential_ref}/{username,password}`
+    # shape. The dev default won't exist on a real deployment; that's
+    # intentional, a collector run against a missing/empty mount should
+    # fail loudly (`CredentialNotFoundError`), not silently no-op.
+    credentials_dir: str = "/etc/inventory/credentials"
+    collector_connect_timeout_seconds: float = 15.0
+
     @field_validator("cors_allowed_origins", mode="before")
     @classmethod
     def _split_csv(cls, value: object) -> object:
