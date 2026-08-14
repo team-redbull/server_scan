@@ -6,6 +6,15 @@ on:
   pull_request:
     branches: [main]
 
+# Supersede an in-flight run when a PR is pushed to again. Never cancel a
+# main run — that one can be mid-publish.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
 env:
   PYTHON_VERSION: "3.13"
 
@@ -13,16 +22,20 @@ jobs:
   lint:
     name: Lint (ruff + mypy)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
+      # Pinned to an exact release: no rolling v8/v9/v10 major tag is
+      # published for this action (all 404) — the same trap that broke
+      # github-tag-action in ADR-0010. enable-cache reuses the uv cache
+      # across runs, keyed on uv.lock.
       - name: Install uv
-        uses: astral-sh/setup-uv@v4
+        uses: astral-sh/setup-uv@v10.0.1
         with:
           version: "0.12.3"
-
-      - name: Set up Python
-        run: uv python install ${{ env.PYTHON_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
 
       - name: Install dependencies
         run: uv sync --all-groups
@@ -33,12 +46,15 @@ jobs:
       - name: ruff format --check
         run: uv run ruff format --check .
 
+      # Matches the command CLAUDE.md documents — `tools/` is real
+      # shipped code (the collector runner) and was previously unchecked.
       - name: mypy
-        run: uv run mypy backend/app
+        run: uv run mypy backend/app tools
 
   test:
     name: Test (pytest)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     services:
       mongo:
         image: mongo:8
@@ -64,12 +80,11 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v4
+        uses: astral-sh/setup-uv@v10.0.1
         with:
           version: "0.12.3"
-
-      - name: Set up Python
-        run: uv python install ${{ env.PYTHON_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
 
       - name: Install dependencies
         run: uv sync --all-groups
@@ -86,6 +101,7 @@ jobs:
   frontend:
     name: Frontend (lint + typecheck + test)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     defaults:
       run:
         working-directory: frontend
@@ -116,6 +132,7 @@ jobs:
   e2e:
     name: E2E (Playwright)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     services:
       mongo:
         image: mongo:8
@@ -141,12 +158,11 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v4
+        uses: astral-sh/setup-uv@v10.0.1
         with:
           version: "0.12.3"
-
-      - name: Set up Python
-        run: uv python install ${{ env.PYTHON_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
 
       - name: Install backend dependencies
         run: uv sync --all-groups
@@ -163,35 +179,11 @@ jobs:
 
       - name: Install Playwright browsers
         working-directory: frontend
-        # Deliberately NOT `--with-deps`, which Playwright's own CI docs
-        # otherwise recommend. On this runner it cost ~10 minutes for zero
-        # benefit, and the CI log says exactly why: every actual browser
-        # library (libnss3, libatk*, libgbm1, libcups2t64, libdrm2,
-        # libxkbcommon0, libasound2t64, fonts-liberation,
-        # fonts-noto-color-emoji, ...) reports "is already the newest
-        # version" — the ubuntu-24.04 image ships all of them. The only
-        # packages `--with-deps` actually adds are CJK/Cyrillic/Thai font
-        # sets (fonts-ipafont-gothic, fonts-wqy-zenhei, fonts-unifont,
-        # fonts-tlwg-loma-otf, xfonts-*), and fetching those 21 MB from
-        # azure.archive.ubuntu.com ran at 35 kB/s: "Fetched 21.1 MB in
-        # 10min 2s". The apt mirror, not the browser download, was the
-        # whole cost — Playwright's own tracking issue for this
-        # (microsoft/playwright#23388) names the same unstable mirror.
-        #
-        # This admin UI renders Latin text only, and Latin + emoji fonts
-        # are already present, so the missing font sets would at worst
-        # show tofu boxes in a failure screenshot of non-Latin text that
-        # this app never displays. If a *real* library ever goes missing
-        # from a future runner image, Playwright fails with an explicit
-        # "missing dependencies" error naming the package — add a
-        # `npx playwright install-deps chromium` step then, rather than
-        # paying the font tax on every run pre-emptively.
-        #
-        # `--only-shell` skips the 184 MB headed "Chrome for Testing"
-        # build and installs just chromium-headless-shell, which is what
-        # actually runs here: the `chromium` project uses
-        # `devices["Desktop Chrome"]`, which sets no `channel`, and these
-        # tests run headless.
+        # No --with-deps: the runner image already has every browser lib,
+        # so it only added CJK/Cyrillic fonts this Latin-only UI never
+        # renders — 21 MB at 35 kB/s from a slow apt mirror, 10 of the
+        # step's 10m30s. --only-shell skips the headed Chrome build; the
+        # chromium project sets no channel and runs headless.
         run: npx playwright install chromium --only-shell
 
       - name: Start backend
@@ -206,11 +198,9 @@ jobs:
           cat "$RUNNER_TEMP/backend.log"
           exit 1
 
+      # Small on purpose — E2E flow coverage, not the 10k/50k scale
+      # verification tools/loadtest.py owns (docs/adr/0007).
       - name: Seed a deterministic dataset
-        # Small on purpose — this is E2E flow coverage, not the 10k/50k
-        # scale verification `tools/verify_indexes.py`/`tools/loadtest.py`
-        # already own (see docs/adr/0007). Just enough servers for the
-        # inventory/search/maintenance flows to have real data to act on.
         run: uv run python -m tools.seed_inventory --count 300 --seed 42
 
       - name: Start frontend dev server
@@ -230,7 +220,7 @@ jobs:
         run: npx playwright test
 
       - name: Upload Playwright report
-        if: always()
+        if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: playwright-report
@@ -240,9 +230,8 @@ jobs:
   publish:
     name: Publish images (GHCR)
     runs-on: ubuntu-latest
-    # Only after everything else is green, and only for a real push to
-    # main (never a PR) — this job tags and publishes, it must never run
-    # against untested or not-yet-merged code.
+    timeout-minutes: 30
+    # Never against untested or not-yet-merged code.
     needs: [lint, test, frontend, e2e]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     permissions:
@@ -253,33 +242,19 @@ jobs:
         with:
           fetch-depth: 0 # full history — the tag action scans every commit since the last tag
 
-      # Conventional Commits (https://www.conventionalcommits.org/) decide
-      # the bump: a `BREAKING CHANGE:` footer or `!` after the type (e.g.
-      # `feat!:`) -> major, `feat:` -> minor, anything else (`fix:`,
-      # `perf:`, unprefixed, ...) -> patch (`default_bump`). This repo's
-      # own history predates this convention, so until commit messages
-      # adopt it, every push bumps patch — that's a safe, intentional
-      # default, not a bug.
+      # `feat!:`/`BREAKING CHANGE:` -> major, `feat:` -> minor, anything
+      # else -> patch. Pinned to an exact release: this action has no
+      # rolling v6 tag (see ADR-0010).
       - name: Determine next version from Conventional Commits
         id: version
-        # Pinned to the exact release, not a rolling `v6` — unlike v3/v4/
-        # v5, this action's maintainer never published a rolling `v6` tag
-        # (only the specific v6.0/v6.1/v6.2 releases), which is exactly
-        # what broke this step the first time ("unable to resolve action
-        # ...@v6, unable to find version v6"); confirmed directly against
-        # the GitHub API's tag list, not assumed.
         uses: mathieudutour/github-tag-action@v6.2
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           default_bump: patch
           release_branches: main
-          # Explicit rather than relying on actions/checkout's own tag-
-          # fetching behavior with fetch-depth: 0 — getting this wrong
-          # would silently compute every version from the wrong baseline.
           fetch_all_tags: true
 
-      # GHCR requires a lowercase image path; github.repository preserves
-      # whatever casing the org/repo name has.
+      # GHCR requires a lowercase image path; github.repository isn't.
       - name: Lowercase image namespace
         run: |
           echo "IMAGE_NAMESPACE=$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_ENV"
@@ -294,11 +269,8 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
-      # Tag scheme applied to both images: the full semver
-      # (v1.2.3), rolling major.minor (v1.2) and major (v1) lines, a
-      # rolling `latest`, and the commit sha for exact traceability
-      # between releases — the canonical set docker/metadata-action
-      # produces from one version input.
+      # Both images get: full semver, rolling major.minor and major,
+      # `latest`, and the commit sha.
       - name: API image metadata
         id: meta_api
         uses: docker/metadata-action@v6
