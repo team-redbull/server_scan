@@ -17,7 +17,12 @@ dependencies = [
     "prometheus-client==0.26.0",
     "regex==2026.7.19",
     "uvicorn[standard]==0.34.0",
-    "python-multipart==0.0.9",
+    # No `python-multipart`: FastAPI only needs it to parse `Form`/`File`
+    # request bodies, and this API has none — every one of its endpoints
+    # takes JSON or query parameters. It was declared but never imported,
+    # and the version pinned here carried seven known CVEs, so it was
+    # removed rather than bumped. Add it back only alongside a real
+    # multipart endpoint.
     "ucsmsdk==0.9.27",
 ]
 
