@@ -16,7 +16,7 @@ dependencies = [
     "structlog==26.1.0",
     "prometheus-client==0.26.0",
     "regex==2026.7.19",
-    "uvicorn[standard]==0.34.0",
+    "uvicorn[standard]==0.52.1",
     "python-multipart==0.0.9",
     "ucsmsdk==0.9.27",
 ]
