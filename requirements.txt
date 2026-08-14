@@ -216,9 +216,9 @@ ucsmsdk==0.9.27 \
     --hash=sha256:bbeea64d9837438229ac680015d216fc7187ee01d5f12521f88b09d0cb4ee48a \
     --hash=sha256:c7d49cfbf64331af44a69a906b478464def60ce0b1fa6c7f9cad430c53b1fe19
     # via server-inventory
-uvicorn==0.34.0 \
-    --hash=sha256:023dc038422502fa28a09c7a30bf2b6991512da7dcdb8fd35fe57cfc154126f4 \
-    --hash=sha256:404051050cd7e905de2c9a7e61790943440b3416f49cb409f965d9dcd0fa73e9
+uvicorn==0.52.1 \
+    --hash=sha256:112ec661814189acbccd3f7b86460147cc065fc92c0821afa78918780e4354dd \
+    --hash=sha256:e4403f9d93188cf9d1088e9f40e3acd12630e2df8675316704379a7fc20fff6a
     # via server-inventory
 uvloop==0.22.1 ; platform_python_implementation != 'PyPy' and sys_platform != 'cygwin' and sys_platform != 'win32' \
     --hash=sha256:0530a5fbad9c9e4ee3f2b33b148c6a64d47bbad8000ea63704fa8260f4cf728e \
