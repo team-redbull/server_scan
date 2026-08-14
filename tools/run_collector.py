@@ -102,7 +102,13 @@ async def _run_one_manager(
         provider = await _build_provider(
             manager, credential_resolver=credential_resolver, timeout_seconds=timeout_seconds
         )
-        await provider.health_check()
+        # No explicit `provider.health_check()` here: `IngestService.
+        # ingest()` already calls it as its first step, and a UCS login is
+        # ~4 sequential HTTP round trips (auth, then the SDK's own
+        # is-this-UCSM / version / domain-name probes), so calling it here
+        # too would double that cost per manager and burn a second session
+        # against UCS Manager's per-user session cap for nothing — this
+        # `except` handles a health-check failure identically either way.
         return await ingest_service.ingest(provider)
     except Exception:
         logger.exception(

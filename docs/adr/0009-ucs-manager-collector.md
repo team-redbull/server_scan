@@ -42,19 +42,20 @@ this environment to test against interactively.
   compute_unit_to_provider_server`), since they share the same relevant
   property set.
 - Service profile → template: `computeBlade.assigned_to_dn` → `lsServer`
-  (service profile) → `lsServer.src_templ_name`, resolved against a
-  `lsServiceProfileTemplate` name→dn lookup (built once per collector
-  run, not per server) for `ProviderServer.profile_template_external_id`.
-  Matches the vendor mapping already documented on `app.domain.models.
-  server.ProfileTemplate`.
-- CIMC/BMC address: `mgmtIf` child objects (`configResolveChildren`,
-  `hierarchy=True` — the exact nesting depth under a server's DN wasn't
-  independently confirmed, so the query is hierarchical rather than a
-  single-level child fetch), filtered to `access == "out-of-band"`, using
-  `ext_ip`. Not every server has one configured; `None` in that case is
-  correct data, not a gap.
-- NICs and fabric attachments: `adaptorHostEthIf` children — `mac` for
+  (service profile) → `lsServer.src_templ_name`, with
+  `ProviderServer.profile_template_external_id` taken from the profile's
+  own resolved `oper_src_templ_name` DN. Matches the vendor mapping
+  already documented on `app.domain.models.server.ProfileTemplate`.
+- CIMC/BMC address: `mgmtIf`, filtered to `access == "out-of-band"`,
+  using `ext_ip`. Not every server has one configured; `None` in that
+  case is correct data, not a gap.
+- NICs and fabric attachments: `adaptorHostEthIf` — `mac` for
   `nic_macs`, `switch_id` ("A"/"B"/"NONE") for `ProviderAttachment.fabric`.
+
+All five queries are domain-wide `configResolveClass`, joined client-side
+by distinguished name. See "Corrections" below for why the per-server
+`configResolveChildren` this originally used was not merely slower but
+wrong, and why there is no `lsServiceProfileTemplate` query.
 
 ### Scope cuts, made explicitly rather than silently
 
@@ -64,8 +65,11 @@ this environment to test against interactively.
   docstring tracks this as an open item for the first pass against a real
   domain, not a forgotten field.
 - `total_memory`'s unit (MB, converted to bytes) is based on UCS
-  Manager's own GUI column label ("Total Memory (MB)"), not an
-  independently-fetched XML schema doc — flagged the same way.
+  Manager's own GUI column label ("Total Memory (MB)"). This one cannot
+  be settled from the SDK at all: `prop_meta["total_memory"]` is a bare
+  `uint` with no unit annotation, doc string or range — the package is
+  code-generated from the MIT schema and carries no unit metadata for
+  any property. It stays an assumption until UCSPE or real hardware.
 - `ProviderAttachment.fabric_name`/`fabric_id`/`fabric_model`/
   `fabric_serial`/`server_port`/`fabric_port`/`speed_mbps` stay `None` —
   resolving the fabric interconnect's own identity needs a
@@ -79,7 +83,7 @@ against UCSPE or a real domain, not treated as done.
 
 `ucsmsdk` has no async support at all. `UcsManagerClient`
 (`app.infrastructure.providers.ucs_manager.client`) dispatches every
-`login`/`logout`/`query_classid`/`query_children` call through
+`login`/`logout`/`query_classid` call through
 `asyncio.to_thread`, matching the "never block the event loop" discipline
 `app.infrastructure.mongodb`/`app.infrastructure.redis` already hold via
 their own native async drivers — substituted with a thread offload here
@@ -149,3 +153,120 @@ layer for no real isolation benefit at this scale.
   were regenerated to include `ucsmsdk` and its own dependencies
   (`pyparsing`, `six`, `setuptools`) — anyone mirroring this repo for an
   air-gapped build needs to re-pull those too.
+
+## Corrections (post-build review)
+
+A multi-agent review of this collector — every claim re-verified against
+the installed `ucsmsdk==0.9.27` source rather than documentation — found
+that two of the assumptions recorded above were not merely unverified but
+wrong, in ways that would have made the collector return no useful data
+against a real domain. Both are fixed; the reasoning is kept here because
+the *shape* of each mistake is the reusable lesson for the next vendor.
+
+**1. `lsServiceProfileTemplate` is not a class in UCS Manager's model.**
+`ucscoreutils.find_class_id_in_mo_meta_ignore_case("lsServiceProfileTemplate")`
+returns `None`, and there is no `mometa/ls/LsServiceProfileTemplate.py`.
+UCS Manager models templates as `lsServer` with `type` in
+`{initial-template, updating-template}` (vs `instance`) — `LsServer.
+prop_meta["type"]` restricts to exactly those three values.
+`query_classid` passes an unrecognized class ID straight through to the
+server (there is a literal `# ToDo - How to handle unknown class_id` in
+`ucshandle.py`), so this either aborted the whole run for that domain with
+a `UcsException` or silently returned nothing. The single `lsServer` query
+is now partitioned by `type`, which is both correct and one query fewer.
+
+The lesson: the original build verified every *attribute* against
+`prop_meta` but never verified that the *class names* themselves resolve.
+Confirming attributes on a class that doesn't exist proves nothing.
+
+**2. `mgmtIf` and `adaptorHostEthIf` are grandchildren of a compute unit,
+not children — so the per-server `configResolveChildren` matched nothing.**
+From the MO metadata:
+
+    adaptorHostEthIf  parents=['adaptorUnit']                        rn=host-eth-[id]
+    adaptorUnit       parents=['computeBlade','computeRackUnit',...]  rn=adaptor-[id]
+    mgmtIf            parents=['adaptorHostEthIf','mgmtController']   rn=if-[id]
+    mgmtController    parents=[...,'computeBlade','computeRackUnit']  rn=mgmt
+
+Real DNs are therefore `sys/chassis-1/blade-1/adaptor-1/host-eth-1` and
+`sys/chassis-1/blade-1/mgmt/if-1` — two levels below the server.
+`ConfigResolveChildren`'s class filter applies to immediate children;
+`hierarchy=True` does not widen that depth, it only asks the server to
+attach each *matched* object's subtree, which `ucscoreutils.
+extract_molist_from_method_response` then flattens with no class filter at
+all (so a match would return foreign MO classes mixed into the list, which
+the mapping would blindly read `mac`/`switch_id` off). Cisco's own SDK
+confirms the intended shape: its blade → `mgmtIf` lookup in
+`ucsmsdk/utils/ucskvmlaunch.py` uses `configScope`, not
+`configResolveChildren`, and `ucsmsdk/utils/inventory.py` collects
+adapters with a domain-wide `query_classid`.
+
+The consequence had this shipped: no BMC address, no NIC MACs and no
+fabric attachments for any server — and because NIC MACs feed identity
+correlation in `IngestService`, degraded server matching rather than just
+missing detail.
+
+Both are now domain-wide `query_classid` calls joined client-side by DN
+prefix, the same pattern already used for service profiles. This also
+removes an N+1 that mattered independently: the old shape issued two
+round trips per server (20,000 sequential XML calls at this platform's
+10k target), where the new one is a fixed five per manager regardless of
+fleet size. The DN-prefix join is exact, not heuristic — `ucsmo.py` builds
+every MO's `dn` as `parent_dn + "/" + rn` — and is separator-anchored and
+longest-prefix-wins so `sys/rack-unit-1` cannot swallow
+`sys/rack-unit-10`'s descendants.
+
+### Smaller fixes from the same review
+
+- **Session leak on login failure.** `list_servers` called `login()`
+  *outside* its `try`, so the `finally: logout()` never ran for it.
+  `ucssession._login` sets the session cookie and only then runs its
+  version and domain-name probes, either of which can raise with the
+  session already live server-side — leaking it until UCS Manager's
+  server-side timeout, against a per-user session cap.
+- **`OSError` escaped the client's error normalization.** `ucsdriver.post`
+  re-raises urllib's errors untouched, and `URLError`/`socket.timeout` are
+  `OSError` subclasses belonging to neither SDK exception tree. `login()`
+  already caught it; the query path did not, so a mid-collection network
+  drop escaped raw, contradicting the client's own documented contract.
+- **Three logins per manager per run.** `tools/run_collector.py` called
+  `provider.health_check()` explicitly, `IngestService.ingest()` called it
+  again as its first step, and `list_servers()` opened a third session.
+  Each login is ~4 sequential round trips (auth, then the SDK's own
+  is-this-UCSM / version / domain-name probes). The explicit call is gone.
+- **`equipped-slave` / `equipped-not-primary` are now excluded.** Both
+  pass a `startswith("equipped")` check but are the secondary half of a
+  multi-node server (a B460's slave blade), which UCS Manager reports as a
+  logical server under the primary's DN — ingesting them double-counted
+  one machine as two.
+- **Cross-org template name collisions.** Template names are only unique
+  within an org, so the name→DN map is lossy by construction. The
+  profile's own resolved `oper_src_templ_name` DN is preferred, with the
+  by-name lookup kept only as a fallback.
+- **Endpoint format is validated up front.** `UcsSession.__create_uri`
+  interpolates the endpoint raw into `"%s://%s:%s"`, so a URL or an
+  embedded port produces `https://https://host:443` and an opaque
+  connection failure. `Manager.endpoint` is a free-form `str`, so the
+  client now rejects both with an actionable message.
+
+### Why none of this was caught before
+
+The collector had 45 passing tests, clean `mypy` and clean `ruff`. But
+`test_ucs_manager_provider.py` imported exactly one symbol — the five-line
+`_is_equipped` helper — and declared the rest out of scope for a unit
+test; `client.py` and `tools/run_collector.py` had no coverage at all.
+Nothing exercised a single call signature or class name, which is exactly
+how a nonexistent class and two structurally-wrong queries shipped green.
+
+The provider, client and collector-runner now have real tests
+(`tests/unit/infrastructure/providers/test_ucs_manager_{provider,client}.py`,
+`tests/unit/tools/test_run_collector.py`). The provider's fake client
+returns MOs whose DNs nest at the *real* confirmed depths, so a regression
+back to a per-server child query fails the suite rather than passing it.
+That is the standing bar for the next vendor collector: a test whose
+fixtures encode the vendor's real object shape, not the shape the
+implementation happens to assume.
+
+**Still unverified, and only settleable against UCSPE or real hardware:**
+the `total_memory` MB assumption, plus the original scope cuts (CPU model,
+storage detail, fabric interconnect identity).

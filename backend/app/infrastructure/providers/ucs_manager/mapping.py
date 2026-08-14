@@ -16,23 +16,24 @@ CONFIRMED (attribute exists, meaning matches Cisco's docs/property help):
   num_of_cores, num_of_threads, total_memory, available_memory, presence,
   oper_state, uuid, original_uuid, assigned_to_dn, dn, name, server_id,
   chassis_id/slot_id (blade only).
-  lsServer (service profile): src_templ_name, dn.
+  lsServer (service profile *and* template — one class, distinguished by
+  `type`): src_templ_name, oper_src_templ_name, type, name, dn.
   mgmtIf: access ("out-of-band" is the value to filter on), ext_ip, mac.
   adaptorHostEthIf: switch_id, mac, admin_state, oper_state, id/name.
 
 ASSUMED, NOT INDEPENDENTLY VERIFIED — flagged inline where used:
   - `total_memory`/`available_memory`'s unit. UCS Manager's own GUI
     labels this column "Total Memory (MB)", which is the basis for the
-    MB->bytes conversion below; the XML attribute's own doc string
-    wasn't fetched to confirm the unit matches the GUI label exactly.
-  - `mgmtIf`'s exact position in the MO tree relative to a compute unit
-    (queried via a hierarchical `query_children`, which is robust to not
-    knowing the exact depth, at the cost of a slightly wider scan).
+    MB->bytes conversion below. This one genuinely cannot be settled from
+    the SDK: `prop_meta["total_memory"]` is a bare `uint` with no unit
+    annotation, doc string or range — the package is code-generated from
+    the MIT schema and carries no unit metadata for any property. Verify
+    against UCSPE or real hardware.
   - Per-CPU model string and storage-drive detail: no MO for either was
     confirmed, so `cpu_model` stays `None` and `storage_*` stay at their
     zero/empty defaults — a v1 scope cut, not an oversight. A follow-up
     pass against a real UCS Manager (or Cisco's UCS Platform Emulator)
-    should verify the memory unit and fill in CPU/storage detail.
+    should fill in CPU/storage detail.
 """
 
 from __future__ import annotations
@@ -55,19 +56,25 @@ def _profile_template_fields(
     discovered-but-unassociated blade, for instance) or its profile isn't
     itself derived from a template (a one-off, non-template profile).
     """
-    profile = profile_by_dn.get(server_mo.assigned_to_dn or "")
+    profile = profile_by_dn.get(getattr(server_mo, "assigned_to_dn", None) or "")
     if profile is None:
         return None, None
-    template_name = profile.src_templ_name or None
+    template_name = getattr(profile, "src_templ_name", None) or None
     if not template_name:
         return None, None
     # The template's own `dn` (its full distinguished name, including org
     # path — e.g. "org-root/ls-template-mytemplate") is a real, stable,
     # unique identifier, unlike the bare name alone (which is only unique
-    # within one org). Falls back to the name itself if the template
-    # lookup didn't find a matching `lsServiceProfileTemplate` (e.g. a
-    # profile cloned from a template that was since deleted).
-    external_id = template_dn_by_name.get(template_name, template_name)
+    # *within* one org — two orgs can each own a "worker-template").
+    #
+    # `oper_src_templ_name` is UCS Manager's own resolved absolute DN for
+    # the source template (the `oper*` convention across `lsServer`'s
+    # policy-name properties), so it is preferred: it is collision-proof
+    # across orgs, where the by-name lookup is lossy by construction.
+    # Falls back to the by-name lookup, then to the bare name, for a
+    # profile whose template was since deleted or renamed.
+    oper_dn = getattr(profile, "oper_src_templ_name", None) or None
+    external_id = oper_dn or template_dn_by_name.get(template_name, template_name)
     return template_name, external_id
 
 

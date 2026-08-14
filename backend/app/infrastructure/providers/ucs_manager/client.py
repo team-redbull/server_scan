@@ -2,28 +2,49 @@
 
 `ucsmsdk` (Cisco's official UCS Manager Python SDK, github.com/CiscoUcs/
 ucsmsdk, `pip install ucsmsdk`) has no async support at all — `login`/
-`logout`/`query_classid`/`query_children` are blocking HTTP calls over
-the UCS Manager XML API. Every one of them is dispatched through
-`asyncio.to_thread` here so a collector run never blocks the event loop
-the rest of this backend depends on — the same "never block the loop"
-discipline `app.infrastructure.mongodb`/`app.infrastructure.redis`
-already follow via their own native async drivers, just substituted with
-a thread offload since no async UCS SDK exists to reach for instead.
+`logout`/`query_classid` are blocking HTTP calls over the UCS Manager XML
+API. Every one of them is dispatched through `asyncio.to_thread` here so a
+collector run never blocks the event loop the rest of this backend depends
+on — the same "never block the loop" discipline
+`app.infrastructure.mongodb`/`app.infrastructure.redis` already follow via
+their own native async drivers, just substituted with a thread offload
+since no async UCS SDK exists to reach for instead.
 
-Confirmed directly against the installed `ucsmsdk==0.9.27` package
-source (not just documentation) — `UcsHandle.query_classid` returns a
-plain list of managed objects, and its exceptions are `ucsexception.
-UcsError`/`UcsException` (protocol-level failures, e.g. a bad login) or
-`ucsexception.UcsWrapperException`/`UcsLoginError`/`UcsConnectionError`
-(SDK-level failures) — both hierarchies are caught here and normalized
-into one `UcsManagerConnectionError` so `UcsManagerProvider` doesn't need
-to know either exception tree.
+Confirmed directly against the installed `ucsmsdk==0.9.27` package source
+(not just documentation):
+
+  - `UcsHandle(ip, username, password, port=None, secure=None, proxy=None,
+    timeout=None)`. `timeout` is urllib's, so it bounds each individual
+    socket operation (connect, and each blocking read) — it is *not* a
+    total-request or total-run deadline.
+  - `endpoint` must be a bare hostname or IP. `UcsSession.__create_uri`
+    builds `"%s://%s:%s" % (protocol, ip, port)` with `ip` interpolated
+    raw, so a scheme or an embedded port produces a mangled URL
+    ("https://https://host:443"). `_validate_endpoint` below rejects both
+    up front rather than letting it fail as an opaque connection error.
+  - `query_classid` returns a plain list (never `None`), `[]` when empty.
+  - Exceptions come from two disjoint trees, both rooted at `Exception`:
+    `UcsError` (with `UcsException`, `UcsValidationException`) and
+    `UcsWrapperException` (with `UcsLoginError`, `UcsConnectionError`,
+    `UcsOperationError`). Catching the two roots covers all six.
+  - `login()` raises on bad credentials — it never returns a falsy value —
+    so an authentication failure can't silently proceed as if connected.
+  - `logout()` before a successful login is a no-op (`_logout` returns
+    early when the session cookie is `None`), so calling it from a
+    `finally` after a failed login costs nothing and sends no request.
+
+Network-level failures are *not* part of either SDK exception tree:
+`ucsdriver.post` re-raises urllib's errors untouched, and `URLError`/
+`socket.timeout` are `OSError` subclasses. Every call below therefore
+catches `OSError` alongside the SDK trees, so callers only ever see one
+`UcsManagerConnectionError` regardless of which layer failed.
 """
 
 from __future__ import annotations
 
 import asyncio
 from typing import Any
+from urllib.parse import urlparse
 
 import structlog
 from ucsmsdk.ucsexception import UcsError, UcsWrapperException
@@ -42,6 +63,29 @@ class UcsManagerConnectionError(Exception):
     """
 
 
+def _validate_endpoint(endpoint: str) -> str:
+    """`UcsHandle` wants a bare host or IP — see the module docstring on
+    `__create_uri`. `Manager.endpoint` is a free-form `str`, so catch a
+    scheme or an embedded port here with an actionable message instead of
+    letting it surface as an unexplained connection failure.
+    """
+    candidate = endpoint.strip()
+    if not candidate:
+        raise ValueError("UCS Manager endpoint is empty.")
+    if "://" in candidate:
+        host = urlparse(candidate).hostname or ""
+        raise ValueError(
+            f"UCS Manager endpoint {endpoint!r} must be a bare hostname or IP, not a URL — "
+            f"ucsmsdk builds the URL itself (use {host!r})."
+        )
+    if ":" in candidate and not candidate.startswith("["):  # not a bare IPv6 literal
+        raise ValueError(
+            f"UCS Manager endpoint {endpoint!r} must not include a port — "
+            "ucsmsdk appends one itself (443 by default)."
+        )
+    return candidate
+
+
 class UcsManagerClient:
     """One instance per manager domain per collector run. Not pooled or
     reused across managers: `UcsHandle` isn't documented as safe for
@@ -53,7 +97,9 @@ class UcsManagerClient:
     def __init__(
         self, *, endpoint: str, username: str, password: str, timeout_seconds: float
     ) -> None:
-        self._handle = UcsHandle(endpoint, username, password, timeout=timeout_seconds)
+        self._handle = UcsHandle(
+            _validate_endpoint(endpoint), username, password, timeout=timeout_seconds
+        )
 
     async def login(self) -> None:
         try:
@@ -76,32 +122,21 @@ class UcsManagerClient:
 
     async def query_classid(self, class_id: str) -> list[Any]:
         """`configResolveClass` for every instance of `class_id` in the
-        whole UCS domain — used for domain-wide queries (all compute
-        blades, all rack units, all service profile templates), not for
-        anything scoped under a specific server's DN (see
-        `query_children` for that).
+        whole UCS domain.
+
+        This is the only query shape the collector uses. Descendant
+        objects (a server's management interface, its adapter host
+        Ethernet interfaces) are fetched domain-wide too and joined
+        client-side by DN prefix — see `provider.py`'s module docstring
+        for why a per-server `configResolveChildren` is not merely slower
+        but wrong for those classes.
         """
         try:
             result = await asyncio.to_thread(self._handle.query_classid, class_id)
         except (UcsError, UcsWrapperException) as exc:
             raise UcsManagerConnectionError(f"query_classid({class_id!r}) failed: {exc}") from exc
-        return list(result) if result else []
-
-    async def query_children(self, *, in_dn: str, class_id: str) -> list[Any]:
-        """`configResolveChildren` scoped under `in_dn`, filtered to
-        `class_id`, `hierarchy=True` so it matches regardless of how many
-        levels deep the real object sits under `in_dn` — used for
-        per-server lookups (a blade/rack unit's management interface,
-        adapter host Ethernet interfaces) whose exact intermediate parent
-        MO wasn't confirmed against a live UCS Manager while building
-        this (see `mapping.py`'s module docstring).
-        """
-        try:
-            result = await asyncio.to_thread(
-                self._handle.query_children, in_dn=in_dn, class_id=class_id, hierarchy=True
-            )
-        except (UcsError, UcsWrapperException) as exc:
+        except OSError as exc:
             raise UcsManagerConnectionError(
-                f"query_children(in_dn={in_dn!r}, class_id={class_id!r}) failed: {exc}"
+                f"query_classid({class_id!r}) could not reach {self._handle.ip}: {exc}"
             ) from exc
         return list(result) if result else []

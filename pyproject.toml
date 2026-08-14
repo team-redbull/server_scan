@@ -41,7 +41,10 @@ packages = ["backend/app"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["backend"]
+# "." puts the repo root on the path so `tools.*` (the operational CLIs)
+# is importable by its tests, the same way `uv run python -m tools.x`
+# reaches it from the root.
+pythonpath = ["backend", "."]
 asyncio_mode = "auto"
 markers = [
     "integration: requires testcontainers (mongo/redis)",
