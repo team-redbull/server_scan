@@ -334,6 +334,41 @@ result. **14 fetched, 14 created, 0 errors.**
   profile, and `compute_connectivity_facts` counts neither, so an
   unassociated server does not masquerade as a connectivity fault.
 
+### Second pass: with service profiles associated
+
+The first pass ran against a domain with zero service profiles, which
+left the profile/template mapping and the server-name path unexercised.
+Creating a `updating-template` and instantiating four profiles from it
+(`lsInstantiateNNamedTemplate`), then binding them to servers, exercised
+both — and exposed one more production-breaking defect.
+
+- **`computeBlade.name` is empty even with a service profile bound to
+  it.** The mapping fell back to the DN, so every UCS-sourced server was
+  named `sys/chassis-3/blade-1` — a location, not an identity. Since the
+  platform reads both the site token and the installation-type
+  convention *out of the name*, a UCS fleet would have been permanently
+  unsited and unclassified. The associated service profile's name is
+  what a UCS server is actually called, and is now preferred; the DN is
+  the last resort and remains the `external_id` regardless.
+- `oper_src_templ_name` is confirmed to hold the template's resolved DN
+  (`org-root/ls-hypershift-five-tmpl`) on a real instantiated profile,
+  which is what makes `profile_template_external_id` collision-proof
+  across orgs.
+- Templates really do come back from the same `lsServer` query as
+  instances, distinguished only by `type` — confirming the partition.
+
+With four profiles bound, the full chain resolves end to end:
+
+    ocp4-hypershift-five-01       site=five  HOSTED_CLUSTER  tmpl=hypershift-five-tmpl
+    ocp4-hypershift-data-five-02  site=five  HOSTED_CLUSTER  tmpl=hypershift-five-tmpl
+    ocp4-prod-one-infra-01        site=one   UPI             tmpl=hypershift-five-tmpl
+    ocp4-one-control-plane-02     site=one   UPI             tmpl=hypershift-five-tmpl
+
+and the API filters agree (`?site_id=five` -> 2, `?site_id=one` -> 2,
+`?installation_type=HOSTED_CLUSTER` -> 2, `?installation_type=UPI` -> 2).
+The ten servers with no profile keep their DN, no site and
+UNCLASSIFIED — correct, and visibly distinct from the four that resolve.
+
 ### Still not settled
 
 - **The `total_memory` MB assumption remains unproven.** UCSPE reports
@@ -343,11 +378,11 @@ result. **14 fetched, 14 created, 0 errors.**
   blade's four equipped `memoryUnit`s report `capacity=65536` each,
   summing to 262144, and its `memoryArray.max_capacity` is 12288). Only
   real hardware will settle this.
-- **Service-profile and template mapping is still unexercised.** This
-  domain has zero `lsServer` objects — every server reports
-  `association="none"` and an empty `assigned_to_dn` — so
-  `profile_template_name`/`_external_id` and the
-  `oper_src_templ_name` preference have never run against real data.
+- **Association never reached `associated`.** The bound profiles stopped
+  at `oper_state="config-failure"` because they carry no boot policy,
+  vNICs or UUID pool. `assigned_to_dn` is set regardless, which is all
+  the mapping reads, but a fully associated server may expose fields
+  this pass never saw.
 - `cpu_model` and storage detail remain unmapped (`num_of_cpus`/
   `num_of_cores`/`num_of_threads` do populate correctly).
 - Server `name` falls back to the DN (`sys/chassis-3/blade-1`) when a

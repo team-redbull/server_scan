@@ -46,9 +46,8 @@ _BYTES_PER_MB = 1024 * 1024
 
 
 def _profile_template_fields(
-    server_mo: Any,
+    profile: Any | None,
     *,
-    profile_by_dn: dict[str, Any],
     template_dn_by_name: dict[str, str],
 ) -> tuple[str | None, str | None]:
     """`(name, external_id)` for `ProviderServer.profile_template_*`, or
@@ -56,7 +55,6 @@ def _profile_template_fields(
     discovered-but-unassociated blade, for instance) or its profile isn't
     itself derived from a template (a one-off, non-template profile).
     """
-    profile = profile_by_dn.get(getattr(server_mo, "assigned_to_dn", None) or "")
     if profile is None:
         return None, None
     template_name = getattr(profile, "src_templ_name", None) or None
@@ -76,6 +74,28 @@ def _profile_template_fields(
     oper_dn = getattr(profile, "oper_src_templ_name", None) or None
     external_id = oper_dn or template_dn_by_name.get(template_name, template_name)
     return template_name, external_id
+
+
+def _server_name(server_mo: Any, profile: Any | None) -> str:
+    """The name an operator would use for this machine.
+
+    The associated service profile's name comes first, because that is
+    what a UCS server is actually called: `computeBlade.name` is an
+    optional user label that is *empty in practice* — verified against
+    UCSPE 4.2, where a blade with a service profile bound to it still
+    reported `name=""`. Falling back to the DN alone (as this did
+    originally) would name every server `sys/chassis-1/blade-3`, which is
+    a location, not an identity, and carries none of the information the
+    rest of the platform reads out of a hostname: the site token
+    (`app.domain.value_objects.site`) and the installation-type
+    convention the classification rules match on. A UCS-sourced fleet
+    would have been permanently unsited and unclassified.
+
+    The DN remains the last resort, and stays the `external_id`
+    regardless — identity and display name are different jobs.
+    """
+    profile_name = getattr(profile, "name", None) if profile is not None else None
+    return profile_name or getattr(server_mo, "name", None) or str(server_mo.dn)
 
 
 def _bmc_address(mgmt_if: Any | None) -> str | None:
@@ -182,8 +202,9 @@ def compute_unit_to_provider_server(
     classes carry the same relevant property set (see module docstring),
     so one function handles both rather than duplicating the mapping.
     """
+    profile = profile_by_dn.get(getattr(server_mo, "assigned_to_dn", None) or "")
     template_name, template_external_id = _profile_template_fields(
-        server_mo, profile_by_dn=profile_by_dn, template_dn_by_name=template_dn_by_name
+        profile, template_dn_by_name=template_dn_by_name
     )
 
     total_memory_mb = _as_int(getattr(server_mo, "total_memory", None))
@@ -191,7 +212,7 @@ def compute_unit_to_provider_server(
     return ProviderServer(
         external_id=server_mo.dn,
         vendor="cisco",
-        name=getattr(server_mo, "name", None) or server_mo.dn,
+        name=_server_name(server_mo, profile),
         model=getattr(server_mo, "model", None) or None,
         serial=getattr(server_mo, "serial", None) or None,
         system_uuid=getattr(server_mo, "uuid", None) or None,
