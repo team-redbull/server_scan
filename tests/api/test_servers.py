@@ -150,16 +150,16 @@ async def test_search_matches_by_token(
 async def test_filter_by_site_id(app_context: tuple[AsyncClient, MongoServerRepository]) -> None:
     client, repo = app_context
     for i in range(3):
-        await repo.upsert(_make_server(i, site_id="site_one"))
+        await repo.upsert(_make_server(i, site_id="one"))
     for i in range(3, 5):
-        await repo.upsert(_make_server(i, site_id="site_two"))
+        await repo.upsert(_make_server(i, site_id="two"))
 
-    resp = await client.get("/api/v1/servers", params={"site_id": "site_one"})
+    resp = await client.get("/api/v1/servers", params={"site_id": "one"})
 
     assert resp.status_code == 200
     body = resp.json()
     assert len(body["items"]) == 3
-    assert all(item["site_id"] == "site_one" for item in body["items"])
+    assert all(item["site_id"] == "one" for item in body["items"])
 
 
 async def test_filter_by_maintenance_bool(
@@ -250,18 +250,18 @@ async def test_stale_cursor_after_filter_change_returns_400(
 ) -> None:
     client, repo = app_context
     for i in range(5):
-        await repo.upsert(_make_server(i, site_id="site_alpha"))
+        await repo.upsert(_make_server(i, site_id="one"))
     for i in range(5, 8):
-        await repo.upsert(_make_server(i, site_id="site_beta"))
+        await repo.upsert(_make_server(i, site_id="two"))
 
-    first = await client.get("/api/v1/servers", params={"site_id": "site_alpha", "page_size": "2"})
+    first = await client.get("/api/v1/servers", params={"site_id": "one", "page_size": "2"})
     assert first.status_code == 200
     cursor = first.json()["page"]["next_cursor"]
     assert cursor is not None
 
     second = await client.get(
         "/api/v1/servers",
-        params={"site_id": "site_beta", "page_size": "2", "cursor": cursor},
+        params={"site_id": "two", "page_size": "2", "cursor": cursor},
     )
 
     assert second.status_code == 400

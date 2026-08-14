@@ -14,10 +14,42 @@ from enum import StrEnum
 
 
 class Vendor(StrEnum):
+    """The three vendors this platform ingests from, and nothing else.
+
+    There is deliberately no `UNKNOWN` member: every server reaches the
+    platform through a vendor-specific collector
+    (`app.infrastructure.providers.<vendor>`), so the vendor is known by
+    construction — it is a property of *which collector produced the
+    record*, never something guessed from the payload. A provider that
+    cannot state its vendor is a bug in that provider, and
+    `Vendor("...")` raising is the correct, loud failure.
+
+    `HP`, not `HPE`: the platform reports the vendor the way operators
+    here refer to it.
+    """
+
     DELL = "dell"
     CISCO = "cisco"
-    HPE = "hpe"
-    UNKNOWN = "unknown"
+    HP = "hp"
+
+
+class SiteCode(StrEnum):
+    """The closed set of sites. Servers are assigned to one by parsing
+    their name (`app.domain.value_objects.site.parse_site_code`) — the
+    site token is embedded in every production hostname, e.g.
+    `ocp4-prod-one-infra-01`.
+
+    A closed enum rather than free-form strings because the previous
+    free-form `site_id` let a caller filter on a value no document could
+    ever hold and get a silent empty result back, with nothing to
+    distinguish "no such site" from "no servers there".
+    """
+
+    ONE = "one"
+    TWO = "two"
+    THREE = "three"
+    FOUR = "four"
+    FIVE = "five"
 
 
 class ManagerType(StrEnum):

@@ -14,7 +14,7 @@ import json
 import pytest
 from pymongo.errors import DuplicateKeyError
 
-from app.domain.enums import InstallationType, Vendor
+from app.domain.enums import InstallationType
 from app.domain.models.classification_rule import ClassificationRule, RuleScope
 from app.infrastructure.mongodb import MongoClientHolder
 from app.infrastructure.mongodb.classification_rule_repository import (
@@ -149,10 +149,14 @@ async def test_default_system_rules_round_trip(mongo_holder: MongoClientHolder) 
         await repo.upsert(rule)
 
     rules = await repo.list_all(enabled_only=True)
-    assert len(rules) == 4
-    dell_hosted = next(r for r in rules if r.name == "dell-vendor-hosted-cluster")
-    assert dell_hosted.scope.vendor == Vendor.DELL
-    assert dell_hosted.priority == 300
+    assert len(rules) == len(default_system_rules())
+    # Round-tripping must preserve the pattern verbatim — these are regexes
+    # with alternations and anchors, and a mangled one silently
+    # misclassifies rather than erroring.
+    stored = {r.name: r for r in rules}
+    for original in default_system_rules():
+        assert stored[original.name].pattern == original.pattern
+        assert stored[original.name].installation_type == original.installation_type
 
 
 # --- Index assertions ---

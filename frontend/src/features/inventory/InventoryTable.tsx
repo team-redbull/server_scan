@@ -8,17 +8,30 @@ import type { SortingState } from "@tanstack/react-table";
 // not a workaround — so we build on that rather than the fully-new API.
 import { legacyCreateColumnHelper, useLegacyTable } from "@tanstack/react-table/legacy";
 import type { LegacyColumnDef } from "@tanstack/react-table/legacy";
-import { Link } from "react-router";
+import { useNavigate } from "react-router";
 
 import type { ServerListParams } from "@/api/servers";
-import { Badge } from "@/components/Badge";
-import { HealthBadge } from "@/components/HealthBadge";
-import type { ConnectivityFacts, ServerSummary } from "@/types/server";
+import { StateBadge } from "@/components/StateBadge";
+import type { ServerSummary } from "@/types/server";
 
-/** The subset of `ServerListParams["sort"]` this table exposes as a
- * clickable column header. The backend also accepts "serial", but there's
- * no visible "serial" column in this slice's summary row, so it's left out
- * of the UI surface (still a valid API param, just not reachable from here). */
+/**
+ * Three columns, deliberately: name, model, state.
+ *
+ * The previous table had nine (vendor, site, classification, fabric,
+ * last-updated…), which is a lot of horizontal scanning to answer the two
+ * questions this screen exists for — "which box is this" and "does it need
+ * me". Everything cut is still one click away on the detail page, where
+ * there is room to present it properly. Site in particular is now
+ * redundant in every row: it is already inside the hostname, and the list
+ * is normally reached pre-filtered from a site card.
+ *
+ * Motion note: rows animate nothing. An operator scrolls this list many
+ * times a day, and per-row transitions on a 50-row table are both a
+ * distraction and a frame-budget cost at that repetition. Only the row
+ * background responds to hover, which is instant feedback rather than
+ * animation.
+ */
+
 export type SortableField = "name" | "model" | "updated_at";
 
 interface InventoryTableProps {
@@ -28,88 +41,47 @@ interface InventoryTableProps {
   onSortChange: (field: SortableField, desc: boolean) => void;
 }
 
-function formatFabricSummary(facts: ConnectivityFacts): string {
-  if (facts.fabric_paths_total === 0) {
-    return "—";
-  }
-  return `${facts.fabric_paths_up}/${facts.fabric_paths_total} up`;
-}
-
 const columnHelper = legacyCreateColumnHelper<ServerSummary>();
 
-// Columns have heterogeneous `TValue` (string, boolean, ConnectivityFacts…).
-// TanStack Table's own docs recommend widening the array element type to
+// Columns have heterogeneous `TValue` (string, ServerSummary…). TanStack
+// Table's own docs recommend widening the array element type to
 // `ColumnDef<TData, any>` for exactly this case — the alternative is a
 // `TValue=unknown` array, which `exactOptionalPropertyTypes` then rejects
-// on every column (each accessor's inferred `TValue` is narrower than
-// `unknown`, e.g. `string`, and narrowing back out isn't sound structurally).
+// on every column.
 const columns: LegacyColumnDef<ServerSummary, any>[] = [
   columnHelper.accessor("name", {
     id: "name",
     header: "Name",
     cell: (info) => (
-      <Link
-        to={`/servers/${info.row.original.id}`}
-        className="font-medium text-blue-600 hover:underline dark:text-blue-400"
-      >
-        {info.getValue()}
-      </Link>
+      // Not a blue underlined link: with every row linked, per-row link
+      // styling turns the column into a wall of blue and stops signalling
+      // anything. The whole row is clickable (see `<tr>` below), so the
+      // name just needs to read as the primary identifier.
+      <span className="font-medium text-[var(--text-primary)]">{info.getValue()}</span>
     ),
     enableSorting: true,
-  }),
-  columnHelper.accessor("vendor", {
-    id: "vendor",
-    header: "Vendor",
-    enableSorting: false,
   }),
   columnHelper.accessor("model", {
     id: "model",
     header: "Model",
+    cell: (info) => (
+      <span className="text-[var(--text-secondary)]">{info.getValue() || "—"}</span>
+    ),
     enableSorting: true,
   }),
-  columnHelper.accessor("site_id", {
-    id: "site",
-    header: "Site",
+  columnHelper.accessor((row) => row, {
+    id: "state",
+    header: "State",
+    cell: (info) => {
+      const row = info.getValue<ServerSummary>();
+      return <StateBadge severity={row.health.overall} maintenance={row.maintenance} />;
+    },
     enableSorting: false,
-  }),
-  columnHelper.accessor((row) => row.classification.installation_type, {
-    id: "classification",
-    header: "Classification",
-    cell: (info) => <Badge>{info.getValue()}</Badge>,
-    enableSorting: false,
-  }),
-  columnHelper.accessor((row) => row.health.overall, {
-    id: "health",
-    header: "Health",
-    cell: (info) => <HealthBadge severity={info.getValue()} />,
-    enableSorting: false,
-  }),
-  columnHelper.accessor((row) => row.maintenance.enabled, {
-    id: "maintenance",
-    header: "Maintenance",
-    cell: (info) =>
-      info.getValue() ? (
-        <Badge tone="warning">Maintenance</Badge>
-      ) : (
-        <span className="text-gray-400 dark:text-gray-600">—</span>
-      ),
-    enableSorting: false,
-  }),
-  columnHelper.accessor((row) => row.connectivity.facts, {
-    id: "fabric",
-    header: "Fabric",
-    cell: (info) => formatFabricSummary(info.getValue()),
-    enableSorting: false,
-  }),
-  columnHelper.accessor("updated_at", {
-    id: "updated_at",
-    header: "Last updated",
-    cell: (info) => new Date(info.getValue()).toLocaleString(),
-    enableSorting: true,
   }),
 ];
 
 export function InventoryTable({ servers, sortField, sortDesc, onSortChange }: InventoryTableProps) {
+  const navigate = useNavigate();
   const sorting: SortingState = [{ id: sortField, desc: sortDesc }];
 
   const table = useLegacyTable({
@@ -124,34 +96,36 @@ export function InventoryTable({ servers, sortField, sortDesc, onSortChange }: I
       if (!first) {
         return;
       }
-      // Safe: the only columns with `enableSorting: true` above use ids
-      // "name" | "model" | "updated_at", which is exactly `SortableField`.
       onSortChange(first.id as SortableField, first.desc);
     },
     getRowId: (row) => row.id,
   });
 
   return (
-    <div className="overflow-x-auto rounded-lg border border-gray-200 dark:border-gray-700">
-      <table className="min-w-full divide-y divide-gray-200 text-sm dark:divide-gray-700">
-        <thead className="bg-gray-50 dark:bg-gray-800/50">
+    <div className="overflow-hidden rounded-[var(--radius-card)] border border-[var(--border-subtle)] bg-[var(--surface-raised)]">
+      <table className="min-w-full text-sm">
+        {/* Sticky header: at 100+ rows the column meaning otherwise
+         * scrolls away exactly when you are deep enough to need it. */}
+        <thead className="sticky top-0 z-10 bg-[var(--surface-sunken)]">
           {table.getHeaderGroups().map((headerGroup) => (
             <tr key={headerGroup.id}>
               {headerGroup.headers.map((header) => (
                 <th
                   key={header.id}
                   scope="col"
-                  className="px-3 py-2 text-left font-medium text-gray-500 dark:text-gray-400"
+                  className="border-b border-[var(--border-subtle)] px-4 py-2.5 text-left text-xs font-medium tracking-wide text-[var(--text-secondary)] uppercase"
                 >
                   {header.column.getCanSort() ? (
                     <button
                       type="button"
                       onClick={header.column.getToggleSortingHandler()}
-                      className="inline-flex items-center gap-1 hover:text-gray-900 dark:hover:text-gray-100"
+                      className="inline-flex items-center gap-1 rounded-sm hover:text-[var(--text-primary)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-status-info)]"
                     >
                       {flexRender(header.column.columnDef.header, header.getContext())}
-                      {header.column.getIsSorted() === "asc" && <span aria-hidden="true">▲</span>}
-                      {header.column.getIsSorted() === "desc" && <span aria-hidden="true">▼</span>}
+                      <span aria-hidden="true" className="text-[0.65rem]">
+                        {header.column.getIsSorted() === "asc" && "▲"}
+                        {header.column.getIsSorted() === "desc" && "▼"}
+                      </span>
                     </button>
                   ) : (
                     flexRender(header.column.columnDef.header, header.getContext())
@@ -161,11 +135,25 @@ export function InventoryTable({ servers, sortField, sortDesc, onSortChange }: I
             </tr>
           ))}
         </thead>
-        <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
+        <tbody>
           {table.getRowModel().rows.map((row) => (
-            <tr key={row.id}>
+            // The whole row is the click target, not just the name: a
+            // 3px-tall text link is a poor target when you are aiming at
+            // one of fifty rows. `cursor-pointer` plus the hover fill is
+            // what signals it.
+            <tr
+              key={row.id}
+              onClick={() => void navigate(`/servers/${row.original.id}`)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  void navigate(`/servers/${row.original.id}`);
+                }
+              }}
+              tabIndex={0}
+              className="cursor-pointer border-b border-[var(--border-subtle)] last:border-0 hover:bg-[var(--surface-hover)] focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[var(--color-status-info)]"
+            >
               {row.getVisibleCells().map((cell) => (
-                <td key={cell.id} className="px-3 py-2">
+                <td key={cell.id} className="px-4 py-2.5 whitespace-nowrap">
                   {flexRender(cell.column.columnDef.cell, cell.getContext())}
                 </td>
               ))}
@@ -173,7 +161,10 @@ export function InventoryTable({ servers, sortField, sortDesc, onSortChange }: I
           ))}
           {servers.length === 0 && (
             <tr>
-              <td colSpan={columns.length} className="px-3 py-6 text-center text-gray-500">
+              <td
+                colSpan={columns.length}
+                className="px-4 py-12 text-center text-sm text-[var(--text-muted)]"
+              >
                 No servers match the current filters.
               </td>
             </tr>

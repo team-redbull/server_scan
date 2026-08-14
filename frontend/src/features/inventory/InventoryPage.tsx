@@ -5,12 +5,24 @@ import { ApiError } from "@/api/client";
 import type { ServerListParams } from "@/api/servers";
 import type { SortableField } from "@/features/inventory/InventoryTable";
 import { InventoryTable } from "@/features/inventory/InventoryTable";
+import { SITE_CODES, VENDORS } from "@/api/sites";
 import { useServersQuery } from "@/features/inventory/hooks";
 import { useDebouncedValue } from "@/lib/useDebouncedValue";
 
-const VENDORS = ["dell", "cisco", "hpe", "unknown"] as const;
+const SITE_LABELS: Record<string, string> = {
+  one: "One",
+  two: "Two",
+  three: "Three",
+  four: "Four",
+  five: "Five",
+};
 const INSTALLATION_TYPES = ["HOSTED_CLUSTER", "UPI", "UNCLASSIFIED"] as const;
 const HEALTH_SEVERITIES = ["UNKNOWN", "HEALTHY", "INFO", "WARNING", "CRITICAL"] as const;
+// One class string for every filter control so the bar reads as a single
+// row of peers rather than a set of slightly different boxes.
+const FIELD_CLASS =
+  "mt-1 rounded-md border border-[var(--border-subtle)] bg-[var(--surface-raised)] px-2.5 py-1.5 text-sm text-[var(--text-primary)] focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--color-status-info)]";
+
 const DEFAULT_SORT: SortableField = "name";
 const PAGE_SIZE = 50;
 
@@ -24,11 +36,11 @@ function isSortableField(value: string): value is SortableField {
  * component state, so a refresh or a back-button navigation lands the user
  * back where they were — an explicit project requirement, not polish.
  *
- * `site_id` is a free-text filter for this slice rather than a `<select>`
- * sourced from a sites endpoint — there's no `GET /sites` list in the slice
- * 1 contract to populate one from, so a dropdown would just be a hardcoded
- * guess. Free text against the exact `site_id` the backend stores is more
- * honest here and gets swapped for a real picker once a sites API exists.
+ * Site and vendor are both closed `<select>`s sourced from the domain's
+ * own enums, not free text. The previous free-text `site_id` box required
+ * typing an opaque generated id exactly right to get any result at all,
+ * and a single wrong character returned an empty table that looked
+ * identical to "this site has no servers".
  */
 export function InventoryPage() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -147,9 +159,9 @@ export function InventoryPage() {
   const hasMore = data?.page.has_more ?? false;
 
   return (
-    <main className="mx-auto max-w-7xl p-8">
-      <h1 className="text-2xl font-semibold">Server Inventory</h1>
-      <p className="mt-1 text-sm text-gray-500">
+    <main className="mx-auto max-w-7xl px-8 py-8">
+      <h1 className="text-xl font-semibold tracking-tight text-[var(--text-primary)]">Servers</h1>
+      <p className="mt-1 text-sm text-[var(--text-secondary)]">
         {typeof data?.page.count === "number"
           ? `${data.page.count} server${data.page.count === 1 ? "" : "s"}`
           : "Browse and filter discovered servers."}
@@ -161,7 +173,7 @@ export function InventoryPage() {
           e.preventDefault();
         }}
       >
-        <label className="flex flex-col text-xs font-medium text-gray-500">
+        <label className="flex flex-col text-xs font-medium text-[var(--text-secondary)]">
           Search
           <input
             type="text"
@@ -170,18 +182,18 @@ export function InventoryPage() {
               updateFilters({ search: e.target.value });
             }}
             placeholder="Name, serial, tag…"
-            className="mt-1 rounded border border-gray-300 px-2 py-1 text-sm dark:border-gray-600 dark:bg-gray-900"
+            className={FIELD_CLASS}
           />
         </label>
 
-        <label className="flex flex-col text-xs font-medium text-gray-500">
+        <label className="flex flex-col text-xs font-medium text-[var(--text-secondary)]">
           Vendor
           <select
             value={vendor}
             onChange={(e) => {
               updateFilters({ vendor: e.target.value });
             }}
-            className="mt-1 rounded border border-gray-300 px-2 py-1 text-sm dark:border-gray-600 dark:bg-gray-900"
+            className={FIELD_CLASS}
           >
             <option value="">All</option>
             {VENDORS.map((v) => (
@@ -192,27 +204,32 @@ export function InventoryPage() {
           </select>
         </label>
 
-        <label className="flex flex-col text-xs font-medium text-gray-500">
+        <label className="flex flex-col text-xs font-medium text-[var(--text-secondary)]">
           Site
-          <input
-            type="text"
+          <select
             value={siteId}
             onChange={(e) => {
               updateFilters({ site_id: e.target.value });
             }}
-            placeholder="site_..."
-            className="mt-1 rounded border border-gray-300 px-2 py-1 text-sm dark:border-gray-600 dark:bg-gray-900"
-          />
+            className={FIELD_CLASS}
+          >
+            <option value="">All sites</option>
+            {SITE_CODES.map((code) => (
+              <option key={code} value={code}>
+                {SITE_LABELS[code] ?? code}
+              </option>
+            ))}
+          </select>
         </label>
 
-        <label className="flex flex-col text-xs font-medium text-gray-500">
+        <label className="flex flex-col text-xs font-medium text-[var(--text-secondary)]">
           Classification
           <select
             value={installationType}
             onChange={(e) => {
               updateFilters({ installation_type: e.target.value });
             }}
-            className="mt-1 rounded border border-gray-300 px-2 py-1 text-sm dark:border-gray-600 dark:bg-gray-900"
+            className={FIELD_CLASS}
           >
             <option value="">All</option>
             {INSTALLATION_TYPES.map((t) => (
@@ -223,14 +240,14 @@ export function InventoryPage() {
           </select>
         </label>
 
-        <label className="flex flex-col text-xs font-medium text-gray-500">
+        <label className="flex flex-col text-xs font-medium text-[var(--text-secondary)]">
           Health
           <select
             value={healthOverall}
             onChange={(e) => {
               updateFilters({ health_overall: e.target.value });
             }}
-            className="mt-1 rounded border border-gray-300 px-2 py-1 text-sm dark:border-gray-600 dark:bg-gray-900"
+            className={FIELD_CLASS}
           >
             <option value="">All</option>
             {HEALTH_SEVERITIES.map((h) => (
@@ -241,7 +258,7 @@ export function InventoryPage() {
           </select>
         </label>
 
-        <label className="flex items-center gap-2 pb-1.5 text-xs font-medium text-gray-500">
+        <label className="flex items-center gap-2 pb-1.5 text-xs font-medium text-[var(--text-secondary)]">
           <input
             type="checkbox"
             checked={maintenanceOnly}
@@ -254,7 +271,7 @@ export function InventoryPage() {
       </form>
 
       <div className="mt-4">
-        {isPending && <p className="text-gray-500">Loading servers…</p>}
+        {isPending && <p className="py-12 text-center text-sm text-[var(--text-muted)]">Loading servers…</p>}
 
         {isError && (
           <p className="rounded border border-red-300 bg-red-50 p-3 text-red-700 dark:border-red-800 dark:bg-red-950 dark:text-red-300">
@@ -281,7 +298,7 @@ export function InventoryPage() {
                 type="button"
                 onClick={handlePrevious}
                 disabled={cursorHistory.length === 0}
-                className="rounded border border-gray-300 px-3 py-1.5 text-sm disabled:cursor-not-allowed disabled:opacity-40 dark:border-gray-600"
+                className="rounded-md border border-[var(--border-subtle)] bg-[var(--surface-raised)] px-3 py-1.5 text-sm text-[var(--text-primary)] transition-transform duration-[var(--duration-instant)] ease-[var(--ease-out-strong)] hover:border-[var(--border-strong)] active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-40 disabled:active:scale-100"
               >
                 Previous
               </button>
@@ -289,7 +306,7 @@ export function InventoryPage() {
                 type="button"
                 onClick={handleNext}
                 disabled={!hasMore}
-                className="rounded border border-gray-300 px-3 py-1.5 text-sm disabled:cursor-not-allowed disabled:opacity-40 dark:border-gray-600"
+                className="rounded-md border border-[var(--border-subtle)] bg-[var(--surface-raised)] px-3 py-1.5 text-sm text-[var(--text-primary)] transition-transform duration-[var(--duration-instant)] ease-[var(--ease-out-strong)] hover:border-[var(--border-strong)] active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-40 disabled:active:scale-100"
               >
                 Next
               </button>

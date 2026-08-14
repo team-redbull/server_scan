@@ -27,6 +27,7 @@ from app.api.v1.classification_rules import router as classification_rules_route
 from app.api.v1.events import router as events_router
 from app.api.v1.health_policies import router as health_policies_router
 from app.api.v1.servers import router as servers_router
+from app.api.v1.sites import router as sites_router
 from app.application.services.bootstrap import (
     ensure_default_classification_rules,
     ensure_default_health_policies,
@@ -103,6 +104,7 @@ def create_app() -> FastAPI:
     app.include_router(classification_rules_router)
     app.include_router(health_policies_router)
     app.include_router(events_router)
+    app.include_router(sites_router)
 
     if settings.metrics_enabled:
 

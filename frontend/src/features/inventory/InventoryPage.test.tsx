@@ -12,7 +12,7 @@ function makeServer(overrides: Partial<ServerSummary> = {}): ServerSummary {
     name: "ocp-dell-worker-001",
     vendor: "dell",
     model: "PowerEdge R760",
-    site_id: "site_tlv_01",
+    site_id: "one",
     manager_id: "mgr_ome_tlv_01",
     classification: { installation_type: "HOSTED_CLUSTER" },
     health: { overall: "HEALTHY" },
@@ -103,8 +103,13 @@ describe("InventoryPage", () => {
       expect(screen.getByText("ocp-dell-worker-001")).toBeInTheDocument();
     });
     expect(screen.getByText("ucs-cisco-worker-002")).toBeInTheDocument();
-    // Fabric summary derived from connectivity.facts.
-    expect(screen.getAllByText("2/2 up")).toHaveLength(2);
+    // Model is one of the three columns the table keeps.
+    expect(screen.getByText("UCS C240")).toBeInTheDocument();
+    // The merged State column renders one badge per row. Fabric, vendor,
+    // site and classification are deliberately not columns any more —
+    // they live on the detail page.
+    expect(screen.getAllByText("Healthy")).toHaveLength(2);
+    expect(screen.queryByText("2/2 up")).not.toBeInTheDocument();
   });
 
   it("updates the URL search params when a filter changes", async () => {

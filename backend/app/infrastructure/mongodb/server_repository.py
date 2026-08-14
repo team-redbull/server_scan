@@ -17,7 +17,7 @@ from typing import Any
 from pymongo.asynchronous.collection import AsyncCollection
 
 from app.domain.models.server import Server
-from app.domain.ports.repository import Page
+from app.domain.ports.repository import Page, SiteBreakdownRow
 from app.domain.services.cursor import CursorPosition, decode_cursor, encode_cursor
 from app.domain.services.search import SORT_ACCESSORS, build_search_query, resolve_sort_field
 from app.infrastructure.mongodb.client import MongoClientHolder
@@ -146,3 +146,47 @@ class MongoServerRepository:
 
     async def count(self, filters: dict[str, object]) -> int:
         return await self._collection.count_documents(dict(filters))
+
+    async def site_breakdown(self) -> list[SiteBreakdownRow]:
+        """Per (site, vendor, health, maintenance) server counts for the
+        whole estate, in one round trip.
+
+        A single `$group` over every server rather than one count query
+        per site/vendor/health combination: the grouping key has a bounded
+        cardinality (5 sites x 3 vendors x 5 severities x 2 maintenance
+        states, plus the unassigned-site bucket), so this returns at most
+        a couple of hundred small rows no matter how large the estate is,
+        and the caller pivots them in Python. The alternative — a
+        `count_documents` per cell — would be ~150 round trips to build
+        one screen.
+
+        This is a full pass over the collection, which no index avoids for
+        a grouping with no match stage. That is why the route in front of
+        it caches: see `app.api.v1.sites`.
+        """
+        pipeline: list[dict[str, Any]] = [
+            {
+                "$group": {
+                    "_id": {
+                        "site_id": "$site_id",
+                        "vendor": "$identity.vendor",
+                        "health": "$health.overall",
+                        "maintenance": "$maintenance.enabled",
+                    },
+                    "count": {"$sum": 1},
+                }
+            }
+        ]
+        rows: list[SiteBreakdownRow] = []
+        async for doc in await self._collection.aggregate(pipeline):
+            key = doc["_id"]
+            rows.append(
+                SiteBreakdownRow(
+                    site_id=key.get("site_id"),
+                    vendor=key.get("vendor"),
+                    health=key.get("health"),
+                    maintenance=bool(key.get("maintenance")),
+                    count=int(doc["count"]),
+                )
+            )
+        return rows

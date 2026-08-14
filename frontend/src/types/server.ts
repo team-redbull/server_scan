@@ -12,7 +12,15 @@
  * placeholder-ish for now — don't build UI that assumes rich data here.
  */
 
-export type Vendor = "dell" | "cisco" | "hpe" | "unknown";
+/** The three vendors this platform ingests from. There is no "unknown":
+ * every server arrives through a vendor-specific collector, so the
+ * vendor is known by construction. */
+export type Vendor = "dell" | "cisco" | "hp";
+
+/** The closed set of sites. A server's site is parsed from its name
+ * (`ocp4-prod-one-infra-01` -> "one"); `null` means the name carries no
+ * site token and is surfaced as "Unassigned". */
+export type SiteCode = "one" | "two" | "three" | "four" | "five";
 
 export type HealthSeverity = "UNKNOWN" | "HEALTHY" | "INFO" | "WARNING" | "CRITICAL";
 
@@ -61,7 +69,7 @@ export interface ServerSummary {
   name: string;
   vendor: Vendor;
   model: string;
-  site_id: string;
+  site_id: SiteCode | null;
   manager_id: string;
   classification: Classification;
   health: HealthSummary;
@@ -211,7 +219,7 @@ export interface ServerDetail {
   classification: Classification;
   health: HealthSummary;
   maintenance: MaintenanceState;
-  site_id: string;
+  site_id: SiteCode | null;
   manager_id: string;
   tags?: string[];
   last_seen_at: string | null;

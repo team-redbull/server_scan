@@ -1,7 +1,8 @@
 import { Link, useLocation } from "react-router";
 
 const LINKS = [
-  { to: "/", label: "Inventory" },
+  { to: "/", label: "Sites" },
+  { to: "/servers", label: "Servers" },
   { to: "/classification-rules", label: "Classification Rules" },
   { to: "/health-policies", label: "Health Policies" },
 ];
@@ -15,7 +16,7 @@ export function AppNav() {
   const location = useLocation();
 
   return (
-    <nav className="border-b border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-950">
+    <nav className="border-b border-[var(--border-subtle)] bg-[var(--surface-raised)]">
       <div className="mx-auto flex max-w-7xl items-center gap-6 px-8 py-3">
         {LINKS.map((link) => {
           const isActive =
@@ -26,8 +27,8 @@ export function AppNav() {
               to={link.to}
               className={`text-sm font-medium ${
                 isActive
-                  ? "text-blue-600 dark:text-blue-400"
-                  : "text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-100"
+                  ? "text-[var(--text-primary)]"
+                  : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
               }`}
             >
               {link.label}

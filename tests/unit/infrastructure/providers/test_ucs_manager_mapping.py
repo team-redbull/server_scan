@@ -81,7 +81,6 @@ class TestComputeUnitToProviderServer:
         result = compute_unit_to_provider_server(
             blade,
             manager_id="mgr_ucsm_dc1",
-            site_id="site_dc1",
             profile_by_dn={profile.dn: profile},
             template_dn_by_name={template.name: template.dn},
             mgmt_if=mgmt_if,
@@ -95,7 +94,6 @@ class TestComputeUnitToProviderServer:
         assert result.serial == "FCH12345678"
         assert result.system_uuid == "11111111-2222-3333-4444-555555555555"
         assert result.manager_id == "mgr_ucsm_dc1"
-        assert result.site_id == "site_dc1"
         assert result.profile_template_name == "worker-template"
         assert result.profile_template_external_id == "org-root/ls-template-worker-template"
         assert result.cpu_sockets == 2
@@ -114,7 +112,6 @@ class TestComputeUnitToProviderServer:
         result = compute_unit_to_provider_server(
             blade,
             manager_id="mgr_1",
-            site_id=None,
             profile_by_dn={},
             template_dn_by_name={},
             mgmt_if=None,
@@ -129,7 +126,6 @@ class TestComputeUnitToProviderServer:
         result = compute_unit_to_provider_server(
             blade,
             manager_id="mgr_1",
-            site_id=None,
             profile_by_dn={profile.dn: profile},
             template_dn_by_name={},
             mgmt_if=None,
@@ -144,7 +140,6 @@ class TestComputeUnitToProviderServer:
         result = compute_unit_to_provider_server(
             blade,
             manager_id="mgr_1",
-            site_id=None,
             profile_by_dn={profile.dn: profile},
             template_dn_by_name={},  # no lsServiceProfileTemplate matched
             mgmt_if=None,
@@ -157,7 +152,6 @@ class TestComputeUnitToProviderServer:
         result = compute_unit_to_provider_server(
             _blade(),
             manager_id="mgr_1",
-            site_id=None,
             profile_by_dn={},
             template_dn_by_name={},
             mgmt_if=None,
@@ -171,7 +165,6 @@ class TestComputeUnitToProviderServer:
         result = compute_unit_to_provider_server(
             _blade(),
             manager_id="mgr_1",
-            site_id=None,
             profile_by_dn={},
             template_dn_by_name={},
             mgmt_if=_mgmt_if(ext_ip=unset_ip),
@@ -183,7 +176,6 @@ class TestComputeUnitToProviderServer:
         result = compute_unit_to_provider_server(
             _blade(),
             manager_id="mgr_1",
-            site_id=None,
             profile_by_dn={},
             template_dn_by_name={},
             mgmt_if=None,
@@ -198,7 +190,6 @@ class TestComputeUnitToProviderServer:
         result = compute_unit_to_provider_server(
             _blade(),
             manager_id="mgr_1",
-            site_id=None,
             profile_by_dn={},
             template_dn_by_name={},
             mgmt_if=None,
@@ -217,7 +208,6 @@ class TestComputeUnitToProviderServer:
         result = compute_unit_to_provider_server(
             _blade(num_of_cpus=raw),
             manager_id="mgr_1",
-            site_id=None,
             profile_by_dn={},
             template_dn_by_name={},
             mgmt_if=None,
@@ -247,7 +237,6 @@ class TestComputeUnitToProviderServer:
         result = compute_unit_to_provider_server(
             rack_unit,
             manager_id="mgr_1",
-            site_id="site_dc2",
             profile_by_dn={},
             template_dn_by_name={},
             mgmt_if=None,

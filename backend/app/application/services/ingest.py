@@ -61,6 +61,7 @@ from app.domain.services.normalize import normalize_text
 from app.domain.services.search_tokens import build_search_tokens
 from app.domain.value_objects.bmc_address import parse_bmc_address
 from app.domain.value_objects.mac_address import normalize_mac
+from app.domain.value_objects.site import parse_site_code
 from app.utils.ids import new_id
 from app.utils.timeutil import utcnow
 
@@ -211,10 +212,20 @@ class IngestService:
         """Returns True if a new server document was created, False if an
         existing one was updated.
         """
+        # No fallback vendor. Every server arrives through a
+        # vendor-specific collector, so an unrecognized value means that
+        # provider is emitting something it shouldn't — a bug to surface,
+        # not to paper over with an "unknown" that then pollutes every
+        # per-vendor count in the UI. `ingest()`'s per-server handler
+        # catches this, logs the offending string, counts it in
+        # `IngestSummary.errors`, and moves to the next server.
         try:
             vendor = Vendor(ps.vendor)
-        except ValueError:
-            vendor = Vendor.UNKNOWN
+        except ValueError as exc:
+            raise ValueError(
+                f"Provider reported unsupported vendor {ps.vendor!r} for "
+                f"{ps.external_id!r}; expected one of {[v.value for v in Vendor]}."
+            ) from exc
 
         serial_normalized = normalize_text(ps.serial)
         existing = (
@@ -406,6 +417,11 @@ class IngestService:
                 "openshift": existing.openshift,
             }
 
+        # The name is the authority on site, not the collector's config —
+        # see `app.domain.value_objects.site`. `None` (a name with no site
+        # token) is a real, surfaced state, never defaulted to a site.
+        site_id = parse_site_code(ps.name)
+
         server = Server(
             _id=server_id,
             name=ps.name,
@@ -417,7 +433,7 @@ class IngestService:
             hardware=hardware,
             network=network,
             connectivity=connectivity,
-            site_id=ps.site_id,
+            site_id=site_id,
             manager_id=ps.manager_id,
             tags=list(ps.tags),
             source_provider=provider_type,
@@ -439,7 +455,7 @@ class IngestService:
                 # in `ClassificationService`'s and `HealthPolicyService`'s
                 # own docstrings.
                 manager_type=None,
-                site_id=ps.site_id,
+                site_id=site_id,
                 serial=ps.serial,
                 model=ps.model,
             )

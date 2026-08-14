@@ -12,6 +12,9 @@ def _server(**overrides: object) -> Server:
     defaults: dict[str, object] = {
         "_id": "srv_test",
         "name": "ocp-dell-worker-001",
+        # Required now that `Identity.vendor` has no default; overridable
+        # by the tests that actually care about vendor.
+        "identity": Identity(vendor=Vendor.DELL),
         "created_at": NOW,
         "updated_at": NOW,
     }

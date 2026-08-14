@@ -63,7 +63,11 @@ class ProviderServer:
     bmc_address_raw: str | None = None
     bmc_mac: str | None = None
 
-    site_id: str | None = None
+    # No `site_id`: a provider does not get to declare a server's site.
+    # It is derived from the server's own name at ingest
+    # (`app.domain.value_objects.site.parse_site_code`), because a
+    # misconfigured manager would otherwise mislabel every server it
+    # collects with nothing downstream able to tell.
     manager_id: str | None = None
 
     # The reusable profile/deployment template this server's configuration

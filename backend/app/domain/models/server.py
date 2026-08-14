@@ -17,7 +17,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
-from app.domain.enums import Vendor
+from app.domain.enums import SiteCode, Vendor
 from app.domain.models.classification import Classification
 from app.domain.models.connectivity import Connectivity
 from app.domain.models.hardware import Hardware
@@ -28,7 +28,10 @@ from app.domain.models.openshift import OpenShiftLifecycle
 
 
 class Identity(BaseModel):
-    vendor: Vendor = Vendor.UNKNOWN
+    # Required, no default: the vendor is a property of which collector
+    # produced the record, so it is always known by construction. See
+    # `Vendor`'s docstring on why there is no `UNKNOWN` to fall back to.
+    vendor: Vendor
     serial: str | None = None
     serial_normalized: str = ""
     system_uuid: str | None = None
@@ -82,7 +85,9 @@ class Server(BaseModel):
     model: str | None = None
     model_normalized: str = ""
 
-    identity: Identity = Field(default_factory=Identity)
+    # Required rather than defaulted: `Identity.vendor` has no fallback
+    # value, so there is no meaningful empty identity to construct.
+    identity: Identity
     profile_template: ProfileTemplate = Field(default_factory=ProfileTemplate)
     hardware: Hardware = Field(default_factory=Hardware)
     network: NetworkInfo = Field(default_factory=NetworkInfo)
@@ -92,7 +97,10 @@ class Server(BaseModel):
     maintenance: Maintenance = Field(default_factory=Maintenance)
     openshift: OpenShiftLifecycle = Field(default_factory=OpenShiftLifecycle)
 
-    site_id: str | None = None
+    # Derived from `name` at ingest (`app.domain.value_objects.site`), not
+    # taken from the collector's config. `None` means the name carries no
+    # site token — surfaced as "Unassigned", never defaulted to a site.
+    site_id: SiteCode | None = None
     manager_id: str | None = None
 
     tags: list[str] = Field(default_factory=list)

@@ -2,7 +2,7 @@
 
 Produces `ProviderServer` DTOs (the same shape a real Dell OpenManage /
 Cisco UCS Manager / HPE OneView collector will produce) across Dell/Cisco/
-HPE vendors, with realistic-shaped names, varying hardware, and — for
+HP vendors, with realistic-shaped names, varying hardware, and — for
 Cisco — fabric-interconnect connectivity attachments.
 
 Two independent axes of "realistic" are deliberately kept separate:
@@ -43,7 +43,7 @@ import random
 import uuid
 from collections.abc import Iterator
 
-from app.domain.enums import ManagerType
+from app.domain.enums import ManagerType, SiteCode
 from app.domain.models.common import AuditFields
 from app.domain.models.manager import Manager
 from app.domain.models.site import Site
@@ -57,17 +57,27 @@ from app.utils.ids import ID_PREFIXES
 # site/manager documents (both have a unique index on `name`). Only the
 # *servers* generated vary with `seed`/`count`.
 
-_SITE_CODES = ("ams1", "fra2", "nyc3", "sjc4")
+_SITE_CODES = tuple(member.value for member in SiteCode)
 _SITE_NAMES = {
-    "ams1": "Amsterdam DC1",
-    "fra2": "Frankfurt DC2",
-    "nyc3": "New York DC3",
-    "sjc4": "San Jose DC4",
+    "one": "Site One",
+    "two": "Site Two",
+    "three": "Site Three",
+    "four": "Site Four",
+    "five": "Site Five",
 }
 
 
 def _site_id(code: str) -> str:
-    return f"{ID_PREFIXES['site']}_fake_{code}"
+    """A site's id *is* its code.
+
+    No `site_fake_<code>` prefix any more: a server's site is derived
+    from its name (`app.domain.value_objects.site.parse_site_code`), which
+    can only ever yield a bare `SiteCode`. Prefixing the `Site` document's
+    id would mean the id a server carries and the id a site document has
+    are different strings — which is exactly the mismatch that made
+    filtering by site silently return nothing.
+    """
+    return code
 
 
 def _manager_id(slug: str) -> str:
@@ -143,31 +153,46 @@ def _manager_for(vendor: str, code: str) -> str:
         return _manager_id(f"ome-{code}")
     if vendor == "cisco":
         return _manager_id(f"ucsm-{code}")
-    return _manager_id(f"oneview-{code}")  # hpe
+    return _manager_id(f"oneview-{code}")  # hp
 
 
 # --- Vendor-specific catalogs -------------------------------------------
 
-_VENDORS = ("dell", "cisco", "hpe")
+_VENDORS = ("dell", "cisco", "hp")
 
 _MODELS: dict[str, tuple[str, ...]] = {
     "dell": ("PowerEdge R650", "PowerEdge R750", "PowerEdge R6515"),
     "cisco": ("UCS C220 M6", "UCS C240 M6", "UCS B200 M6"),
-    "hpe": ("ProLiant DL380 Gen11", "ProLiant DL360 Gen11", "ProLiant DL325 Gen11"),
+    "hp": ("ProLiant DL380 Gen11", "ProLiant DL360 Gen11", "ProLiant DL325 Gen11"),
 }
 
 _CPU_MODELS: dict[str, tuple[str, ...]] = {
     "dell": ("Intel Xeon Gold 6338", "Intel Xeon Platinum 8358"),
     "cisco": ("Intel Xeon Gold 6348", "Intel Xeon Silver 4314"),
-    "hpe": ("AMD EPYC 7513", "AMD EPYC 9354"),
+    "hp": ("AMD EPYC 7513", "AMD EPYC 9354"),
 }
 
-_NAME_ROLES = ("master", "worker")
+# UPI node roles, in the real cluster vocabulary.
+_NAME_ROLES = ("compute", "control-plane", "infra")
 
-# (pattern-family, weight) — weighted so "unclassified-shaped" names are a
-# meaningful minority, matching a realistic mixed estate rather than an
-# evenly-split one.
-_NAME_FAMILIES = ("hosted_cluster", "hosted_cluster", "upi", "upi", "unclassified")
+# Environment segment some UPI hostnames carry (`ocp4-prod-one-infra-01`),
+# and some don't (`ocp4-one-control-plane-02`). Both real shapes.
+_NAME_ENVIRONMENTS = ("prod", "prep", None)
+
+# (pattern-family, weight) — weighted so "unclassified-shaped" names stay
+# a small minority, matching a realistic mixed estate. The unclassified
+# family deliberately carries no site token either, so the UI's
+# "Unclassified" and "Unassigned site" states both get real fixtures
+# instead of being unreachable in dev.
+_NAME_FAMILIES = (
+    "hosted_cluster",
+    "hosted_cluster",
+    "hosted_cluster_hw",
+    "upi",
+    "upi",
+    "upi",
+    "unclassified",
+)
 
 _DRIVE_MEDIA = ("NVME", "SSD", "SSD", "HDD")
 _DRIVE_HEALTH = ("OK", "OK", "OK", "OK", "DEGRADED", "FAILED")
@@ -200,7 +225,7 @@ def _random_uuid(rng: random.Random) -> str:
 def _bmc_address(vendor: str, ip: str) -> str:
     if vendor == "dell":
         return f"idrac-virtualmedia://{ip}/redfish/v1/Systems/System.Embedded.1"
-    if vendor == "hpe":
+    if vendor == "hp":
         return f"redfish-virtualmedia://{ip}/redfish/v1/Systems/1"
     return f"ipmi://{ip}:623"  # cisco
 
@@ -211,13 +236,13 @@ def _fake_ip(rng: random.Random, site_index: int, host_index: int) -> str:
 
 # Per-vendor template-name pools, in each platform's own naming style —
 # UCS Manager's Service Profile Templates, Intersight's Server Profile
-# Templates, HPE OneView's Server Profile Templates, and Dell OME's
+# Templates, HP OneView's Server Profile Templates, and Dell OME's
 # Deployment Templates (see `app.domain.models.server.ProfileTemplate`'s
 # docstring for the full per-vendor mapping this DTO field feeds into).
 _TEMPLATE_NAMES: dict[str, tuple[str, ...]] = {
     "cisco": ("SPT-OCP-Worker-B200", "SPT-OCP-Master-C240", "SPT-UPI-Generic"),
     "dell": ("DT-OCP-Worker-R760", "DT-OCP-Master-R760", "DT-UPI-Baseline"),
-    "hpe": ("SPT-OCP-Worker-DL380", "SPT-OCP-Master-DL380", "SPT-UPI-Baseline"),
+    "hp": ("SPT-OCP-Worker-DL380", "SPT-OCP-Master-DL380", "SPT-UPI-Baseline"),
 }
 
 
@@ -233,21 +258,51 @@ def _profile_template(rng: random.Random, vendor: str) -> tuple[str | None, str 
     name = rng.choice(_TEMPLATE_NAMES[vendor])
     if vendor == "cisco":
         external_id = name  # UCS Manager references templates by name (srcTemplName)
-    elif vendor == "hpe":
+    elif vendor == "hp":
         external_id = f"/rest/server-profile-templates/{rng.getrandbits(32):08x}"
     else:
         external_id = str(rng.randint(1000, 9999))  # OME TemplateId
     return name, external_id
 
 
-def _build_name(rng: random.Random, vendor: str, index: int) -> str:
+def _build_name(
+    rng: random.Random, vendor: str, index: int, site_code: str, model: str, memory_gib: int
+) -> str:
+    """A hostname in the shapes this estate actually uses.
+
+    Every shape but the deliberate `unclassified` minority embeds
+    `site_code` as a whole `-`-delimited token, because the name is what
+    `app.domain.value_objects.site.parse_site_code` reads the site back
+    out of, and what the seeded classification rules key on to decide
+    HOSTED_CLUSTER vs UPI. Getting these shapes wrong here would make
+    dev/CI fixtures classify differently from production, which is the
+    whole point of generating them.
+    """
     family = rng.choice(_NAME_FAMILIES)
+
     if family == "hosted_cluster":
-        role = rng.choice(_NAME_ROLES)
-        return f"ocp-{vendor}-{role}-{index:03d}"
+        # ocp4-hypershift-five-01 / ocp4-hypershift-data-five-02
+        segment = "hypershift-data" if rng.random() < 0.35 else "hypershift"
+        return f"ocp4-{segment}-{site_code}-{index % 100:02d}"
+
+    if family == "hosted_cluster_hw":
+        # ocp-dell-r660-five-128c-1024gb-<serial>
+        short_model = model.split()[-1].lower()
+        cores = rng.choice((64, 128, 192))
+        return (
+            f"ocp-{vendor}-{short_model}-{site_code}-{cores}c-"
+            f"{memory_gib}gb-{vendor[:3].upper()}{index:07d}"
+        )
+
     if family == "upi":
+        # ocp4-five-compute-01 / ocp4-one-control-plane-02 /
+        # ocp4-prod-one-infra-01
         role = rng.choice(_NAME_ROLES)
-        return f"upi-{vendor}-{role}-{index:03d}"
+        environment = rng.choice(_NAME_ENVIRONMENTS)
+        prefix = f"ocp4-{environment}" if environment else "ocp4"
+        return f"{prefix}-{site_code}-{role}-{index % 100:02d}"
+
+    # No site token and no classifiable shape, on purpose.
     return f"random-server-{index:04d}"
 
 
@@ -324,8 +379,14 @@ def generate_servers(*, seed: int, count: int) -> Iterator[ProviderServer]:
         if rng.random() < 0.15:
             vendor = rng.choice(_VENDORS)
 
-        name = _build_name(rng, vendor, index)
+        # `model` and `memory_gib` are drawn before `name` because one of
+        # the real hostname shapes embeds both
+        # (`ocp-dell-r660-five-128c-1024gb-<serial>`).
         model = rng.choice(_MODELS[vendor])
+        memory_gib = rng.choice((128, 256, 512, 1024))
+        memory_total_bytes = memory_gib * 1024**3
+
+        name = _build_name(rng, vendor, index, site_code, model, memory_gib)
         serial = f"{vendor[:3].upper()}{index:07d}"
         system_uuid = _random_uuid(rng)
 
@@ -339,9 +400,6 @@ def generate_servers(*, seed: int, count: int) -> Iterator[ProviderServer]:
         cpu_cores = rng.choice((16, 24, 32, 48, 64))
         cpu_threads = cpu_cores * 2
         cpu_model = rng.choice(_CPU_MODELS[vendor])
-
-        memory_gib = rng.choice((128, 256, 512, 1024))
-        memory_total_bytes = memory_gib * 1024**3
 
         drive_count = rng.randint(2, 8)
         storage_drives, storage_total_bytes = _build_storage_drives(rng, drive_count)
@@ -363,7 +421,6 @@ def generate_servers(*, seed: int, count: int) -> Iterator[ProviderServer]:
             nic_macs=nic_macs,
             bmc_address_raw=bmc_address_raw,
             bmc_mac=bmc_mac,
-            site_id=_site_id(site_code),
             manager_id=_manager_for(vendor, site_code),
             profile_template_name=template_name,
             profile_template_external_id=template_external_id,

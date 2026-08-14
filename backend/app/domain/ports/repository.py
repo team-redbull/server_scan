@@ -16,6 +16,23 @@ from app.domain.models.server import Server
 
 
 @dataclass(frozen=True, slots=True)
+class SiteBreakdownRow:
+    """One `$group` bucket from `ServerRepository.site_breakdown`.
+
+    Values are the raw stored strings, not enums: this is a count of what
+    is actually in the database, including any value a previous schema
+    wrote. The API layer decides how to present a value it doesn't
+    recognize rather than this failing to decode it.
+    """
+
+    site_id: str | None
+    vendor: str | None
+    health: str | None
+    maintenance: bool
+    count: int
+
+
+@dataclass(frozen=True, slots=True)
 class Page:
     """One page of a keyset-paginated `Server` listing.
 
@@ -59,3 +76,5 @@ class ServerRepository(Protocol):
         ...
 
     async def count(self, filters: dict[str, object]) -> int: ...
+
+    async def site_breakdown(self) -> list[SiteBreakdownRow]: ...

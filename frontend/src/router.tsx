@@ -7,6 +7,7 @@ import { HealthPoliciesPage } from "@/features/health/HealthPoliciesPage";
 import { PolicyEditorPage } from "@/features/health/PolicyEditorPage";
 import { InventoryPage } from "@/features/inventory/InventoryPage";
 import { ServerDetailPage } from "@/features/servers/ServerDetailPage";
+import { SitesOverviewPage } from "@/features/sites/SitesOverviewPage";
 import { StatusPage } from "@/routes/StatusPage";
 
 export const router = createBrowserRouter([
@@ -14,7 +15,14 @@ export const router = createBrowserRouter([
     element: <AppLayout />,
     children: [
       {
+        // The site overview is the landing page: at fleet scale a flat
+        // list can't answer "is anything wrong?" without sorting and
+        // scanning, and five cards can.
         path: "/",
+        element: <SitesOverviewPage />,
+      },
+      {
+        path: "/servers",
         element: <InventoryPage />,
       },
       {

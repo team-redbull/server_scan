@@ -1,17 +1,20 @@
 from datetime import UTC, datetime
 
-from app.domain.enums import LinkState
+from app.domain.enums import LinkState, Vendor
 from app.domain.models.connectivity import Connectivity, ConnectivityFacts
 from app.domain.models.hardware import Hardware, Power, Psu, Storage, StorageDrive
 from app.domain.models.network import NetworkInfo, NetworkInterface
-from app.domain.models.server import Server
+from app.domain.models.server import Identity, Server
 from app.domain.services.health.facts import extract_facts
 
 NOW = datetime.now(UTC)
+# `Identity.vendor` is required (no UNKNOWN fallback) — these tests do not
+# exercise vendor, so one shared value keeps them focused.
+IDENTITY = Identity(vendor=Vendor.DELL)
 
 
 def test_extract_facts_on_empty_server_returns_zeroed_facts() -> None:
-    server = Server(_id="srv_x", name="x", created_at=NOW, updated_at=NOW)
+    server = Server(_id="srv_x", name="x", identity=IDENTITY, created_at=NOW, updated_at=NOW)
     facts = extract_facts(server)
     assert facts["storage.drive_count"] == 0
     assert facts["storage.failed_drive_count"] == 0
@@ -22,6 +25,7 @@ def test_extract_facts_counts_failed_drives() -> None:
     server = Server(
         _id="srv_x",
         name="x",
+        identity=IDENTITY,
         created_at=NOW,
         updated_at=NOW,
         hardware=Hardware(
@@ -44,6 +48,7 @@ def test_extract_facts_reads_connectivity_facts_directly() -> None:
     server = Server(
         _id="srv_x",
         name="x",
+        identity=IDENTITY,
         created_at=NOW,
         updated_at=NOW,
         connectivity=Connectivity(
@@ -59,6 +64,7 @@ def test_extract_facts_counts_failed_psus() -> None:
     server = Server(
         _id="srv_x",
         name="x",
+        identity=IDENTITY,
         created_at=NOW,
         updated_at=NOW,
         hardware=Hardware(
@@ -74,6 +80,7 @@ def test_extract_facts_link_states() -> None:
     server = Server(
         _id="srv_x",
         name="x",
+        identity=IDENTITY,
         created_at=NOW,
         updated_at=NOW,
         network=NetworkInfo(

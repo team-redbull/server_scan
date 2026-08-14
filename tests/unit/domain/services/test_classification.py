@@ -46,7 +46,7 @@ def _rule(
 
 
 def _server(
-    name: str, *, vendor: Vendor = Vendor.UNKNOWN, site_id: str | None = None
+    name: str, *, vendor: Vendor = Vendor.DELL, site_id: str | None = None
 ) -> ClassifiableServer:
     return ClassifiableServer(name=name, vendor=vendor, manager_type=None, site_id=site_id)
 
@@ -97,7 +97,7 @@ def test_hp_hosted_falls_back_to_system_default() -> None:
     # HP has no vendor-scoped rule in this set, so the Dell-scoped rules
     # don't even match its scope — the system default is the only
     # candidate that reaches the pattern check.
-    result = classify(_server("ocp-hp-001", vendor=Vendor.HPE), ACCEPTANCE_RULES, ENGINE)
+    result = classify(_server("ocp-hp-001", vendor=Vendor.HP), ACCEPTANCE_RULES, ENGINE)
     assert result.installation_type == InstallationType.HOSTED_CLUSTER
     assert result.rule_id == "rule_sys_hosted"
 

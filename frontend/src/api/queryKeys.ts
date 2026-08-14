@@ -38,6 +38,10 @@ export const queryKeys = {
     all: ["healthMetrics"] as const,
     list: () => [...queryKeys.healthMetrics.all, "list"] as const,
   },
+  sites: {
+    all: ["sites"] as const,
+    list: () => [...queryKeys.sites.all, "list"] as const,
+  },
   events: {
     all: ["events"] as const,
     lists: () => [...queryKeys.events.all, "list"] as const,

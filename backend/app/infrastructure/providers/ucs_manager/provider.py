@@ -209,7 +209,6 @@ class UcsManagerProvider:
                 yield compute_unit_to_provider_server(
                     server_mo,
                     manager_id=self._manager.id,
-                    site_id=self._manager.site_id,
                     profile_by_dn=profile_by_dn,
                     template_dn_by_name=template_dn_by_name,
                     mgmt_if=mgmt_if,

@@ -22,7 +22,7 @@ from typing import Any
 from pymongo import ASCENDING, DESCENDING
 from pymongo.asynchronous.collection import AsyncCollection
 
-from app.domain.enums import InstallationType, Vendor
+from app.domain.enums import InstallationType, SiteCode
 from app.domain.models.classification_rule import ClassificationRule, RuleScope
 from app.infrastructure.mongodb.client import MongoClientHolder
 from app.infrastructure.mongodb.indexes import CLASSIFICATION_RULES_COLLECTION
@@ -76,11 +76,31 @@ class MongoClassificationRuleRepository:
         return result.deleted_count > 0
 
 
+# The site token, as one alternation, built from `SiteCode` so adding a
+# site to the enum can't leave these patterns silently behind.
+_SITE_ALTERNATION = "|".join(member.value for member in SiteCode)
+
+# Each pattern is fully anchored and names the exact shape it accepts,
+# rather than a loose prefix. That matters because HOSTED_CLUSTER and UPI
+# hostnames share the `ocp4-` prefix — only a later token tells them
+# apart — so a prefix rule like the old `^ocp-.*` would match both and
+# leave the outcome depending on rule ordering. Anchored, mutually
+# exclusive patterns make the classification independent of order.
+_HYPERSHIFT_PATTERN = rf"^ocp4-hypershift(-data)?-({_SITE_ALTERNATION})-\d+$"
+_HARDWARE_SPEC_PATTERN = rf"^ocp-[a-z]+-[a-z0-9]+-({_SITE_ALTERNATION})-\d+c-\d+gb-.+$"
+_UPI_PATTERN = rf"^ocp4-([a-z]+-)?({_SITE_ALTERNATION})-(compute|control-plane|infra)-\d+$"
+
+
 def default_system_rules() -> list[ClassificationRule]:
-    """The platform spec's own acceptance scenario (spec §70), returned as
-    ready-to-persist `ClassificationRule`s: two unscoped SYSTEM_DEFAULT
-    rules, plus two Dell-scoped VENDOR_CUSTOM rules that outrank them for
-    Dell servers.
+    """The three unscoped SYSTEM_DEFAULT rules that cover this estate's
+    real hostname conventions, as ready-to-persist `ClassificationRule`s:
+    two shapes of hosted cluster and one of UPI.
+
+    All three are `system=True` (locked to enabled-only edits after
+    creation) because they encode a naming convention that holds fleet-
+    wide, not a per-vendor preference. Vendor-scoped rules are exactly the
+    kind of thing an operator adds on top through the UI, at a higher
+    priority band — see `PRIORITY_BANDS`.
 
     Deliberately NOT wired into app startup or the seed script here —
     that's a separate integration step (see this module's caller). A
@@ -90,77 +110,63 @@ def default_system_rules() -> list[ClassificationRule]:
     `name` index means a second seed attempt fails loudly
     (`DuplicateKeyError`) rather than silently double-inserting, which is
     the intended "call this exactly once" contract.
-
-    Only the two SYSTEM_DEFAULT rules get `system=True` (and are therefore
-    locked to enabled-only edits after creation) — the Dell VENDOR_CUSTOM
-    rules are ordinary, editable/deletable rules that merely happen to
-    ship pre-seeded; see `PRIORITY_BANDS`'s docstring and the spec's own
-    distinction between "system" and "vendor default".
     """
     now = utcnow()
     return [
         ClassificationRule(
             id=new_id("classification_rule"),
-            name="system-default-hosted-cluster",
-            description="Default OpenShift hosted-cluster naming convention (ocp-*).",
+            name="system-default-hypershift-hosted-cluster",
+            description=(
+                "Hosted control planes: ocp4-hypershift-<site>-NN and "
+                "ocp4-hypershift-data-<site>-NN."
+            ),
             enabled=True,
             system=True,
             installation_type=InstallationType.HOSTED_CLUSTER,
             scope=RuleScope(),
             field="name",
-            pattern=r"^ocp-.*",
+            pattern=_HYPERSHIFT_PATTERN,
             source="SYSTEM_DEFAULT",
             priority=100,
             order=0,
+            created_at=now,
+            updated_at=now,
+        ),
+        ClassificationRule(
+            id=new_id("classification_rule"),
+            name="system-default-hardware-hosted-cluster",
+            description=(
+                "Hosted-cluster nodes named after their hardware spec: "
+                "ocp-<vendor>-<model>-<site>-<cores>c-<memory>gb-<serial>."
+            ),
+            enabled=True,
+            system=True,
+            installation_type=InstallationType.HOSTED_CLUSTER,
+            scope=RuleScope(),
+            field="name",
+            pattern=_HARDWARE_SPEC_PATTERN,
+            source="SYSTEM_DEFAULT",
+            priority=100,
+            order=1,
             created_at=now,
             updated_at=now,
         ),
         ClassificationRule(
             id=new_id("classification_rule"),
             name="system-default-upi",
-            description="Default user-provisioned-infrastructure naming convention (upi-*).",
+            description=(
+                "User-provisioned infrastructure: ocp4-[<env>-]<site>-<role>-NN, "
+                "where role is compute, control-plane or infra."
+            ),
             enabled=True,
             system=True,
             installation_type=InstallationType.UPI,
             scope=RuleScope(),
             field="name",
-            pattern=r"^upi-.*",
+            pattern=_UPI_PATTERN,
             source="SYSTEM_DEFAULT",
             priority=100,
-            order=0,
-            created_at=now,
-            updated_at=now,
-        ),
-        ClassificationRule(
-            id=new_id("classification_rule"),
-            name="dell-vendor-hosted-cluster",
-            description="Dell-specific OpenShift hosted-cluster naming convention (ocp-dell-*).",
-            enabled=True,
-            system=False,
-            installation_type=InstallationType.HOSTED_CLUSTER,
-            scope=RuleScope(vendor=Vendor.DELL),
-            field="name",
-            pattern=r"^ocp-dell-.*",
-            source="VENDOR_CUSTOM",
-            priority=300,
-            order=0,
-            created_at=now,
-            updated_at=now,
-        ),
-        ClassificationRule(
-            id=new_id("classification_rule"),
-            name="dell-vendor-upi",
-            description="Dell-specific user-provisioned-infrastructure naming convention "
-            "(upi-dell-*).",
-            enabled=True,
-            system=False,
-            installation_type=InstallationType.UPI,
-            scope=RuleScope(vendor=Vendor.DELL),
-            field="name",
-            pattern=r"^upi-dell-.*",
-            source="VENDOR_CUSTOM",
-            priority=300,
-            order=0,
+            order=2,
             created_at=now,
             updated_at=now,
         ),
