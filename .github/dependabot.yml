@@ -1,50 +1,50 @@
-# Keeps the SHA-pinned GitHub Actions in .github/workflows/ci.yml current.
+# Keeps this repository's pinned dependencies current.
 #
-# This file is what makes SHA pinning safe rather than merely strict. A
-# pinned action never updates itself, so without automation the pins rot
-# into "old and unpatched" — the opposite of the security posture they
-# exist for. Dependabot understands the `uses: owner/repo@<sha> # vX.Y.Z`
-# form and opens a PR that bumps both the SHA and the comment, so every
-# upgrade is a reviewable diff rather than something that silently
-# changed under a mutable tag.
+# This file is what makes the SHA pinning in .github/workflows/ci.yml safe
+# rather than merely strict. A pinned action never updates itself, so
+# without automation the pins rot into "old and unpatched" — the opposite
+# of the security posture they exist for. Dependabot understands the
+# `uses: owner/repo@<sha> # vX.Y.Z` form and opens a PR that bumps both
+# the SHA and the comment, so every upgrade is a reviewable diff rather
+# than something that silently changed under a mutable tag.
 version: 2
 updates:
+  # GitHub Actions used by .github/workflows/*.yml.
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
       interval: weekly
-    # One PR per action rather than a batched bump: an action upgrade can
-    # change runner behaviour, and a single-action PR is the difference
-    # between "CI broke, revert this line" and bisecting five at once.
-    open-pull-requests-limit: 5
     commit-message:
-      # CI reads the first line to decide the next published image version
-      # (docs/adr/0010). A dependency bump is a patch, never a feature.
+      # CI reads a commit's first line to decide the next published image
+      # version (docs/adr/0010). A dependency bump is a patch, never a
+      # feature, so it must not say `feat`.
       prefix: "fix"
 
+  # Backend Python dependencies (pyproject.toml + uv.lock).
+  # Note: a bump here does NOT regenerate requirements.txt/pylock.toml,
+  # the air-gapped mirroring exports — those still need the `uv export`
+  # commands in docs/air-gap.md run by hand on the PR branch.
   - package-ecosystem: uv
     directory: "/"
     schedule:
       interval: weekly
-    open-pull-requests-limit: 5
     commit-message:
       prefix: "fix"
 
+  # Frontend dependencies (frontend/package.json + package-lock.json).
   - package-ecosystem: npm
     directory: "/frontend"
     schedule:
       interval: weekly
-    open-pull-requests-limit: 5
     commit-message:
       prefix: "fix"
 
-  # Base images in Containerfile / frontend/Containerfile.
+  # Base images in Containerfile and frontend/Containerfile.
   - package-ecosystem: docker
     directories:
       - "/"
       - "/frontend"
     schedule:
       interval: weekly
-    open-pull-requests-limit: 5
     commit-message:
       prefix: "fix"
