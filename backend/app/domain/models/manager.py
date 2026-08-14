@@ -8,10 +8,15 @@ type is currently flat (`parent_manager_id=None`), so the field costs
 nothing for Dell/HPE/Intersight and models the one real hierarchy Cisco
 UCS actually has.
 
-Two separate credential refs (never plaintext values, only secret names —
-see spec: "no credentials in source") because the existing operator already
-treats "credentials to query the manager" and "credentials to control a
-BMC directly" as distinct concerns with different blast radii.
+This document is a *projection of configuration*, not its source: a
+collector derives it from the environment (`tools.run_collector.
+manager_for`) and upserts it so the API and UI can resolve a server's
+`manager_id` to something readable. Where a manager is and how to log
+into it live in settings, one endpoint and login per manager type — see
+`app.domain.ports.credentials`. There is deliberately no `credential_ref`
+here any more: a reference to a secret is only useful when several
+managers of one type need different credentials, which this platform's
+one-per-type model does not have.
 """
 
 from __future__ import annotations
@@ -38,7 +43,11 @@ class Manager(BaseModel):
     parent_manager_id: str | None = None
     endpoint: str | None = None
     enabled: bool = True
-    credential_ref: str | None = None
+    # Reserved and unused: talking to a BMC directly (redfish/IPMI, for
+    # power actions) is a separate concern from querying a manager, with
+    # a different blast radius, and will need its own credentials when
+    # that lands. Kept as a name rather than a value — no plaintext
+    # secret ever belongs in a document.
     bmc_credential_ref: str | None = None
     metadata: dict[str, str] = Field(default_factory=dict)
     audit: AuditFields

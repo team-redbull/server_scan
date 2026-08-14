@@ -46,7 +46,7 @@ from typing import Any
 
 from app.domain.enums import ManagerType
 from app.domain.models.manager import Manager
-from app.domain.ports.credentials import ManagerCredentials
+from app.domain.ports.credentials import ManagerConnection
 from app.domain.ports.provider import ProviderServer
 from app.infrastructure.providers.ucs_manager.client import UcsManagerClient
 from app.infrastructure.providers.ucs_manager.mapping import compute_unit_to_provider_server
@@ -167,7 +167,7 @@ class UcsManagerProvider:
     provider_type = ManagerType.UCS_MANAGER.value
 
     def __init__(
-        self, *, manager: Manager, credentials: ManagerCredentials, timeout_seconds: float
+        self, *, manager: Manager, credentials: ManagerConnection, timeout_seconds: float
     ) -> None:
         if not manager.endpoint:
             raise ValueError(f"Manager {manager.id!r} has no endpoint configured.")

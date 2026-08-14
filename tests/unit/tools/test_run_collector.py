@@ -21,7 +21,7 @@ from tools.run_collector import (
 from app.domain.enums import ManagerType
 from app.domain.models.common import AuditFields
 from app.domain.models.manager import Manager
-from app.domain.ports.credentials import CredentialNotFoundError, ManagerCredentials
+from app.domain.ports.credentials import ManagerConnection, ManagerNotConfiguredError
 from app.domain.ports.provider import ProviderServer
 
 pytestmark = pytest.mark.unit
@@ -34,7 +34,6 @@ def _manager(**overrides: Any) -> Manager:
         "type": ManagerType.UCS_MANAGER,
         "site_id": "site-1",
         "endpoint": "ucsm.lab.example.com",
-        "credential_ref": "ucsm-lab-creds",
         "audit": AuditFields.new(),
     }
     defaults.update(overrides)
@@ -44,13 +43,15 @@ def _manager(**overrides: Any) -> Manager:
 class FakeCredentialResolver:
     def __init__(self, *, error: Exception | None = None) -> None:
         self._error = error
-        self.resolved: list[str] = []
+        self.resolved: list[ManagerType] = []
 
-    async def resolve(self, credential_ref: str) -> ManagerCredentials:
-        self.resolved.append(credential_ref)
+    def resolve(self, manager_type: ManagerType) -> ManagerConnection:
+        self.resolved.append(manager_type)
         if self._error is not None:
             raise self._error
-        return ManagerCredentials(username="admin", password="secret")
+        return ManagerConnection(
+            endpoint="ucsm.lab.example.com", username="admin", password="secret"
+        )
 
 
 class TestBuildProvider:
@@ -60,7 +61,7 @@ class TestBuildProvider:
             _manager(), credential_resolver=resolver, timeout_seconds=5.0
         )
         assert provider.provider_type == ManagerType.UCS_MANAGER.value
-        assert resolver.resolved == ["ucsm-lab-creds"]
+        assert resolver.resolved == [ManagerType.UCS_MANAGER]
 
     @pytest.mark.parametrize(
         "manager_type",
@@ -88,13 +89,10 @@ class TestBuildProvider:
                 timeout_seconds=5.0,
             )
 
-    async def test_missing_credential_ref_is_rejected_before_connecting(self) -> None:
-        resolver = FakeCredentialResolver()
-        with pytest.raises(CredentialNotFoundError, match="no credential_ref"):
-            await _build_provider(
-                _manager(credential_ref=None), credential_resolver=resolver, timeout_seconds=5.0
-            )
-        assert resolver.resolved == []
+    async def test_unconfigured_manager_type_is_rejected_before_connecting(self) -> None:
+        resolver = FakeCredentialResolver(error=ManagerNotConfiguredError("not configured"))
+        with pytest.raises(ManagerNotConfiguredError):
+            await _build_provider(_manager(), credential_resolver=resolver, timeout_seconds=5.0)
 
     async def test_missing_endpoint_is_rejected(self) -> None:
         with pytest.raises(ValueError, match="no endpoint"):
@@ -162,7 +160,7 @@ class TestRunOneManager:
 
     @pytest.mark.parametrize(
         "error",
-        [RuntimeError("unreachable"), CredentialNotFoundError("no secret"), ValueError("bad")],
+        [RuntimeError("unreachable"), ManagerNotConfiguredError("not set"), ValueError("bad")],
     )
     async def test_a_failing_manager_is_isolated_not_propagated(self, error: Exception) -> None:
         """One flaky domain must not abort the run for the other managers

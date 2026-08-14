@@ -1,23 +1,24 @@
-# Runs tools/run_collector.py --manager-type UCS_MANAGER on a schedule,
-# against every enabled Manager document of that type. Uses the exact
-# same image as the API Deployment (see Containerfile's comment on why
-# tools/ rides along in that image rather than getting its own) — only
-# the container's command/args differ.
+# Runs tools/run_collector.py --manager-type UCS_MANAGER on a schedule.
+# Uses the exact same image as the API Deployment (see Containerfile's
+# comment on why tools/ rides along in that image rather than getting its
+# own) — only the container's command/args differ.
 #
-# Credentials: one `secret` source per UCS Manager domain, each projected
-# under its own credential_ref subdirectory at /etc/inventory/credentials
-# (see app.infrastructure.credentials.filesystem's docstring for the
-# exact {ref}/{username,password} shape `tools.run_collector` reads).
-# Adding a new UCS Manager domain means creating its own Secret AND
-# adding a `sources` entry below — a deliberate Phase 1 tradeoff (no
-# secret-store/operator dependency, fully explicit) that becomes a real
-# maintenance cost past a handful of managers; see deploy/README.md.
+# Connection details: one endpoint + login per vendor, as INVENTORY_*
+# environment variables from the `server-inventory-collector-credentials`
+# Secret below. That Secret is the whole of a collector's connection
+# config — there are no Manager documents to create and no credentials
+# volume to mount.
 #
-# This file has exactly one example manager (ucsm-dc1). The Helm chart's
-# ucs-manager-collector-cronjob.yaml template generates this same shape
-# from a `collectors.ucsManager.managers` list instead, and is the better
-# fit once there's more than one or two UCS Manager domains to collect
-# from — prefer it over hand-editing multiple copies of this file.
+# `envFrom` a Secret rather than inline `env` values: `kubectl get cronjob
+# -o yaml` and `kubectl describe pod` both print plain `env` values to
+# anyone who can read workloads in the namespace, while a secretRef shows
+# only the reference.
+#
+# The example Secret at the bottom of this file has a placeholder
+# password and is here to show the shape. Replace it with one from a real
+# secret store, or use the Helm chart, which renders the same thing from
+# `collectors.*` values (and can defer to an existing Secret entirely via
+# `collectors.existingSecret`).
 apiVersion: batch/v1
 kind: CronJob
 metadata:
@@ -70,15 +71,11 @@ spec:
                     secretKeyRef:
                       name: server-inventory-db
                       key: redis-uri
-                - name: INVENTORY_CREDENTIALS_DIR
-                  value: /etc/inventory/credentials
               envFrom:
                 - configMapRef:
                     name: server-inventory-api-config
-              volumeMounts:
-                - name: manager-credentials
-                  mountPath: /etc/inventory/credentials
-                  readOnly: true
+                - secretRef:
+                    name: server-inventory-collector-credentials
               resources:
                 requests:
                   cpu: 100m
@@ -91,14 +88,39 @@ spec:
                   drop: ["ALL"]
                 readOnlyRootFilesystem: true
                 runAsNonRoot: true
-          volumes:
-            - name: manager-credentials
-              projected:
-                sources:
-                  - secret:
-                      name: ucsm-dc1-credentials # example — one Secret per manager; see module comment above
-                      items:
-                        - key: username
-                          path: ucsm-dc1/username
-                        - key: password
-                          path: ucsm-dc1/password
+---
+# Example only — replace with a Secret from a real secret store. Every
+# key is optional: a vendor left unset simply has no collector to run,
+# and tools/run_collector.py exits with an error naming the variables it
+# needed. Intersight reuses the same three keys with different meanings
+# (username = API Key ID, password = secret key) because it signs
+# requests rather than logging in.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: server-inventory-collector-credentials
+  labels:
+    app.kubernetes.io/name: server-inventory-collector-credentials
+    app.kubernetes.io/component: collector
+    app.kubernetes.io/part-of: server-inventory
+type: Opaque
+stringData:
+  INVENTORY_UCS_MANAGER_IP: "ucsm-dc1.example.com"
+  INVENTORY_UCS_MANAGER_USERNAME: "inventory-svc"
+  INVENTORY_UCS_MANAGER_PASSWORD: "replace-me"
+
+  INVENTORY_UCS_CENTRAL_IP: ""
+  INVENTORY_UCS_CENTRAL_USERNAME: ""
+  INVENTORY_UCS_CENTRAL_PASSWORD: ""
+
+  INVENTORY_ONEVIEW_IP: ""
+  INVENTORY_ONEVIEW_USERNAME: ""
+  INVENTORY_ONEVIEW_PASSWORD: ""
+
+  INVENTORY_OME_IP: ""
+  INVENTORY_OME_USERNAME: ""
+  INVENTORY_OME_PASSWORD: ""
+
+  INVENTORY_INTERSIGHT_IP: ""
+  INVENTORY_INTERSIGHT_USERNAME: ""
+  INVENTORY_INTERSIGHT_PASSWORD: ""

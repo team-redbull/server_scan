@@ -34,12 +34,30 @@ route:
   host: "" # empty lets OpenShift generate one from the Service name
 
 # Real vendor collectors, run as CronJobs against the same image as the
-# API (tools/run_collector.py --manager-type <type>). One block per
-# manager type; only ucsManager is implemented so far (see
-# tools/run_collector.py's _PROVIDER_FACTORIES).
+# API (tools/run_collector.py --manager-type <type>).
+#
+# One endpoint + login per vendor, and that is the whole of a collector's
+# connection config — no Manager documents to create, no secret volume to
+# mount. These are rendered into one Secret and injected as INVENTORY_*
+# environment variables (see templates/collector-credentials-secret.yaml).
+#
+# DO NOT COMMIT REAL PASSWORDS HERE. Pass them at install time
+# (`--set collectors.ucsManager.password=...`), from a values file kept
+# out of git (`-f secrets.yaml`), or — for production — set
+# `existingSecret` below and let a secrets operator own the Secret.
 collectors:
+  # Name of a Secret managed outside this chart, holding the same
+  # INVENTORY_* keys. Set it and the chart stops rendering its own Secret
+  # from the values below entirely.
+  existingSecret: ""
+
+  # Cisco UCS Manager — the only collector implemented so far (see
+  # tools/run_collector.py's _PROVIDER_FACTORIES).
   ucsManager:
-    enabled: false # opt-in: needs real Manager documents + Secrets to do anything useful
+    enabled: false # opt-in: needs ip/username/password below to do anything
+    ip: ""
+    username: ""
+    password: ""
     schedule: "*/30 * * * *"
     backoffLimit: 1
     activeDeadlineSeconds: 900
@@ -49,14 +67,32 @@ collectors:
         memory: 256Mi
       limits:
         memory: 512Mi
-    # One entry per UCS Manager domain to collect from. `credentialRef`
-    # must match the `credential_ref` set on that domain's `Manager`
-    # document; `secretName` is a pre-existing Secret (this chart doesn't
-    # create it) with `username`/`password` keys. Adding a manager here
-    # is the whole onboarding step — no other template needs editing.
-    managers: []
-    # managers:
-    #   - credentialRef: ucsm-dc1
-    #     secretName: ucsm-dc1-credentials
-    #   - credentialRef: ucsm-dc2
-    #     secretName: ucsm-dc2-credentials
+
+  # Cisco UCS Central. No collector yet — it is a discovery parent over
+  # UCS Manager domains rather than an inventory source of its own.
+  ucsCentral:
+    ip: ""
+    username: ""
+    password: ""
+
+  # HPE OneView. No collector yet.
+  oneview:
+    ip: ""
+    username: ""
+    password: ""
+
+  # Dell OpenManage Enterprise. No collector yet.
+  ome:
+    ip: ""
+    username: ""
+    password: ""
+
+  # Cisco Intersight. No collector yet, and note these three fields mean
+  # something different here: Intersight signs each request with an API
+  # key instead of logging in, so `username` is the API Key ID and
+  # `password` is the secret key. `ip` is "intersight.com" for the SaaS
+  # tenant, or the appliance FQDN for a Connected Virtual Appliance.
+  intersight:
+    ip: ""
+    username: ""
+    password: ""

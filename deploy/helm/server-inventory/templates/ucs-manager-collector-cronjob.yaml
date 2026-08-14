@@ -37,15 +37,14 @@ spec:
                     secretKeyRef:
                       name: {{ .Values.db.secretName }}
                       key: redis-uri
-                - name: INVENTORY_CREDENTIALS_DIR
-                  value: /etc/inventory/credentials
               envFrom:
                 - configMapRef:
                     name: {{ .Release.Name }}-api-config
-              volumeMounts:
-                - name: manager-credentials
-                  mountPath: /etc/inventory/credentials
-                  readOnly: true
+                # Endpoint + login for every vendor, as INVENTORY_* env
+                # vars. `envFrom` a Secret rather than inline `env` so the
+                # passwords aren't readable in the pod spec.
+                - secretRef:
+                    name: {{ .Values.collectors.existingSecret | default (printf "%s-collector-credentials" .Release.Name) }}
               resources:
                 {{- toYaml .Values.collectors.ucsManager.resources | nindent 16 }}
               securityContext:
@@ -54,20 +53,4 @@ spec:
                   drop: ["ALL"]
                 readOnlyRootFilesystem: true
                 runAsNonRoot: true
-          volumes:
-            - name: manager-credentials
-              projected:
-                sources:
-                  {{- if not .Values.collectors.ucsManager.managers }}
-                  {{- fail "collectors.ucsManager.enabled is true but collectors.ucsManager.managers is empty — add at least one {credentialRef, secretName} entry." }}
-                  {{- end }}
-                  {{- range .Values.collectors.ucsManager.managers }}
-                  - secret:
-                      name: {{ .secretName | quote }}
-                      items:
-                        - key: username
-                          path: {{ .credentialRef }}/username
-                        - key: password
-                          path: {{ .credentialRef }}/password
-                  {{- end }}
 {{- end }}

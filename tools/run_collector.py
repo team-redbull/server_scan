@@ -30,13 +30,18 @@ from app.application.services.health_policy_service import HealthPolicyService
 from app.application.services.ingest import IngestService, IngestSummary
 from app.config import get_settings
 from app.domain.enums import ManagerType
+from app.domain.models.common import AuditFields
 from app.domain.models.manager import Manager
-from app.domain.ports.credentials import CredentialNotFoundError
+from app.domain.ports.credentials import (
+    CredentialResolver,
+    ManagerConnection,
+    ManagerNotConfiguredError,
+)
 from app.domain.ports.provider import ServerInventoryProvider
 from app.domain.services.health.metrics import build_default_registry
 from app.domain.services.regex_engine import RegexModuleEngine
 from app.domain.value_objects.site import parse_site_code
-from app.infrastructure.credentials import FilesystemCredentialResolver
+from app.infrastructure.credentials import EnvConnectionResolver
 from app.infrastructure.logging import configure_logging
 from app.infrastructure.mongodb import MongoClientHolder
 from app.infrastructure.mongodb.audit_event_repository import MongoAuditEventRepository
@@ -101,26 +106,47 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def manager_for(manager_type: ManagerType, connection: ManagerConnection) -> Manager:
+    """The `Manager` document representing this deployment's single
+    manager of `manager_type`.
+
+    Derived from configuration rather than read from MongoDB: with one
+    endpoint per vendor type, a stored document would be a second copy of
+    what the environment already says, free to drift from it. The id is
+    deterministic so re-running a collector updates the same document
+    instead of accumulating one per run, and so every server it ingests
+    keeps a stable `manager_id`.
+
+    It is still written to the `managers` collection on each run — the API
+    and UI resolve `Server.manager_id` through it — but as a projection of
+    config, never as its source.
+    """
+    return Manager(
+        id=f"mgr_{manager_type.value.lower()}",
+        name=manager_type.value.lower().replace("_", "-"),
+        type=manager_type,
+        endpoint=connection.endpoint,
+        enabled=True,
+        audit=AuditFields.new(),
+    )
+
+
 async def _build_provider(
-    manager: Manager, *, credential_resolver: FilesystemCredentialResolver, timeout_seconds: float
+    manager: Manager, *, credential_resolver: CredentialResolver, timeout_seconds: float
 ) -> ServerInventoryProvider:
     factory = _PROVIDER_FACTORIES.get(manager.type)
     if factory is None:
         raise NotImplementedError(
             f"No collector implemented yet for manager type {manager.type!r}."
         )
-    if not manager.credential_ref:
-        raise CredentialNotFoundError(
-            f"Manager {manager.id!r} ({manager.name!r}) has no credential_ref configured."
-        )
-    credentials = await credential_resolver.resolve(manager.credential_ref)
-    return factory(manager=manager, credentials=credentials, timeout_seconds=timeout_seconds)
+    connection = credential_resolver.resolve(manager.type)
+    return factory(manager=manager, credentials=connection, timeout_seconds=timeout_seconds)
 
 
 async def _dry_run_one_manager(
     manager: Manager,
     *,
-    credential_resolver: FilesystemCredentialResolver,
+    credential_resolver: CredentialResolver,
     timeout_seconds: float,
     limit: int | None,
     provider_factory: Callable[..., Awaitable[ServerInventoryProvider]] | None = None,
@@ -175,7 +201,7 @@ async def _run_one_manager(
     manager: Manager,
     *,
     ingest_service: IngestService,
-    credential_resolver: FilesystemCredentialResolver,
+    credential_resolver: CredentialResolver,
     timeout_seconds: float,
 ) -> IngestSummary | None:
     try:
@@ -211,32 +237,32 @@ async def _run(
     await mongo.connect()
     try:
         manager_repo = MongoManagerRepository(mongo)
-        credential_resolver = FilesystemCredentialResolver(settings.credentials_dir)
+        credential_resolver = EnvConnectionResolver(settings)
 
-        all_managers = await manager_repo.list_all()
-        managers = [m for m in all_managers if m.type == manager_type and m.enabled]
-        if not managers:
-            logger.warning("collector.no_managers", manager_type=manager_type.value)
-            print(f"No enabled Manager documents of type {manager_type.value} found.")
-            return 0
+        # One manager per type, straight from configuration — nothing is
+        # read from the `managers` collection to decide where to connect.
+        try:
+            connection = credential_resolver.resolve(manager_type)
+        except ManagerNotConfiguredError as exc:
+            logger.error("collector.not_configured", manager_type=manager_type.value)
+            print(f"{exc}")
+            return 2
+        manager = manager_for(manager_type, connection)
 
         if dry_run:
-            # No indexes, no ingest pipeline, no repositories beyond the
-            # manager lookup this needed to find an endpoint at all.
-            failures = 0
-            for manager in managers:
-                try:
-                    await _dry_run_one_manager(
-                        manager,
-                        credential_resolver=credential_resolver,
-                        timeout_seconds=settings.collector_connect_timeout_seconds,
-                        limit=limit,
-                    )
-                except Exception:
-                    logger.exception("collector.dry_run_failed", manager_id=manager.id)
-                    print(f"manager={manager.name} FAILED (see logs)")
-                    failures += 1
-            return 1 if failures else 0
+            # No indexes, no ingest pipeline, no repositories at all.
+            try:
+                await _dry_run_one_manager(
+                    manager,
+                    credential_resolver=credential_resolver,
+                    timeout_seconds=settings.collector_connect_timeout_seconds,
+                    limit=limit,
+                )
+            except Exception:
+                logger.exception("collector.dry_run_failed", manager_id=manager.id)
+                print(f"manager={manager.name} FAILED (see logs)")
+                return 1
+            return 0
 
         await ensure_indexes(mongo.db)
 
@@ -259,26 +285,20 @@ async def _run(
             ),
             audit=AuditService(repo=MongoAuditEventRepository(mongo)),
         )
-        failures = 0
-        for manager in managers:
-            summary = await _run_one_manager(
-                manager,
-                ingest_service=ingest_service,
-                credential_resolver=credential_resolver,
-                timeout_seconds=settings.collector_connect_timeout_seconds,
-            )
-            if summary is None:
-                failures += 1
-                print(f"manager={manager.name} FAILED (see logs)")
-                continue
-            print(
-                f"manager={manager.name} fetched={summary.fetched} "
-                f"created={summary.created} updated={summary.updated} errors={summary.errors}"
-            )
-
-        if failures:
-            print(f"\n{failures}/{len(managers)} manager(s) failed.")
-        return 1 if failures else 0
+        summary = await _run_one_manager(
+            manager,
+            ingest_service=ingest_service,
+            credential_resolver=credential_resolver,
+            timeout_seconds=settings.collector_connect_timeout_seconds,
+        )
+        if summary is None:
+            print(f"manager={manager.name} FAILED (see logs)")
+            return 1
+        print(
+            f"manager={manager.name} fetched={summary.fetched} "
+            f"created={summary.created} updated={summary.updated} errors={summary.errors}"
+        )
+        return 0
     finally:
         await mongo.close()
 

@@ -84,13 +84,46 @@ class Settings(BaseSettings):
     metrics_enabled: bool = True
 
     # --- Collectors (tools/run_collector.py, not the API process) ---
-    # Directory a Kubernetes Secret-volume projects `Manager.credential_ref`
-    # secrets under — see `app.infrastructure.credentials.filesystem`'s
-    # docstring for the exact `{dir}/{credential_ref}/{username,password}`
-    # shape. The dev default won't exist on a real deployment; that's
-    # intentional, a collector run against a missing/empty mount should
-    # fail loudly (`CredentialNotFoundError`), not silently no-op.
-    credentials_dir: str = "/etc/inventory/credentials"
+    #
+    # One endpoint + credential pair per manager type, and that is the
+    # whole of a collector's connection config — there is no per-manager
+    # document to maintain and no secret directory to mount. Every value
+    # is empty by default so a collector for an unconfigured vendor fails
+    # with an explicit "not configured" error naming the variables to
+    # set, rather than attempting a connection to nowhere.
+    #
+    # `INVENTORY_`-prefixed, so `ucs_manager_ip` is
+    # `INVENTORY_UCS_MANAGER_IP`. In Kubernetes these arrive from a
+    # Secret via `envFrom` — see `deploy/helm/server-inventory/values.yaml`.
+    #
+    # Cisco Intersight keeps the same three fields for a uniform values
+    # file, but they mean something different there: it signs requests
+    # with an API key rather than logging in, so `username` carries the
+    # API Key ID and `password` the secret key. `ip` is `intersight.com`
+    # for the SaaS tenant, or the appliance FQDN for Connected Virtual
+    # Appliance. Called out here and in values.yaml because handing
+    # Intersight an account password would look plausible and never work.
+    ucs_manager_ip: str = ""
+    ucs_manager_username: str = ""
+    ucs_manager_password: str = ""
+
+    ucs_central_ip: str = ""
+    ucs_central_username: str = ""
+    ucs_central_password: str = ""
+
+    oneview_ip: str = ""
+    oneview_username: str = ""
+    oneview_password: str = ""
+
+    ome_ip: str = ""
+    ome_username: str = ""
+    ome_password: str = ""
+
+    # username = API Key ID, password = secret key — see the note above.
+    intersight_ip: str = ""
+    intersight_username: str = ""
+    intersight_password: str = ""
+
     collector_connect_timeout_seconds: float = 15.0
 
     @field_validator("cors_allowed_origins", mode="before")

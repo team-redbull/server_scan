@@ -27,7 +27,7 @@ import pytest
 from app.domain.enums import ManagerType
 from app.domain.models.common import AuditFields
 from app.domain.models.manager import Manager
-from app.domain.ports.credentials import ManagerCredentials
+from app.domain.ports.credentials import ManagerConnection
 from app.infrastructure.providers.ucs_manager.provider import (
     UcsManagerProvider,
     _group_by_owning_server_dn,
@@ -155,7 +155,6 @@ def _manager() -> Manager:
         type=ManagerType.UCS_MANAGER,
         site_id="site-1",
         endpoint="ucsm.lab.example.com",
-        credential_ref="ucsm-lab-creds",
         audit=AuditFields.new(),
     )
 
@@ -163,7 +162,9 @@ def _manager() -> Manager:
 def _provider(client: FakeUcsClient) -> UcsManagerProvider:
     provider = UcsManagerProvider(
         manager=_manager(),
-        credentials=ManagerCredentials(username="admin", password="secret"),
+        credentials=ManagerConnection(
+            endpoint="ucsm.lab.example.com", username="admin", password="secret"
+        ),
         timeout_seconds=5.0,
     )
     # `_new_client` is the intended seam — the provider builds its own
