@@ -79,16 +79,20 @@ class TestBuildProvider:
                 timeout_seconds=5.0,
             )
 
-    async def test_ucs_central_is_not_a_collection_source(self) -> None:
-        """UCS Central is a discovery parent over UCS Manager domains, not
-        itself an inventory source.
+    async def test_builds_a_provider_for_ucs_central(self) -> None:
+        """UCS Central is a collection source in its own right, not only a
+        discovery parent: one login covers every registered domain, which
+        is the only way this tool reaches a multi-domain fleet given it
+        resolves exactly one endpoint per manager type.
         """
-        with pytest.raises(NotImplementedError):
-            await _build_provider(
-                _manager(type=ManagerType.UCS_CENTRAL, parent_manager_id=None),
-                credential_resolver=FakeCredentialResolver(),
-                timeout_seconds=5.0,
-            )
+        resolver = FakeCredentialResolver()
+        provider = await _build_provider(
+            _manager(type=ManagerType.UCS_CENTRAL),
+            credential_resolver=resolver,
+            timeout_seconds=5.0,
+        )
+        assert provider.provider_type == ManagerType.UCS_CENTRAL.value
+        assert resolver.resolved == [ManagerType.UCS_CENTRAL]
 
     async def test_unconfigured_manager_type_is_rejected_before_connecting(self) -> None:
         resolver = FakeCredentialResolver(error=ManagerNotConfiguredError("not configured"))

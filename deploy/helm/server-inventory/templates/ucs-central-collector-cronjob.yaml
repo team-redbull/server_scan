@@ -1,0 +1,72 @@
+{{- /*
+The UCS Central collector: one CronJob covering every registered UCS
+Manager domain, versus ucs-manager-collector-cronjob.yaml's one domain
+per CronJob.
+
+Running both at once is legal but usually wrong — they would ingest the
+same servers under two different manager_ids and two different external
+id roots (`compute/sys-<id>/...` versus `sys/...`), so the same machine
+would appear twice. Pick one per fleet, or scope them to disjoint
+domains.
+*/ -}}
+{{- if .Values.collectors.ucsCentral.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ .Release.Name }}-collector-ucs-central
+  labels:
+    app.kubernetes.io/name: {{ .Release.Name }}-collector-ucs-central
+    app.kubernetes.io/component: collector
+    app.kubernetes.io/part-of: server-inventory
+spec:
+  schedule: {{ .Values.collectors.ucsCentral.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 5
+  jobTemplate:
+    spec:
+      backoffLimit: {{ .Values.collectors.ucsCentral.backoffLimit }}
+      activeDeadlineSeconds: {{ .Values.collectors.ucsCentral.activeDeadlineSeconds }}
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: collector
+              image: "{{ .Values.backend.image.repository }}:{{ .Values.backend.image.tag }}"
+              imagePullPolicy: {{ .Values.backend.image.pullPolicy }}
+              command: ["python3", "-m", "tools.run_collector", "--manager-type", "UCS_CENTRAL"]
+              env:
+                - name: INVENTORY_ENVIRONMENT
+                  value: production
+                # Which servers this collector may ingest at all, matched
+                # against the server's name. Collector-scoped, so it lives
+                # here rather than in the API ConfigMap this also mounts.
+                - name: INVENTORY_COLLECTOR_NAME_PATTERN
+                  value: {{ .Values.collectors.namePattern | quote }}
+                - name: INVENTORY_MONGO_URI
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.db.secretName }}
+                      key: mongo-uri
+                - name: INVENTORY_REDIS_URI
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.db.secretName }}
+                      key: redis-uri
+              envFrom:
+                - configMapRef:
+                    name: {{ .Release.Name }}-api-config
+                # Endpoint + login for every vendor, as INVENTORY_* env
+                # vars. `envFrom` a Secret rather than inline `env` so the
+                # passwords aren't readable in the pod spec.
+                - secretRef:
+                    name: {{ .Values.collectors.existingSecret | default (printf "%s-collector-credentials" .Release.Name) }}
+              resources:
+                {{- toYaml .Values.collectors.ucsCentral.resources | nindent 16 }}
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: ["ALL"]
+                readOnlyRootFilesystem: true
+                runAsNonRoot: true
+{{- end }}

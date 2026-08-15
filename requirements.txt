@@ -118,7 +118,9 @@ pymongo==4.17.0 \
 pyparsing==3.3.2 \
     --hash=sha256:850ba148bd908d7e2411587e247a1e4f0327839c40e2e5e6d05a007ecc69911d \
     --hash=sha256:c777f4d763f140633dcb6d8a3eda953bf7a214dc4eff598413c070bcdc117cbc
-    # via ucsmsdk
+    # via
+    #   ucscsdk
+    #   ucsmsdk
 python-dotenv==1.2.2 \
     --hash=sha256:1d8214789a24de455a8b8bd8ae6fe3c6b69a5e3d64aa8a8e5d68e694bbcb285a \
     --hash=sha256:2c371a91fbd7ba082c2c1dc1f8bf89ca22564a087c2c287cd9b662adde799cf3
@@ -184,7 +186,9 @@ setuptools==84.0.0 \
 six==1.17.0 \
     --hash=sha256:4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274 \
     --hash=sha256:ff70335d468e7eb6ec65b95b99d3a2836546063f63acc5171de367e834932a81
-    # via ucsmsdk
+    # via
+    #   ucscsdk
+    #   ucsmsdk
 starlette==1.6.0 \
     --hash=sha256:a86dd39d14bb45f85a3d18525215a9ef0cfd1f192ac793220e72598c90335f0c \
     --hash=sha256:d4e3ac5e546444960c710297a3c9fc3f7ebae1b7e963f3d36173b49da535be9b
@@ -208,6 +212,10 @@ typing-inspection==0.4.4 \
     #   fastapi
     #   pydantic
     #   pydantic-settings
+ucscsdk==0.9.0.10 \
+    --hash=sha256:12d9408ef45d19d5a76e153af191442c8e3ed422bf5a305fc661899c02c7ffa1 \
+    --hash=sha256:20f4591b0213dbc43156ac41278464d1b63f1b06a679604af1ea281897be0062
+    # via server-inventory
 ucsmsdk==0.9.27 \
     --hash=sha256:bbeea64d9837438229ac680015d216fc7187ee01d5f12521f88b09d0cb4ee48a \
     --hash=sha256:c7d49cfbf64331af44a69a906b478464def60ce0b1fa6c7f9cad430c53b1fe19

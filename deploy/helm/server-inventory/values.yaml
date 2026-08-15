@@ -80,12 +80,36 @@ collectors:
       limits:
         memory: 512Mi
 
-  # Cisco UCS Central. No collector yet — it is a discovery parent over
-  # UCS Manager domains rather than an inventory source of its own.
+  # Cisco UCS Central — one login covering every registered UCS Manager
+  # domain. Enable this instead of ucsManager when the fleet spans more
+  # than one domain, since a ucsManager endpoint reaches exactly one.
+  #
+  # Central serves a *replica* of each domain's inventory. Watch the
+  # first run's `ucs_central.domain_summary` lines: if a domain reports
+  # servers but `servers_with_profile=0`, Central is not replicating that
+  # domain's local service profiles and those servers arrive unnamed —
+  # collect that domain through its own UCS Manager instead. See
+  # docs/adr/0014.
   ucsCentral:
+    enabled: false # opt-in: needs ip/username/password below to do anything
     ip: ""
     username: ""
     password: ""
+    # Hourly rather than the ucsManager default of every 30 minutes:
+    # Central's data is already a replica refreshed on its own schedule,
+    # so polling it faster than it syncs only adds load.
+    schedule: "0 * * * *"
+    backoffLimit: 1
+    # Longer than a single domain's 900s — one run covers every domain.
+    activeDeadlineSeconds: 1800
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        # Higher ceiling than ucsManager's 512Mi: one run holds the
+        # inventory of every domain in memory at once, not one domain's.
+        memory: 1Gi
 
   # HPE OneView. No collector yet.
   oneview:

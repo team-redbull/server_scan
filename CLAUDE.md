@@ -138,14 +138,36 @@ vendor manager. MongoDB is the only thing connecting them. See
 validation sections record what a live UCS Platform Emulator proved,
 disproved and could not settle.
 
-**Only UCS Manager has a real collector.** `OPENMANAGE`, `INTERSIGHT`,
-`ONEVIEW`, and `UCS_CENTRAL` have configuration slots but no
+**Two collectors exist, both Cisco: UCS Manager and UCS Central.**
+`OPENMANAGE`, `INTERSIGHT` and `ONEVIEW` have configuration slots but no
 implementation — `tools/run_collector.py`'s `_PROVIDER_FACTORIES` raises
 a clear `NotImplementedError` for them, not a silent no-op. Building the
 next one means: implement `ServerInventoryProvider` for it under
 `app.infrastructure.providers.<vendor>`, add it to
 `_PROVIDER_FACTORIES`, and add a CronJob template mirroring
 `deploy/helm/server-inventory/templates/ucs-manager-collector-cronjob.yaml`.
+
+**Pick one Cisco collector per fleet — they double-count if both run.**
+UCS Manager reaches exactly one domain (one endpoint per `ManagerType`,
+so a multi-domain fleet is unreachable past the first); UCS Central
+covers every registered domain in one login. The same machine collected
+by both arrives twice, with different `manager_id`s and different
+external ids (`sys/...` vs `compute/sys-<domainId>/...`).
+`docs/adr/0014` has the full evidence trail — and its "What is still
+unproven" section is required reading: it is **not yet validated against
+a live UCS Central**, and whether Central replicates domain-*local*
+service profiles (the source of a server's name, hence of site parsing,
+classification, and the `^ocp` match) is the open question the provider
+instruments rather than assumes. Watch `ucs_central.domain_summary` and
+`ucs_central.domain_without_profiles` on the first real run.
+
+**Shared Cisco logic lives in `app.infrastructure.providers.ucs_common`**
+(`is_equipped`, `group_by_owning_server_dn`, `bmc_interface`,
+`partition_profiles`), and `ucs_manager.mapping` serves both providers.
+`ucscsdk` and `ucsmsdk` describe the same object model with the same
+attribute names — only the DN root differs — so duplicating any of it
+means the next emulator-found fix lands in one copy only. Everything
+there works on relative DN structure, never an absolute root.
 
 ### What's explicitly NOT done yet (in rough priority order the user has confirmed)
 

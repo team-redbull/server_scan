@@ -572,6 +572,7 @@ dependencies = [
     { name = "redis" },
     { name = "regex" },
     { name = "structlog" },
+    { name = "ucscsdk" },
     { name = "ucsmsdk" },
     { name = "uvicorn", extra = ["standard"] },
 ]
@@ -598,6 +599,7 @@ requires-dist = [
     { name = "redis", specifier = "==8.1.0" },
     { name = "regex", specifier = "==2026.7.19" },
     { name = "structlog", specifier = "==26.1.0" },
+    { name = "ucscsdk", specifier = "==0.9.0.10" },
     { name = "ucsmsdk", specifier = "==0.9.27" },
     { name = "uvicorn", extras = ["standard"], specifier = "==0.34.0" },
 ]
@@ -704,6 +706,19 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/a3/26/b09b8010994eccc3c09092e6b34058f36a460eea2d4c3e8b910c695975a0/typing_inspection-0.4.4.tar.gz", hash = "sha256:547274fa6b0a561ccf549cc9524b999a578e737d015d8709d021f9d0d13bea47", size = 76928, upload-time = "2026-08-12T12:37:25.997Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/67/81/4add07e5172b7ac40d8ed5ff580409a7801a4fe26d529bdd915401dabfbe/typing_inspection-0.4.4-py3-none-any.whl", hash = "sha256:65b8397ba37ccbce054456aaccddfc91e6e3083c92824df348d96ca832f3f147", size = 14750, upload-time = "2026-08-12T12:37:24.648Z" },
+]
+
+[[package]]
+name = "ucscsdk"
+version = "0.9.0.10"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pyparsing" },
+    { name = "six" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/9e/ce/f0d152c5c96b4c438dde0fd567dc89851c75715b6dbcb3f6b0717d18b39b/ucscsdk-0.9.0.10.tar.gz", hash = "sha256:12d9408ef45d19d5a76e153af191442c8e3ed422bf5a305fc661899c02c7ffa1", size = 3593100, upload-time = "2025-08-26T08:35:41.464Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/1e/5c/d47e62e7f605305ea9ae169c2aac79686a2db8726be38d03813344ee2f69/ucscsdk-0.9.0.10-py2.py3-none-any.whl", hash = "sha256:20f4591b0213dbc43156ac41278464d1b63f1b06a679604af1ea281897be0062", size = 5483692, upload-time = "2025-08-26T08:35:39.685Z" },
 ]
 
 [[package]]

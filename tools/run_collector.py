@@ -54,20 +54,38 @@ from app.infrastructure.mongodb.indexes import ensure_indexes
 from app.infrastructure.mongodb.manager_repository import MongoManagerRepository
 from app.infrastructure.mongodb.server_repository import MongoServerRepository
 from app.infrastructure.mongodb.site_repository import MongoSiteRepository
+from app.infrastructure.providers.ucs_central.provider import UcsCentralProvider
 from app.infrastructure.providers.ucs_manager.provider import UcsManagerProvider
 
 logger = structlog.get_logger(__name__)
 
 # One entry per manager type this tool actually knows how to collect
-# from. UCS_CENTRAL is deliberately absent — it's a domain-discovery
-# parent over one or more UCS_MANAGER children (see `Manager`'s own
-# docstring), not itself a source of server inventory. Every other
-# missing entry is a real gap (OpenManage, Intersight, OneView), not an
-# oversight: `_build_provider` raises a clear "not implemented yet" for
-# any `manager.type` without an entry here, rather than silently
+# from. A missing entry is a real gap (OpenManage, Intersight, OneView),
+# not an oversight: `_build_provider` raises a clear "not implemented
+# yet" for any `manager.type` without an entry here, rather than silently
 # skipping that manager.
-_PROVIDER_FACTORIES = {
+#
+# UCS_MANAGER and UCS_CENTRAL are both collection sources, and which one
+# to run is a deployment choice rather than a hierarchy:
+#
+#   UCS_MANAGER  one domain, live and authoritative. One endpoint reaches
+#                exactly one domain, so a multi-domain fleet needs one
+#                configured endpoint per domain — which this tool's
+#                one-endpoint-per-type config cannot express.
+#   UCS_CENTRAL  every registered domain in one login. The tradeoff is
+#                that Central serves a *replica* of each domain's
+#                inventory, and it is unconfirmed whether that replica
+#                includes domain-local service profiles — the source of
+#                a server's name. See `..ucs_central.provider`'s module
+#                docstring; the provider logs per-domain coverage so the
+#                answer is visible in the first real run.
+#
+# Annotated rather than inferred: with two entries mypy widens the value
+# type to `object`, and the annotation is also what pins the constructor
+# contract every future provider must match.
+_PROVIDER_FACTORIES: dict[ManagerType, Callable[..., ServerInventoryProvider]] = {
     ManagerType.UCS_MANAGER: UcsManagerProvider,
+    ManagerType.UCS_CENTRAL: UcsCentralProvider,
 }
 
 

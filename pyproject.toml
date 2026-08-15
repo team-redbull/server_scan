@@ -24,6 +24,13 @@ dependencies = [
     # removed rather than bumped. Add it back only alongside a real
     # multipart endpoint.
     "ucsmsdk==0.9.27",
+    # Cisco's UCS Central SDK, the aggregator counterpart to ucsmsdk. Both
+    # are needed: they are separate packages with separate MO trees
+    # (`ucscsdk.mometa.*` is rooted per-domain at `compute/sys-<id>`, where
+    # `ucsmsdk`'s is rooted at `sys`), and neither imports the other.
+    # Cisco still labels it an Alpha release; 0.9.0.10 is the newest on
+    # PyPI (2025-08-26).
+    "ucscsdk==0.9.0.10",
 ]
 
 [dependency-groups]
@@ -84,7 +91,7 @@ module = ["testcontainers.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
-# ucsmsdk ships no type stubs and isn't py.typed (Cisco's own package,
-# not something a `types-ucsmsdk` stub-only package exists for on PyPI).
-module = ["ucsmsdk.*"]
+# Neither Cisco SDK ships type stubs or is py.typed, and no stub-only
+# `types-ucsmsdk`/`types-ucscsdk` package exists on PyPI.
+module = ["ucsmsdk.*", "ucscsdk.*"]
 ignore_missing_imports = true

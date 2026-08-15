@@ -157,7 +157,7 @@ def _admin_state(mo: Any) -> str:
     return _ADMIN_STATE_MAP.get(str(getattr(mo, "admin_state", "") or "").lower(), "UNKNOWN")
 
 
-def _attachments(adapter_ifs: list[Any]) -> tuple[ProviderAttachment, ...]:
+def _attachments(adapter_ifs: list[Any], *, provider_type: str) -> tuple[ProviderAttachment, ...]:
     attachments: list[ProviderAttachment] = []
     for mo in adapter_ifs:
         switch_id = getattr(mo, "switch_id", None)
@@ -166,7 +166,11 @@ def _attachments(adapter_ifs: list[Any]) -> tuple[ProviderAttachment, ...]:
         attachments.append(
             ProviderAttachment(
                 type="FABRIC_INTERCONNECT",
-                provider="UCS_MANAGER",
+                # Which collector observed this attachment, not which
+                # product owns the fabric — a UCS Central run reports
+                # UCS_CENTRAL for hardware that is still fronted by a
+                # domain's own fabric interconnects.
+                provider=provider_type,
                 fabric=switch_id,
                 # Not populated: resolving the fabric interconnect's own
                 # name/model/serial needs a `networkElement` lookup this
@@ -197,10 +201,16 @@ def compute_unit_to_provider_server(
     template_dn_by_name: dict[str, str],
     mgmt_if: Any | None,
     adapter_ifs: list[Any],
+    provider_type: str = "UCS_MANAGER",
 ) -> ProviderServer:
     """Convert one `computeBlade` or `computeRackUnit` MO — the two
     classes carry the same relevant property set (see module docstring),
     so one function handles both rather than duplicating the mapping.
+
+    Also serves the UCS Central collector unchanged: `ucscsdk` exposes
+    every attribute read here under the same name as `ucsmsdk` (see
+    `app.infrastructure.providers.ucs_common`), so only `provider_type`
+    differs between the two callers.
     """
     profile = profile_by_dn.get(getattr(server_mo, "assigned_to_dn", None) or "")
     template_name, template_external_id = _profile_template_fields(
@@ -229,7 +239,7 @@ def compute_unit_to_provider_server(
         memory_total_bytes=total_memory_mb * _BYTES_PER_MB,
         storage_total_bytes=0,  # see module docstring's ASSUMED section
         storage_drives=(),
-        attachments=_attachments(adapter_ifs),
+        attachments=_attachments(adapter_ifs, provider_type=provider_type),
         tags=(),
     )
 
