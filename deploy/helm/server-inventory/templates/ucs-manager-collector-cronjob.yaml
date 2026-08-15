@@ -27,6 +27,11 @@ spec:
               env:
                 - name: INVENTORY_ENVIRONMENT
                   value: production
+                # Which servers this collector may ingest at all, matched
+                # against the server's name. Collector-scoped, so it lives
+                # here rather than in the API ConfigMap this also mounts.
+                - name: INVENTORY_COLLECTOR_NAME_PATTERN
+                  value: {{ .Values.collectors.namePattern | quote }}
                 - name: INVENTORY_MONGO_URI
                   valueFrom:
                     secretKeyRef:

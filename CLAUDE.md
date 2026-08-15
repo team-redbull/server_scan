@@ -193,6 +193,17 @@ non-obvious enough to bite you.
   server arrives through a vendor-specific collector, so the vendor is
   known by construction; an unrecognized value raises and is counted in
   `IngestSummary.errors` rather than polluting per-vendor counts.
+- **A collector only ingests servers whose name matches
+  `INVENTORY_COLLECTOR_NAME_PATTERN`** (`^ocp` in `.env.example` and
+  `values.yaml`; empty = collect everything). A vendor manager holds the
+  whole datacenter, and the name is the only thing distinguishing this
+  platform's fleet. Applied as a `_NameFilteredProvider` wrapper in
+  `tools/run_collector.py`, not inside `IngestService` — collection scope
+  is the collector's concern, the seeder shouldn't inherit it, and
+  `--dry-run` bypasses `IngestService` on purpose so a filter there would
+  make dry runs lie. A non-matching server is never fetched: no document,
+  no health state, no audit trail. This is **not** the UPI-vs-hosted
+  distinction — that's classification rules over what *is* collected.
 - **A collector's whole connection config is env** — one endpoint and
   login per `ManagerType`. No `Manager` document is read to decide where
   to connect and there is no credentials directory; see the collector

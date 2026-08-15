@@ -126,6 +126,27 @@ class Settings(BaseSettings):
 
     collector_connect_timeout_seconds: float = 15.0
 
+    # Which servers a collector is allowed to ingest at all, as a regex
+    # matched against the server's name (`re.search`, so "starts with" is
+    # spelled `^ocp`). A vendor manager holds the whole datacenter, not
+    # just this platform's fleet, and there is no other way to tell the
+    # two apart — the name is the only thing that carries the
+    # distinction, which is already true of site parsing and
+    # classification.
+    #
+    # Empty means collect everything, because the alternative — a
+    # built-in default pattern — silently drops servers for anyone whose
+    # naming differs, with an empty inventory as the only symptom. Set it
+    # explicitly per deployment; `.env.example` and `values.yaml` both
+    # ship `^ocp`.
+    #
+    # This is a *collection* filter, not a classification one: a
+    # non-matching server is never fetched into MongoDB, so it has no
+    # document, no health state and no audit trail. Deciding UPI vs.
+    # hosted *within* the collected fleet is the classification engine's
+    # job (`app.domain.services.classification`), not this.
+    collector_name_pattern: str = ""
+
     @field_validator("cors_allowed_origins", mode="before")
     @classmethod
     def _split_csv(cls, value: object) -> object:

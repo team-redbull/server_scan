@@ -14,6 +14,7 @@ import pytest
 from tools.run_collector import (
     _build_provider,
     _dry_run_one_manager,
+    _filtered,
     _parse_args,
     _run_one_manager,
 )
@@ -247,6 +248,87 @@ class TestDryRun:
         )
         assert count == 3
         assert "stopped at --limit 3" in capsys.readouterr().out
+
+
+class TestNameFilter:
+    """`INVENTORY_COLLECTOR_NAME_PATTERN` — a vendor manager holds the
+    whole datacenter, so this is what decides which of its servers are
+    this platform's at all.
+    """
+
+    class _Fake:
+        provider_type = "UCS_MANAGER"
+
+        def __init__(self, *names: str) -> None:
+            self._names = names
+            self.health_checked = 0
+
+        async def health_check(self) -> None:
+            self.health_checked += 1
+
+        async def list_servers(self) -> Any:
+            for name in self._names:
+                yield ProviderServer(external_id=f"dn/{name}", vendor="cisco", name=name)
+
+    async def _names_through(self, pattern: str, *names: str) -> list[str]:
+        provider = _filtered(self._Fake(*names), pattern)  # type: ignore[arg-type]
+        return [ps.name async for ps in provider.list_servers()]
+
+    async def test_keeps_only_matching_servers(self) -> None:
+        kept = await self._names_through(
+            "^ocp",
+            "ocp4-prod-one-infra-01",
+            "vmhost-two-14",
+            "ocp4-hypershift-five-01",
+            "db-prod-03",
+        )
+        assert kept == ["ocp4-prod-one-infra-01", "ocp4-hypershift-five-01"]
+
+    async def test_the_anchor_is_the_operators_to_write(self) -> None:
+        """`re.search`, not `re.match` — so `^ocp` means "starts with" and
+        an unanchored pattern stays a substring match, rather than the
+        code silently anchoring something the operator didn't ask for.
+        A name merely *containing* "ocp" is not an OCP server.
+        """
+        assert await self._names_through("^ocp", "legacy-ocp-gateway-01") == []
+        assert await self._names_through("ocp", "legacy-ocp-gateway-01") == [
+            "legacy-ocp-gateway-01"
+        ]
+
+    async def test_an_empty_pattern_collects_everything(self) -> None:
+        """Not "matches nothing" — an empty regex matches every string,
+        but `_filtered` doesn't even wrap, so the default is unambiguously
+        "no filter" rather than an accidental empty inventory.
+        """
+        fake = self._Fake("srv-1", "srv-2")
+        assert _filtered(fake, "") is fake  # type: ignore[arg-type]
+
+    async def test_health_check_still_reaches_the_real_provider(self) -> None:
+        """The wrapper stands in for the provider everywhere, including
+        the login `IngestService.ingest()` performs first.
+        """
+        fake = self._Fake()
+        await _filtered(fake, "^ocp").health_check()  # type: ignore[arg-type]
+        assert fake.health_checked == 1
+
+    async def test_dry_run_shows_only_what_a_real_run_would_write(self, capsys: Any) -> None:
+        """--dry-run bypasses `IngestService` on purpose, so the filter
+        has to live on the provider side or a dry run would print servers
+        a real run silently drops.
+        """
+        count = await _dry_run_one_manager(
+            _manager(),
+            credential_resolver=FakeCredentialResolver(),  # type: ignore[arg-type]
+            timeout_seconds=5.0,
+            limit=None,
+            name_pattern="^ocp",
+            provider_factory=_factory(self._Fake("ocp4-prod-one-infra-01", "vmhost-two-14")),
+        )
+        assert count == 1
+        out = capsys.readouterr().out
+        assert "ocp4-prod-one-infra-01" in out
+        assert "vmhost-two-14" not in out
+        assert "^ocp" in out
 
 
 class TestParseArgs:

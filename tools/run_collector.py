@@ -20,7 +20,8 @@ from __future__ import annotations
 import argparse
 import asyncio
 import os
-from collections.abc import Awaitable, Callable
+import re
+from collections.abc import AsyncIterator, Awaitable, Callable
 
 import structlog
 
@@ -37,7 +38,7 @@ from app.domain.ports.credentials import (
     ManagerConnection,
     ManagerNotConfiguredError,
 )
-from app.domain.ports.provider import ServerInventoryProvider
+from app.domain.ports.provider import ProviderServer, ServerInventoryProvider
 from app.domain.services.health.metrics import build_default_registry
 from app.domain.services.regex_engine import RegexModuleEngine
 from app.domain.value_objects.site import parse_site_code
@@ -131,6 +132,56 @@ def manager_for(manager_type: ManagerType, connection: ManagerConnection) -> Man
     )
 
 
+class _NameFilteredProvider:
+    """Drops every server whose name doesn't match `pattern` before it
+    reaches the pipeline — `INVENTORY_COLLECTOR_NAME_PATTERN`.
+
+    A wrapper here rather than a guard inside `IngestService` because
+    *which servers to collect* is a collection concern: it belongs to the
+    thing pointed at a vendor manager holding the whole datacenter, not
+    to the pipeline shared with `tools/seed_inventory.py`, whose fake
+    servers have no manager to be filtered out of. Wrapping also keeps
+    `--dry-run` honest — it bypasses `IngestService` on purpose, so a
+    filter living there would make a dry run print servers a real run
+    would never write.
+
+    Vendor-agnostic by construction: it wraps the `ServerInventoryProvider`
+    Protocol, so OpenManage/OneView/Intersight inherit it the day they
+    exist without a line of their own.
+    """
+
+    def __init__(self, inner: ServerInventoryProvider, pattern: str) -> None:
+        self._inner = inner
+        self._pattern = re.compile(pattern)
+        self.provider_type = inner.provider_type
+
+    async def health_check(self) -> None:
+        await self._inner.health_check()
+
+    async def list_servers(self) -> AsyncIterator[ProviderServer]:
+        kept = skipped = 0
+        async for provider_server in self._inner.list_servers():
+            if self._pattern.search(provider_server.name):
+                kept += 1
+                yield provider_server
+            else:
+                skipped += 1
+        # Logged unconditionally, including the all-zero case: "0 kept, 0
+        # skipped" is the signature of a wrong endpoint, while "0 kept,
+        # 900 skipped" is the signature of a wrong pattern, and an
+        # otherwise-successful empty run looks identical without it.
+        logger.info(
+            "collector.name_filter_applied",
+            pattern=self._pattern.pattern,
+            kept=kept,
+            skipped=skipped,
+        )
+
+
+def _filtered(provider: ServerInventoryProvider, pattern: str) -> ServerInventoryProvider:
+    return _NameFilteredProvider(provider, pattern) if pattern else provider
+
+
 async def _build_provider(
     manager: Manager, *, credential_resolver: CredentialResolver, timeout_seconds: float
 ) -> ServerInventoryProvider:
@@ -149,6 +200,7 @@ async def _dry_run_one_manager(
     credential_resolver: CredentialResolver,
     timeout_seconds: float,
     limit: int | None,
+    name_pattern: str = "",
     provider_factory: Callable[..., Awaitable[ServerInventoryProvider]] | None = None,
 ) -> int:
     """Print what `manager` reports, writing nothing. Returns the count.
@@ -160,10 +212,15 @@ async def _dry_run_one_manager(
     the raw `ProviderServer` the collector would hand to the pipeline.
     """
     build = provider_factory or _build_provider
-    provider = await build(
-        manager, credential_resolver=credential_resolver, timeout_seconds=timeout_seconds
+    provider = _filtered(
+        await build(
+            manager, credential_resolver=credential_resolver, timeout_seconds=timeout_seconds
+        ),
+        name_pattern,
     )
     print(f"\n=== {manager.name} ({manager.type.value} @ {manager.endpoint}) ===")
+    if name_pattern:
+        print(f"    (only servers whose name matches {name_pattern!r} are shown/collected)")
 
     count = 0
     async for ps in provider.list_servers():
@@ -203,10 +260,14 @@ async def _run_one_manager(
     ingest_service: IngestService,
     credential_resolver: CredentialResolver,
     timeout_seconds: float,
+    name_pattern: str = "",
 ) -> IngestSummary | None:
     try:
-        provider = await _build_provider(
-            manager, credential_resolver=credential_resolver, timeout_seconds=timeout_seconds
+        provider = _filtered(
+            await _build_provider(
+                manager, credential_resolver=credential_resolver, timeout_seconds=timeout_seconds
+            ),
+            name_pattern,
         )
         # No explicit `provider.health_check()` here: `IngestService.
         # ingest()` already calls it as its first step, and a UCS login is
@@ -257,6 +318,7 @@ async def _run(
                     credential_resolver=credential_resolver,
                     timeout_seconds=settings.collector_connect_timeout_seconds,
                     limit=limit,
+                    name_pattern=settings.collector_name_pattern,
                 )
             except Exception:
                 logger.exception("collector.dry_run_failed", manager_id=manager.id)
@@ -290,6 +352,7 @@ async def _run(
             ingest_service=ingest_service,
             credential_resolver=credential_resolver,
             timeout_seconds=settings.collector_connect_timeout_seconds,
+            name_pattern=settings.collector_name_pattern,
         )
         if summary is None:
             print(f"manager={manager.name} FAILED (see logs)")
