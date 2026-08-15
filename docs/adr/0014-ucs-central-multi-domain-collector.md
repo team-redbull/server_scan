@@ -127,15 +127,57 @@ from its service profile — `computeBlade.name` is empty in practice
 (ADR-0009) — and the name is what carries the site token, the
 classification pattern, and the `^ocp` match.
 
-The evidence is ambiguous and could not be resolved without a live
-Central:
+### The schema says yes
 
-- `LsServer.mo_meta.parents` is `['computeTemplate', 'orgOrg']` — an org
-  tree, with no `compute/sys-<id>` path. But UCS Manager's `lsServer`
-  also lives under orgs, so this is not conclusive either way.
-- Cisco's SDK blurb describes the package as managing "global service
-  profiles", which is suggestive but is about *management*, not
-  *inventory replication*.
+A closer read of the SDK found strong evidence, though not runtime proof.
+`LsSPMeta` (rn `spmeta`) is a **child of `lsServer`**, and it carries:
+
+```
+ownership_state      ['delete-pending', 'disassoc-pending',
+                      'global-controlled', 'localized']
+globalization_state  ['Globalized', 'globalizing', 'no-op']
+operation_code       [..., 'globalization', ...]
+```
+
+`localized` means a profile owned by its own domain; `global-controlled`
+means owned by Central. Those values are meaningless unless Central's
+MIT can hold both kinds — a `localized` ownership state on a child of
+`lsServer` only has something to describe if `lsServer` enumerates local
+profiles. "Globalization" is Cisco's own term for taking a domain-local
+profile under Central's control, and you cannot globalize a profile
+Central cannot see.
+
+`LsBinding` (also a child of `lsServer`, rn `pn`) independently carries
+`pn_dn`/`assigned_to_dn`, the profile-to-physical-server link, in
+Central's own tree.
+
+Weighed against that, the earlier doubts are weak: `LsServer.mo_meta.
+parents` being `['computeTemplate', 'orgOrg']` is also true of UCS
+Manager's `lsServer`, so it distinguishes nothing; and the SDK blurb's
+"global service profiles" describes what the SDK *manages*, not what
+Central *replicates*.
+
+So the expected answer is **yes, Central holds local profiles too**. It
+is still schema evidence rather than a live run: it proves the model
+supports them, not that a given deployment's plain
+`query_classid("lsServer")` returns them (inventory sync state and read
+privileges could still intervene).
+
+### How to settle it
+
+`tools/verify_ucs_central.py` answers it against a real Central in one
+read-only run — no MongoDB, no ingest, no writes:
+
+```
+uv run python -m tools.verify_ucs_central
+```
+
+It reports registered domains with sync state, the `ownership_state`
+breakdown across every `lsSPMeta`, how many servers resolve a
+service-profile name, how many match
+`INVENTORY_COLLECTOR_NAME_PATTERN`, and a GOOD / PARTIAL / BAD verdict.
+A `localized` count above zero with every server named settles this
+section affirmatively; update this ADR when it has been run.
 
 If Central does not replicate local profiles, every affected server falls
 back to a chassis-slot DN for a name, fails the `^ocp` filter, and the

@@ -155,11 +155,17 @@ by both arrives twice, with different `manager_id`s and different
 external ids (`sys/...` vs `compute/sys-<domainId>/...`).
 `docs/adr/0014` has the full evidence trail — and its "What is still
 unproven" section is required reading: it is **not yet validated against
-a live UCS Central**, and whether Central replicates domain-*local*
-service profiles (the source of a server's name, hence of site parsing,
-classification, and the `^ocp` match) is the open question the provider
-instruments rather than assumes. Watch `ucs_central.domain_summary` and
-`ucs_central.domain_without_profiles` on the first real run.
+a live UCS Central**. Whether Central replicates domain-*local* service
+profiles (the source of a server's name, hence of site parsing,
+classification, and the `^ocp` match) is the open question. The SDK
+schema says yes — `LsSPMeta.ownership_state` includes `localized`
+alongside `global-controlled`, on a child of `lsServer` — but that is
+model evidence, not a live run. **Run `uv run python -m
+tools.verify_ucs_central` before trusting it**: read-only, writes
+nothing, and prints a GOOD/PARTIAL/BAD verdict plus the `ownership_state`
+breakdown. Update ADR-0014 with the result. At runtime the provider also
+logs `ucs_central.domain_summary` and warns
+`ucs_central.domain_without_profiles`.
 
 **Shared Cisco logic lives in `app.infrastructure.providers.ucs_common`**
 (`is_equipped`, `group_by_owning_server_dn`, `bmc_interface`,
