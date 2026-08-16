@@ -11,7 +11,12 @@ dependencies = [
     "pydantic==2.13.4",
     "pydantic-settings==2.15.0",
     "pymongo==4.17.0",
-    "redis==8.1.0",
+    # 8.0.1, not the newest 8.x: the newest version this platform's actual
+    # air-gapped mirror carries. Only `redis.asyncio.Redis` and
+    # `redis.exceptions.RedisError` are used anywhere in this codebase —
+    # about as stable a surface as redis-py has — so a patch/minor
+    # difference within 8.x carries negligible risk.
+    "redis==8.0.1",
     "httpx==0.28.1",
     "structlog==26.1.0",
     "prometheus-client==0.26.0",
@@ -23,14 +28,18 @@ dependencies = [
     # and the version pinned here carried seven known CVEs, so it was
     # removed rather than bumped. Add it back only alongside a real
     # multipart endpoint.
-    "ucsmsdk==0.9.27",
-    # Cisco's UCS Central SDK, the aggregator counterpart to ucsmsdk. Both
-    # are needed: they are separate packages with separate MO trees
-    # (`ucscsdk.mometa.*` is rooted per-domain at `compute/sys-<id>`, where
-    # `ucsmsdk`'s is rooted at `sys`), and neither imports the other.
-    # Cisco still labels it an Alpha release; 0.9.0.10 is the newest on
-    # PyPI (2025-08-26).
-    "ucscsdk==0.9.0.10",
+    #
+    # ucsmsdk/ucscsdk: pinned to what this platform's actual air-gapped
+    # mirror carries (0.9.18 / 0.9.0.8), not the newest PyPI release each
+    # had when the collectors were first built (0.9.27 / 0.9.0.10).
+    # Every class and attribute `app.infrastructure.providers.ucs_manager`/
+    # `ucs_central`/`ucs_common` reads — including `mo_meta.parents` (the
+    # DN-depth facts ADR-0009's corrections depend on) and the `presence`
+    # enum — was diffed programmatically between both version pairs before
+    # pinning down: byte-identical on every field this codebase touches.
+    # See ADR-0015's update. Cisco still labels `ucscsdk` an Alpha release.
+    "ucsmsdk==0.9.18",
+    "ucscsdk==0.9.0.8",
 ]
 
 [dependency-groups]
@@ -38,7 +47,7 @@ dev = [
     "pytest==9.1.1",
     "pytest-asyncio==1.4.0",
     "pytest-cov==6.0.0",
-    "testcontainers[mongodb,redis]==4.15.0",
+    "testcontainers[mongodb,redis]==4.14.2",
     "ruff==0.14.0",
     "mypy==1.14.1",
     "types-regex",
@@ -65,7 +74,11 @@ markers = [
 
 [tool.ruff]
 line-length = 100
-target-version = "py313"
+# The floor (3.12), same reasoning as `[tool.mypy]`'s `python_version`
+# below: targeting the CI interpreter (3.13) would let `UP` (pyupgrade)
+# suggest a 3.13-only construct that breaks the 3.12 path this project
+# also supports.
+target-version = "py312"
 src = ["backend", "tests", "tools"]
 
 [tool.ruff.lint]

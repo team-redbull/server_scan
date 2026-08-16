@@ -246,10 +246,10 @@ wheels = [
 
 [[packages]]
 name = "redis"
-version = "8.1.0"
+version = "8.0.1"
 index = "https://pypi.org/simple"
-sdist = { url = "https://files.pythonhosted.org/packages/a8/99/604f0b666d4c616d891cf77ebb9db6bb21601344c051aebf1b72b9ff915f/redis-8.1.0.tar.gz", upload-time = 2026-07-30T08:51:00Z, size = 5254356, hashes = { sha256 = "6e1a19beef9225c83efd689c7e6b7da2d5215b1f42cd13b7fc3714d0a09c7b25" } }
-wheels = [{ url = "https://files.pythonhosted.org/packages/66/9d/c5731f6e3608663d4d3656fd8d3aecee8b509c3082818f5a13eae925baea/redis-8.1.0-py3-none-any.whl", upload-time = 2026-07-30T08:50:58Z, size = 560618, hashes = { sha256 = "a4fe1aac3d3b3cc791d4b3d5931c5a956045dc951ee74d1c913ee3ac4d2ee9fb" } }]
+sdist = { url = "https://files.pythonhosted.org/packages/cc/c3/928b290c2c0ca99ab96eea5b4ff8f30be8112b075301a7d3ba214a3c8c12/redis-8.0.1.tar.gz", upload-time = 2026-06-23T14:52:37Z, size = 5114170, hashes = { sha256 = "afc5a7a2f5a084f5b1880dec548dd45be17db7e43c82a30d84f952aefb05cfb0" } }
+wheels = [{ url = "https://files.pythonhosted.org/packages/fd/0a/c2345ebf1ebe70840ce3f6c6ee612f8fa749cfbd1b03069c53bf0c62aaad/redis-8.0.1-py3-none-any.whl", upload-time = 2026-06-23T14:52:36Z, size = 502406, hashes = { sha256 = "47daa35a058c23468d6437f17a8c76882cb316b838ef763036af99b96cedd743" } }]
 
 [[packages]]
 name = "regex"
@@ -351,17 +351,17 @@ wheels = [{ url = "https://files.pythonhosted.org/packages/67/81/4add07e5172b7ac
 
 [[packages]]
 name = "ucscsdk"
-version = "0.9.0.10"
+version = "0.9.0.8"
 index = "https://pypi.org/simple"
-sdist = { url = "https://files.pythonhosted.org/packages/9e/ce/f0d152c5c96b4c438dde0fd567dc89851c75715b6dbcb3f6b0717d18b39b/ucscsdk-0.9.0.10.tar.gz", upload-time = 2025-08-26T08:35:41Z, size = 3593100, hashes = { sha256 = "12d9408ef45d19d5a76e153af191442c8e3ed422bf5a305fc661899c02c7ffa1" } }
-wheels = [{ url = "https://files.pythonhosted.org/packages/1e/5c/d47e62e7f605305ea9ae169c2aac79686a2db8726be38d03813344ee2f69/ucscsdk-0.9.0.10-py2.py3-none-any.whl", upload-time = 2025-08-26T08:35:39Z, size = 5483692, hashes = { sha256 = "20f4591b0213dbc43156ac41278464d1b63f1b06a679604af1ea281897be0062" } }]
+sdist = { url = "https://files.pythonhosted.org/packages/44/38/893b6f244361fe75a1f2528c8266d5d5b2e4cfc1a58b624e2fd564e5beee/ucscsdk-0.9.0.8.tar.gz", upload-time = 2024-09-24T08:39:54Z, size = 3575932, hashes = { sha256 = "800b421bb14a7e76171f5445d4bc1a7ca535690f203263c83c429b71065c761a" } }
+wheels = [{ url = "https://files.pythonhosted.org/packages/51/78/6550f6794446ad0f37345ce7475a063bd3cb64dada5b5867e82858c304c6/ucscsdk-0.9.0.8-py2.py3-none-any.whl", upload-time = 2024-09-24T08:39:53Z, size = 5465575, hashes = { sha256 = "2af56488d1bb2df4554d5d7e85b7628855f0b67bfff234b9d69853c37206c7b6" } }]
 
 [[packages]]
 name = "ucsmsdk"
-version = "0.9.27"
+version = "0.9.18"
 index = "https://pypi.org/simple"
-sdist = { url = "https://files.pythonhosted.org/packages/9a/83/35b7d3c671bd196d3b8db17aacb765fa019bb3f63f5e6ae898c018a23525/ucsmsdk-0.9.27.tar.gz", upload-time = 2026-08-10T09:19:31Z, size = 4665738, hashes = { sha256 = "bbeea64d9837438229ac680015d216fc7187ee01d5f12521f88b09d0cb4ee48a" } }
-wheels = [{ url = "https://files.pythonhosted.org/packages/a9/25/f5d69a74ecd8640927eb8d6ab28649dc3da216496a5965fe3ede36d28f19/ucsmsdk-0.9.27-py2.py3-none-any.whl", upload-time = 2026-08-10T09:19:29Z, size = 6895393, hashes = { sha256 = "c7d49cfbf64331af44a69a906b478464def60ce0b1fa6c7f9cad430c53b1fe19" } }]
+sdist = { url = "https://files.pythonhosted.org/packages/fa/d7/815ca425cc450bd3f9996dc15d741141204c22970ad29a99659b0ec3747e/ucsmsdk-0.9.18.tar.gz", upload-time = 2024-06-14T08:41:52Z, size = 4572314, hashes = { sha256 = "679abf79bc4674e93c4de36406b727fd75f4f534b3f68878f8427de6044b9388" } }
+wheels = [{ url = "https://files.pythonhosted.org/packages/3e/78/108e1e1ab805c7d2d62718975eb279deae1229cd7cdd1075252ee025aa09/ucsmsdk-0.9.18-py2.py3-none-any.whl", upload-time = 2024-06-14T08:41:50Z, size = 6780629, hashes = { sha256 = "e46799575dab6719c191df2fea9f39e8d75a4bb74104ca6b62b5bb4b166bd10f" } }]
 
 [[packages]]
 name = "uvicorn"
