@@ -127,6 +127,18 @@ class UcsManagerProvider:
             # fleet with no MACs and no fabric attachments at all.
             adapter_ifs_all = await client.query_classid("adaptorExtEthIf")
             adapter_ifs_all += await client.query_classid("adaptorHostEthIf")
+            # `processorUnit` (child of `computeBoard`) and
+            # `storageLocalDisk` (child of `storageController`, itself a
+            # child of `computeBoard` *or* `equipmentChassis`) are both
+            # grandchildren-or-deeper of a compute unit, exactly like
+            # `mgmtIf`/`adaptorHostEthIf` above — so they get the same
+            # domain-wide query + DN-prefix join rather than a per-server
+            # lookup. A disk parented under `equipmentChassis` (shared
+            # chassis storage, not owned by one server) never matches any
+            # server DN and is dropped by the join for free, the same way
+            # a chassis-owned `mgmtIf` already is.
+            cpu_units_all = await client.query_classid("processorUnit")
+            disk_units_all = await client.query_classid("storageLocalDisk")
 
             profile_by_dn, template_dn_by_name = _partition_profiles(ls_servers)
 
@@ -135,6 +147,10 @@ class UcsManagerProvider:
             mgmt_ifs_by_server = _group_by_owning_server_dn(mgmt_ifs, server_dns=server_dns)
             adapter_ifs_by_server = _group_by_owning_server_dn(
                 adapter_ifs_all, server_dns=server_dns
+            )
+            cpu_units_by_server = _group_by_owning_server_dn(cpu_units_all, server_dns=server_dns)
+            disk_units_by_server = _group_by_owning_server_dn(
+                disk_units_all, server_dns=server_dns
             )
 
             for server_mo in servers:
@@ -146,6 +162,8 @@ class UcsManagerProvider:
                     template_dn_by_name=template_dn_by_name,
                     mgmt_if=mgmt_if,
                     adapter_ifs=adapter_ifs_by_server[server_mo.dn],
+                    cpu_units=cpu_units_by_server[server_mo.dn],
+                    disk_units=disk_units_by_server[server_mo.dn],
                 )
         finally:
             await client.logout()

@@ -254,7 +254,7 @@ class TestMultiDomain:
         await _collect(_provider(client))
 
         queries = [c for c in client.calls if c.startswith("query:")]
-        assert len(queries) == len(set(queries)) == 7
+        assert len(queries) == len(set(queries)) == 9
         assert client.calls[0] == "login"
         assert client.calls[-1] == "logout"
 
@@ -280,6 +280,48 @@ class TestMultiDomain:
         (server,) = await _collect(_provider(client))
         assert server.attachments[0].provider == ManagerType.UCS_CENTRAL.value
         assert server.attachments[0].fabric == "B"
+
+    async def test_cpu_and_storage_join_across_domains(self) -> None:
+        """`processorUnit`/`storageLocalDisk` are domain-wide queries too —
+        each domain's own components must land on that domain's server,
+        the same cross-domain join guarantee as `mgmtIf`/adapter interfaces
+        above (identical chassis/slot numbering is the norm across
+        domains).
+        """
+        client = FakeClient(
+            {
+                "computeSystem": [_domain("1009", "a"), _domain("1010", "b")],
+                "computeBlade": [_blade("1009", 1, 1), _blade("1010", 1, 1)],
+                "processorUnit": [
+                    SimpleNamespace(
+                        dn="compute/sys-1009/chassis-1/blade-1/board/cpu-1",
+                        presence="equipped",
+                        model="Intel(R) Xeon(R) Gold 6338",
+                    )
+                ],
+                "storageLocalDisk": [
+                    SimpleNamespace(
+                        dn="compute/sys-1010/chassis-1/blade-1/board/storage-SAS-1/disk-1",
+                        presence="equipped",
+                        model="UCS-HD12TB10K12G",
+                        serial="S3X0ABCD",
+                        device_type="SSD",
+                        disk_state="good",
+                        size="915715",
+                    )
+                ],
+            }
+        )
+        servers = await _collect(_provider(client))
+        by_dn = {s.external_id: s for s in servers}
+        first = by_dn["compute/sys-1009/chassis-1/blade-1"]
+        second = by_dn["compute/sys-1010/chassis-1/blade-1"]
+
+        assert first.cpu_model == "Intel(R) Xeon(R) Gold 6338"
+        assert first.storage_drives == ()
+        assert second.cpu_model is None
+        assert len(second.storage_drives) == 1
+        assert second.storage_drives[0]["media_type"] == "SSD"
 
 
 class TestSessionLifecycle:

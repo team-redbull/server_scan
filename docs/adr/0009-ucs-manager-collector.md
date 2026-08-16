@@ -391,3 +391,35 @@ UNCLASSIFIED — correct, and visibly distinct from the four that resolve.
   in the "Unassigned" bucket — correct behaviour for these names, but it
   means a UCS-sourced fleet only gets real sites once hostnames carry
   them.
+
+## Update (2026-08-16): CPU model and storage detail are now mapped
+
+The two scope cuts above are closed, not by new access against UCSPE, but
+by the same bar the rest of this module holds every field to: confirmed
+directly against the installed `ucsmsdk`/`ucscsdk` package source.
+`ComputeBoard`, `ProcessorUnit`, `StorageController` and
+`StorageLocalDisk` all exist as real classes, parented off a compute
+unit the same grandchildren-or-deeper way `mgmtIf`/`adaptorHostEthIf`
+already are (`computeBlade` -> `computeBoard` -> `processorUnit`;
+`computeBlade` -> `computeBoard` -> `storageController` ->
+`storageLocalDisk`), so `ucs_common.group_by_owning_server_dn`'s
+ancestor-walk join handles them without modification — a
+`storageController` parented off `equipmentChassis` instead (shared
+chassis storage, not one server's) is dropped by the same join, the same
+way a chassis-owned `mgmtIf` already was.
+
+`cpu_model` comes from the first equipped `processorUnit.model`.
+`storage_drives`/`storage_total_bytes` come from every equipped
+`storageLocalDisk`, with `device_type` mapped onto the platform's
+`MediaType` and `disk_state` mapped onto `HealthSeverity`. `size`'s unit
+gets the same "cannot be settled from the SDK alone" treatment as
+`total_memory` — assumed MB, unverified — with one piece of independent,
+weak corroboration: a sibling project's own from-scratch Cisco collector
+(`team-redbull/ServerScanner`) made the identical MB assumption for this
+exact field, discovered while researching how that project structured
+its own vendor-provider abstraction.
+
+`processorUnit`/`storageLocalDisk` are two more domain-wide queries per
+collector run (six -> eight for UCS Manager). Real-hardware verification
+of the `size` unit and of these classes' actual presence/depth against a
+live domain is still open, same as `total_memory` always was.

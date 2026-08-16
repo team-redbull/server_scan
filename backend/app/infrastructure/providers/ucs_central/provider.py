@@ -135,9 +135,9 @@ class UcsCentralProvider:
         try:
             await client.login()
 
-            # Seven domain-wide queries for the entire multi-domain fleet.
+            # Nine domain-wide queries for the entire multi-domain fleet.
             # The cost is per-class, not per-domain and not per-server:
-            # this is the same seven calls whether Central fronts two
+            # this is the same nine calls whether Central fronts two
             # domains or two hundred.
             domains = await client.query_classid("computeSystem")
             blades = await client.query_classid("computeBlade")
@@ -152,6 +152,16 @@ class UcsCentralProvider:
             # fabric attachments (`docs/adr/0009`).
             adapter_ifs_all = await client.query_classid("adaptorExtEthIf")
             adapter_ifs_all += await client.query_classid("adaptorHostEthIf")
+            # `processorUnit`/`storageLocalDisk` exist as real classes in
+            # `ucscsdk` itself, property-identical to `ucsmsdk` (see
+            # `..ucs_manager.mapping`'s module docstring) — confirmed
+            # against the installed package, not assumed by analogy. Same
+            # domain-wide-query + DN-prefix-join shape as every other
+            # descendant class above; a disk under `equipmentChassis`
+            # rather than a server's own board is dropped by the join, not
+            # misattributed.
+            cpu_units_all = await client.query_classid("processorUnit")
+            disk_units_all = await client.query_classid("storageLocalDisk")
 
             profile_by_dn, template_dn_by_name = partition_profiles(ls_servers)
 
@@ -161,6 +171,8 @@ class UcsCentralProvider:
             adapter_ifs_by_server = group_by_owning_server_dn(
                 adapter_ifs_all, server_dns=server_dns
             )
+            cpu_units_by_server = group_by_owning_server_dn(cpu_units_all, server_dns=server_dns)
+            disk_units_by_server = group_by_owning_server_dn(disk_units_all, server_dns=server_dns)
 
             self._log_domains(domains, servers=servers, profile_by_dn=profile_by_dn)
 
@@ -173,6 +185,8 @@ class UcsCentralProvider:
                     template_dn_by_name=template_dn_by_name,
                     mgmt_if=mgmt_if,
                     adapter_ifs=adapter_ifs_by_server[server_mo.dn],
+                    cpu_units=cpu_units_by_server[server_mo.dn],
+                    disk_units=disk_units_by_server[server_mo.dn],
                     provider_type=_PROVIDER_TYPE,
                 )
         finally:

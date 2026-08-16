@@ -85,6 +85,8 @@ class TestComputeUnitToProviderServer:
             template_dn_by_name={template.name: template.dn},
             mgmt_if=mgmt_if,
             adapter_ifs=[adapter_if],
+            cpu_units=[],
+            disk_units=[],
         )
 
         assert result.external_id == "sys/chassis-1/blade-3"
@@ -116,6 +118,8 @@ class TestComputeUnitToProviderServer:
             template_dn_by_name={},
             mgmt_if=None,
             adapter_ifs=[],
+            cpu_units=[],
+            disk_units=[],
         )
         assert result.profile_template_name is None
         assert result.profile_template_external_id is None
@@ -130,6 +134,8 @@ class TestComputeUnitToProviderServer:
             template_dn_by_name={},
             mgmt_if=None,
             adapter_ifs=[],
+            cpu_units=[],
+            disk_units=[],
         )
         assert result.profile_template_name is None
         assert result.profile_template_external_id is None
@@ -144,6 +150,8 @@ class TestComputeUnitToProviderServer:
             template_dn_by_name={},  # no lsServiceProfileTemplate matched
             mgmt_if=None,
             adapter_ifs=[],
+            cpu_units=[],
+            disk_units=[],
         )
         assert result.profile_template_name == "worker-template"
         assert result.profile_template_external_id == "worker-template"
@@ -156,6 +164,8 @@ class TestComputeUnitToProviderServer:
             template_dn_by_name={},
             mgmt_if=None,
             adapter_ifs=[],
+            cpu_units=[],
+            disk_units=[],
         )
         assert result.bmc_address_raw is None
         assert result.bmc_mac is None
@@ -169,6 +179,8 @@ class TestComputeUnitToProviderServer:
             template_dn_by_name={},
             mgmt_if=_mgmt_if(ext_ip=unset_ip),
             adapter_ifs=[],
+            cpu_units=[],
+            disk_units=[],
         )
         assert result.bmc_address_raw is None
 
@@ -180,6 +192,8 @@ class TestComputeUnitToProviderServer:
             template_dn_by_name={},
             mgmt_if=None,
             adapter_ifs=[_adapter_if(switch_id="NONE")],
+            cpu_units=[],
+            disk_units=[],
         )
         assert result.attachments == ()
         # The NIC's MAC is still real and still reported, even though it
@@ -197,6 +211,8 @@ class TestComputeUnitToProviderServer:
                 _adapter_if(name="eth0", mac="AA:00:00:00:00:00", switch_id="A"),
                 _adapter_if(name="eth1", mac="AA:00:00:00:00:01", switch_id="B"),
             ],
+            cpu_units=[],
+            disk_units=[],
         )
         assert result.nic_macs == ("AA:00:00:00:00:00", "AA:00:00:00:00:01")
         assert [a.fabric for a in result.attachments] == ["A", "B"]
@@ -212,6 +228,8 @@ class TestComputeUnitToProviderServer:
             template_dn_by_name={},
             mgmt_if=None,
             adapter_ifs=[],
+            cpu_units=[],
+            disk_units=[],
         )
         assert result.cpu_sockets == expected
 
@@ -241,7 +259,153 @@ class TestComputeUnitToProviderServer:
             template_dn_by_name={},
             mgmt_if=None,
             adapter_ifs=[],
+            cpu_units=[],
+            disk_units=[],
         )
         assert result.external_id == "sys/rack-unit-1"
         assert result.serial == "WZP99999999"
         assert result.cpu_sockets == 1
+
+
+def _processor_unit(**overrides: object) -> SimpleNamespace:
+    defaults = {
+        "dn": "sys/chassis-1/blade-3/board/cpu-1",
+        "presence": "equipped",
+        "model": "Intel(R) Xeon(R) Gold 6338",
+    }
+    defaults.update(overrides)
+    return SimpleNamespace(**defaults)
+
+
+def _storage_disk(**overrides: object) -> SimpleNamespace:
+    defaults = {
+        "dn": "sys/chassis-1/blade-3/board/storage-SAS-1/disk-1",
+        "presence": "equipped",
+        "model": "UCS-HD12TB10K12G",
+        "serial": "S3X0ABCD",
+        "device_type": "HDD",
+        "disk_state": "online",
+        "size": "1144641",  # MB
+    }
+    defaults.update(overrides)
+    return SimpleNamespace(**defaults)
+
+
+class TestCpuAndStorage:
+    def test_cpu_model_from_first_equipped_processor(self) -> None:
+        result = compute_unit_to_provider_server(
+            _blade(),
+            manager_id="mgr_1",
+            profile_by_dn={},
+            template_dn_by_name={},
+            mgmt_if=None,
+            adapter_ifs=[],
+            cpu_units=[
+                _processor_unit(dn=".../cpu-2", presence="empty", model=""),
+                _processor_unit(),
+            ],
+            disk_units=[],
+        )
+        assert result.cpu_model == "Intel(R) Xeon(R) Gold 6338"
+
+    def test_no_equipped_processor_leaves_cpu_model_none(self) -> None:
+        result = compute_unit_to_provider_server(
+            _blade(),
+            manager_id="mgr_1",
+            profile_by_dn={},
+            template_dn_by_name={},
+            mgmt_if=None,
+            adapter_ifs=[],
+            cpu_units=[_processor_unit(presence="empty")],
+            disk_units=[],
+        )
+        assert result.cpu_model is None
+
+    def test_storage_drives_mapped_and_summed(self) -> None:
+        result = compute_unit_to_provider_server(
+            _blade(),
+            manager_id="mgr_1",
+            profile_by_dn={},
+            template_dn_by_name={},
+            mgmt_if=None,
+            adapter_ifs=[],
+            cpu_units=[],
+            disk_units=[
+                _storage_disk(dn="disk-1", size="1144641"),
+                _storage_disk(dn="disk-2", size="1144641", device_type="SSD", disk_state="good"),
+            ],
+        )
+        assert len(result.storage_drives) == 2
+        first = result.storage_drives[0]
+        assert first["id"] == "disk-1"
+        assert first["model"] == "UCS-HD12TB10K12G"
+        assert first["media_type"] == "HDD"
+        assert first["health"] == "HEALTHY"
+        assert first["capacity_bytes"] == 1144641 * 1024 * 1024
+        assert result.storage_total_bytes == 2 * 1144641 * 1024 * 1024
+
+    def test_non_equipped_disk_is_dropped(self) -> None:
+        result = compute_unit_to_provider_server(
+            _blade(),
+            manager_id="mgr_1",
+            profile_by_dn={},
+            template_dn_by_name={},
+            mgmt_if=None,
+            adapter_ifs=[],
+            cpu_units=[],
+            disk_units=[_storage_disk(presence="empty")],
+        )
+        assert result.storage_drives == ()
+        assert result.storage_total_bytes == 0
+
+    def test_not_applicable_size_is_unknown_capacity_not_zero(self) -> None:
+        result = compute_unit_to_provider_server(
+            _blade(),
+            manager_id="mgr_1",
+            profile_by_dn={},
+            template_dn_by_name={},
+            mgmt_if=None,
+            adapter_ifs=[],
+            cpu_units=[],
+            disk_units=[_storage_disk(size="not-applicable")],
+        )
+        assert result.storage_drives[0]["capacity_bytes"] is None
+        assert result.storage_total_bytes == 0
+
+    @pytest.mark.parametrize(
+        ("disk_state", "expected"),
+        [
+            ("good", "HEALTHY"),
+            ("predictive-failure", "WARNING"),
+            ("rebuilding", "WARNING"),
+            ("failed", "CRITICAL"),
+            ("bad", "CRITICAL"),
+            ("something-unmapped", "UNKNOWN"),
+            ("", "UNKNOWN"),
+        ],
+    )
+    def test_disk_health_mapping(self, disk_state: str, expected: str) -> None:
+        result = compute_unit_to_provider_server(
+            _blade(),
+            manager_id="mgr_1",
+            profile_by_dn={},
+            template_dn_by_name={},
+            mgmt_if=None,
+            adapter_ifs=[],
+            cpu_units=[],
+            disk_units=[_storage_disk(disk_state=disk_state)],
+        )
+        assert result.storage_drives[0]["health"] == expected
+
+    def test_unmapped_device_type_is_unknown_media(self) -> None:
+        result = compute_unit_to_provider_server(
+            _blade(),
+            manager_id="mgr_1",
+            profile_by_dn={},
+            template_dn_by_name={},
+            mgmt_if=None,
+            adapter_ifs=[],
+            cpu_units=[],
+            disk_units=[_storage_disk(device_type="unspecified")],
+        )
+        assert result.storage_drives[0]["media_type"] == "UNKNOWN"

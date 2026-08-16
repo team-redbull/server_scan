@@ -20,6 +20,23 @@ CONFIRMED (attribute exists, meaning matches Cisco's docs/property help):
   `type`): src_templ_name, oper_src_templ_name, type, name, dn.
   mgmtIf: access ("out-of-band" is the value to filter on), ext_ip, mac.
   adaptorHostEthIf: switch_id, mac, admin_state, oper_state, id/name.
+  processorUnit (child of computeBoard, itself a child of a compute
+  unit — reached the same grandchildren-join way as mgmtIf): model,
+  cores, presence. `ComputeBoard`/`ProcessorUnit`/`StorageController`/
+  `StorageLocalDisk` all exist as real classes in *both* `ucsmsdk` and
+  `ucscsdk`, with property-identical `prop_meta` — confirmed directly
+  against the installed packages, not documentation (the same bar
+  `docs/adr/0009`/`docs/adr/0014` hold every other field in this module
+  to). `presence` is the same shared enum family `ucs_common.is_equipped`
+  already reads off a compute unit.
+  storageLocalDisk (child of storageController, itself a child of
+  computeBoard *or* equipmentChassis — the latter is chassis-shared
+  storage with no owning server, which `ucs_common.
+  group_by_owning_server_dn`'s ancestor walk drops for free, the same way
+  it already drops a chassis-owned `mgmtIf`): model, serial, size,
+  device_type, disk_state, presence. `device_type`'s enum
+  (`HDD`/`SSD`/`NVME`/`unspecified`) maps directly onto the platform's
+  own `MediaType`.
 
 ASSUMED, NOT INDEPENDENTLY VERIFIED — flagged inline where used:
   - `total_memory`/`available_memory`'s unit. UCS Manager's own GUI
@@ -29,11 +46,19 @@ ASSUMED, NOT INDEPENDENTLY VERIFIED — flagged inline where used:
     annotation, doc string or range — the package is code-generated from
     the MIT schema and carries no unit metadata for any property. Verify
     against UCSPE or real hardware.
-  - Per-CPU model string and storage-drive detail: no MO for either was
-    confirmed, so `cpu_model` stays `None` and `storage_*` stay at their
-    zero/empty defaults — a v1 scope cut, not an oversight. A follow-up
-    pass against a real UCS Manager (or Cisco's UCS Platform Emulator)
-    should fill in CPU/storage detail.
+  - `storageLocalDisk.size`'s unit is the same kind of gap, and is
+    assumed to be MB for the same reason (UCS Manager's own convention of
+    reporting capacity fields in MB) — weak but independent corroboration:
+    a separate, unrelated Cisco-collector implementation (a sibling
+    project's `ServerScanner`) made the identical MB assumption for this
+    exact field. Still unverified until a real disk of known size is read
+    back. `size == "not-applicable"` (a documented sentinel,
+    `StorageLocalDiskConsts.SIZE_NOT_APPLICABLE`) is treated as unknown
+    capacity, not zero.
+  - Per-CPU model string and storage-drive detail were a v1 scope cut
+    (no MO had been confirmed yet); both are now mapped — see
+    `_cpu_model`/`_storage_drives` — but neither has been exercised
+    against a live domain yet, unlike the fields above them.
 """
 
 from __future__ import annotations
@@ -41,8 +66,10 @@ from __future__ import annotations
 from typing import Any
 
 from app.domain.ports.provider import ProviderAttachment, ProviderServer
+from app.infrastructure.providers.ucs_common import is_equipped
 
 _BYTES_PER_MB = 1024 * 1024
+_NOT_APPLICABLE = "not-applicable"
 
 
 def _profile_template_fields(
@@ -193,6 +220,93 @@ def _attachments(adapter_ifs: list[Any], *, provider_type: str) -> tuple[Provide
     return tuple(attachments)
 
 
+def _cpu_model(cpu_units: list[Any]) -> str | None:
+    """The processor model string, from the first equipped `processorUnit`.
+
+    UCS reports one `processorUnit` per socket; a real multi-socket server
+    is expected to be symmetric (identical CPUs in every socket), so the
+    first equipped one represents the server rather than being an
+    arbitrary pick. An empty socket on a partially-populated board reports
+    `presence="empty"` and is skipped by `is_equipped`, same as an
+    unequipped compute unit itself.
+    """
+    for mo in cpu_units:
+        if is_equipped(mo):
+            model = getattr(mo, "model", None)
+            if model:
+                return str(model)
+    return None
+
+
+_MEDIA_TYPE_MAP = {"hdd": "HDD", "ssd": "SSD", "nvme": "NVME"}
+
+# `StorageLocalDiskConsts.DISK_STATE_*` — the states worth distinguishing
+# for a health rollup, mapped onto the platform's `HealthSeverity` values
+# the same way `_oper_state`/`_admin_state` map UCS's own connectivity
+# vocabulary above. Anything not listed here (including UCS's own
+# `unknown`/`na`) falls through to UNKNOWN rather than being guessed at.
+_DISK_HEALTH_MAP = {
+    "good": "HEALTHY",
+    "online": "HEALTHY",
+    "unconfigured-good": "HEALTHY",
+    "global-hot-spare": "HEALTHY",
+    "dedicated-hot-spare": "HEALTHY",
+    "jbod": "HEALTHY",
+    "predictive-failure": "WARNING",
+    "rebuilding": "WARNING",
+    "copyback": "WARNING",
+    "foreign-configuration": "WARNING",
+    "locked-foreign-configuration": "WARNING",
+    "bad": "CRITICAL",
+    "failed": "CRITICAL",
+    "unconfigured-bad": "CRITICAL",
+    "disabled-for-removal": "CRITICAL",
+}
+
+
+def _media_type(mo: Any) -> str:
+    return _MEDIA_TYPE_MAP.get(str(getattr(mo, "device_type", "") or "").lower(), "UNKNOWN")
+
+
+def _disk_health(mo: Any) -> str:
+    return _DISK_HEALTH_MAP.get(str(getattr(mo, "disk_state", "") or "").lower(), "UNKNOWN")
+
+
+def _disk_capacity_bytes(mo: Any) -> int | None:
+    raw_size = getattr(mo, "size", None)
+    if raw_size is None or str(raw_size).lower() == _NOT_APPLICABLE:
+        return None
+    size_mb = _as_int(raw_size)
+    return size_mb * _BYTES_PER_MB if size_mb else None
+
+
+def _storage_drives(disk_units: list[Any]) -> tuple[tuple[dict[str, object], ...], int]:
+    """`(drives, total_bytes)` from every equipped `storageLocalDisk` under
+    one server. A disk whose capacity couldn't be read contributes a drive
+    entry (model/serial/health are still worth reporting) with
+    `capacity_bytes=None`, and contributes nothing to the total rather than
+    silently counting as zero bytes.
+    """
+    drives: list[dict[str, object]] = []
+    total_bytes = 0
+    for mo in disk_units:
+        if not is_equipped(mo):
+            continue
+        capacity_bytes = _disk_capacity_bytes(mo)
+        total_bytes += capacity_bytes or 0
+        drives.append(
+            {
+                "id": str(mo.dn),
+                "model": getattr(mo, "model", None) or None,
+                "serial": getattr(mo, "serial", None) or None,
+                "media_type": _media_type(mo),
+                "capacity_bytes": capacity_bytes,
+                "health": _disk_health(mo),
+            }
+        )
+    return tuple(drives), total_bytes
+
+
 def compute_unit_to_provider_server(
     server_mo: Any,
     *,
@@ -201,6 +315,8 @@ def compute_unit_to_provider_server(
     template_dn_by_name: dict[str, str],
     mgmt_if: Any | None,
     adapter_ifs: list[Any],
+    cpu_units: list[Any],
+    disk_units: list[Any],
     provider_type: str = "UCS_MANAGER",
 ) -> ProviderServer:
     """Convert one `computeBlade` or `computeRackUnit` MO — the two
@@ -218,6 +334,7 @@ def compute_unit_to_provider_server(
     )
 
     total_memory_mb = _as_int(getattr(server_mo, "total_memory", None))
+    storage_drives, storage_total_bytes = _storage_drives(disk_units)
 
     return ProviderServer(
         external_id=server_mo.dn,
@@ -235,10 +352,10 @@ def compute_unit_to_provider_server(
         cpu_sockets=_as_int(getattr(server_mo, "num_of_cpus", None)),
         cpu_cores=_as_int(getattr(server_mo, "num_of_cores", None)),
         cpu_threads=_as_int(getattr(server_mo, "num_of_threads", None)),
-        cpu_model=None,  # see module docstring's ASSUMED section
+        cpu_model=_cpu_model(cpu_units),
         memory_total_bytes=total_memory_mb * _BYTES_PER_MB,
-        storage_total_bytes=0,  # see module docstring's ASSUMED section
-        storage_drives=(),
+        storage_total_bytes=storage_total_bytes,
+        storage_drives=storage_drives,
         attachments=_attachments(adapter_ifs, provider_type=provider_type),
         tags=(),
     )

@@ -230,6 +230,24 @@ def _domain(**overrides: list[Any]) -> dict[str, list[Any]]:
                 name="eth0",
             )
         ],
+        "processorUnit": [
+            SimpleNamespace(
+                dn="sys/chassis-1/blade-1/board/cpu-1",
+                presence="equipped",
+                model="Intel(R) Xeon(R) Gold 6338",
+            )
+        ],
+        "storageLocalDisk": [
+            SimpleNamespace(
+                dn="sys/chassis-1/blade-1/board/storage-SAS-1/disk-1",
+                presence="equipped",
+                model="UCS-HD12TB10K12G",
+                serial="S3X0ABCD",
+                device_type="HDD",
+                disk_state="online",
+                size="1144641",
+            )
+        ],
     }
     domain.update(overrides)
     return domain
@@ -316,7 +334,7 @@ class TestListServers:
         servers = await _collect(_provider(client))
 
         assert len(servers) == 50
-        assert len([c for c in client.calls if c.startswith("query_classid:")]) == 6
+        assert len([c for c in client.calls if c.startswith("query_classid:")]) == 8
 
     async def test_skips_non_equipped_servers(self) -> None:
         domain = _domain()
@@ -343,7 +361,9 @@ class TestListServers:
         assert server.bmc_mac is None
 
     async def test_server_with_no_descendants_still_yields(self) -> None:
-        domain = _domain(mgmtIf=[], adaptorHostEthIf=[])
+        domain = _domain(
+            mgmtIf=[], adaptorHostEthIf=[], processorUnit=[], storageLocalDisk=[]
+        )
         client = FakeUcsClient(responses=domain)
         [server] = await _collect(_provider(client))
 
@@ -351,6 +371,22 @@ class TestListServers:
         assert server.bmc_address_raw is None
         assert server.nic_macs == ()
         assert server.attachments == ()
+        assert server.cpu_model is None
+        assert server.storage_drives == ()
+
+    async def test_joins_cpu_and_storage_grandchildren_onto_their_server(self) -> None:
+        """The same grandchildren-join defect class ADR-0009 found for
+        `mgmtIf`/`adaptorHostEthIf` applies here: `processorUnit` and
+        `storageLocalDisk` are both two-or-more levels below a compute
+        unit, not children of it.
+        """
+        client = FakeUcsClient(responses=_domain())
+        [server] = await _collect(_provider(client))
+
+        assert server.cpu_model == "Intel(R) Xeon(R) Gold 6338"
+        assert len(server.storage_drives) == 1
+        assert server.storage_drives[0]["model"] == "UCS-HD12TB10K12G"
+        assert server.storage_total_bytes == 1144641 * 1024 * 1024
 
     async def test_logs_out_after_a_full_drain(self) -> None:
         client = FakeUcsClient(responses=_domain())

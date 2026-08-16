@@ -194,9 +194,26 @@ domain absent from `computeSystem`. The first real run answers the
 question in one log line instead of one silent empty inventory.
 
 Also unproven, and inherited rather than new: the `total_memory` MB
-assumption, CPU model string, and per-drive storage detail are the same
-open items ADR-0009 left. Central adds one of its own — replication lag,
-which `last_refreshed_ts` now surfaces.
+assumption is the same open item ADR-0009 left; CPU model string and
+per-drive storage detail were too, until the update below. Central adds
+one open item of its own — replication lag, which `last_refreshed_ts`
+now surfaces.
+
+### Update (2026-08-16): CPU model and storage detail
+
+`cpu_model`/`storage_drives`/`storage_total_bytes` are now populated —
+see ADR-0009's own update, which this collector inherits unchanged since
+it shares `..ucs_manager.mapping`. `ComputeBoard`/`ProcessorUnit`/
+`StorageController`/`StorageLocalDisk` were confirmed to exist as real
+classes in `ucscsdk` itself, property-identical to `ucsmsdk` (same bar as
+every other field in this ADR's Evidence section), so no per-domain
+fallback to UCS Manager is needed for either field — two more
+domain-wide queries (`processorUnit`, `storageLocalDisk`), joined the
+same ancestor-walk way as everything else, cover every domain Central
+knows about in one pass (seven queries -> nine). This closes a gap a
+sibling project's own Cisco collector worked around by logging into each
+domain's UCS Manager separately for exactly this data — a real but
+avoidable cost this collector doesn't need to pay.
 
 ## Consequences
 
