@@ -2,7 +2,7 @@
 name = "server-inventory"
 version = "0.1.0"
 description = "Production-grade air-gapped bare-metal server inventory platform"
-requires-python = ">=3.13,<3.14"
+requires-python = ">=3.12,<3.14"
 readme = "README.md"
 license = { text = "Proprietary" }
 
@@ -80,7 +80,11 @@ ignore = ["S101"]  # allow assert in tests
 "tests/**" = ["S101", "S105", "S106", "S311"]
 
 [tool.mypy]
-python_version = "3.13"
+# The floor of `requires-python` (3.12), not the CI/production interpreter
+# (3.13) — type-checking against the floor is what actually catches a
+# 3.13-only stdlib/typing feature creeping in and silently breaking the
+# air-gapped 3.12 path this supports.
+python_version = "3.12"
 strict = true
 mypy_path = "backend"
 explicit_package_bases = true
