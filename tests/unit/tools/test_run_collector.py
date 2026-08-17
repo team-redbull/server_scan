@@ -8,17 +8,22 @@ a vendor endpoint.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from tools import run_collector
 from tools.run_collector import (
     _build_provider,
     _dry_run_one_manager,
     _filtered,
     _parse_args,
+    _run,
     _run_one_manager,
+    collection_errors_of,
 )
 
+from app.application.services.ingest import IngestSummary
 from app.config.settings import Settings
 from app.domain.enums import ManagerType
 from app.domain.models.common import AuditFields
@@ -48,6 +53,18 @@ def _central_settings(**overrides: Any) -> Settings:
         ucs_manager_username="domain-admin",
         ucs_manager_password="domain-secret",
         **overrides,
+    )
+
+
+def _central_settings_for_run() -> Settings:
+    """Everything `_run` needs to get as far as the exit-code decision: the
+    Central connection it resolves an endpoint from, plus the fleet-wide UCS
+    Manager login its pre-flight check demands.
+    """
+    return _central_settings(
+        ucs_central_ip="central.lab.example.com",
+        ucs_central_username="central-admin",
+        ucs_central_password="central-secret",
     )
 
 
@@ -191,7 +208,38 @@ class TestRunOneManager:
             timeout_seconds=5.0,
             settings=_central_settings(),
         )
-        assert result == "summary"
+        assert result is not None
+        assert result.summary == "summary"
+
+    async def test_carries_the_providers_collection_errors(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The summary counts cannot express a partial run — a domain that
+        failed contributes no servers and no ingest errors — so the outcome
+        has to carry them separately or exit code 3 has nothing to fire on.
+        """
+
+        class PartiallyFailedProvider:
+            provider_type = "UCS_CENTRAL"
+            collection_errors = ("domain 'b' (10.0.0.2) failed: bad credentials",)
+
+            async def health_check(self) -> None:
+                return None
+
+            async def list_servers(self) -> Any:
+                return
+                yield
+
+        monkeypatch.setattr(run_collector, "_build_provider", _factory(PartiallyFailedProvider()))
+        result = await _run_one_manager(
+            _manager(),
+            ingest_service=FakeIngestService(),  # type: ignore[arg-type]
+            credential_resolver=FakeCredentialResolver(),  # type: ignore[arg-type]
+            timeout_seconds=5.0,
+            settings=_central_settings(),
+        )
+        assert result is not None
+        assert result.collection_errors == ("domain 'b' (10.0.0.2) failed: bad credentials",)
 
     async def test_does_not_health_check_separately_from_ingest(self) -> None:
         """`IngestService.ingest()` health-checks as its first step, and a
@@ -401,6 +449,142 @@ class TestNameFilter:
         assert "ocp4-prod-one-infra-01" in out
         assert "vmhost-two-14" not in out
         assert "^ocp" in out
+
+
+class TestCollectionErrorsOf:
+    """Read reflectively, so a provider that cannot partially fail — the
+    fake seeder, and every single-endpoint vendor collector — needs no
+    attribute at all.
+    """
+
+    def test_a_provider_without_the_attribute_reports_none(self) -> None:
+        assert collection_errors_of(object()) == ()
+
+    def test_errors_are_passed_through(self) -> None:
+        provider = SimpleNamespace(collection_errors=("domain 'b' failed",))
+        assert collection_errors_of(provider) == ("domain 'b' failed",)
+
+    def test_a_none_attribute_is_treated_as_no_errors(self) -> None:
+        """`getattr` returning `None` must not become `(None,)`, which would
+        report a phantom failure and turn a healthy run red.
+        """
+        assert collection_errors_of(SimpleNamespace(collection_errors=None)) == ()
+
+    def test_the_name_filter_wrapper_does_not_hide_them(self) -> None:
+        """The wrapper stands in for the provider everywhere `_run_one_manager`
+        looks, so swallowing this would make every filtered run — which is
+        every real run, since `^ocp` is always set — report as complete.
+        """
+        inner = TestNameFilter._Fake()
+        inner.collection_errors = ("domain 'b' (10.0.0.2) failed",)  # type: ignore[attr-defined]
+
+        wrapped = _filtered(inner, "^ocp")  # type: ignore[arg-type]
+        assert collection_errors_of(wrapped) == ("domain 'b' (10.0.0.2) failed",)
+
+
+class FakeMongo:
+    """Stands in for `MongoClientHolder` so the exit-code decision can be
+    tested without a database — `_run` connects before it does anything
+    else, including on the dry-run path.
+    """
+
+    def __init__(self, _settings: Any) -> None:
+        self.db = SimpleNamespace()
+        self.closed = 0
+
+    async def connect(self) -> None:
+        return None
+
+    async def close(self) -> None:
+        self.closed += 1
+
+
+def _outcome(*, fetched: int = 3, errors: int = 0, collection_errors: tuple[str, ...] = ()) -> Any:
+    summary = IngestSummary()
+    summary.fetched = fetched
+    summary.created = fetched
+    summary.errors = errors
+    return run_collector._RunOutcome(summary=summary, collection_errors=collection_errors)
+
+
+class TestRunExitCodes:
+    """0 complete, 1 total failure, 2 not configured, 3 partial.
+
+    3 is the one that matters: before it existed, a run that reached only
+    half the fleet exited 0 and was indistinguishable from a healthy run
+    against a smaller estate — which is how a bad credential on one domain
+    stays invisible for weeks.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _no_database(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(run_collector, "MongoClientHolder", FakeMongo)
+
+        async def _no_indexes(_db: Any) -> None:
+            return None
+
+        monkeypatch.setattr(run_collector, "ensure_indexes", _no_indexes)
+        monkeypatch.setattr(run_collector, "get_settings", _central_settings_for_run)
+
+    async def _run_with(self, monkeypatch: pytest.MonkeyPatch, outcome: Any) -> int:
+        async def _fake_run_one(*_args: Any, **_kwargs: Any) -> Any:
+            return outcome
+
+        monkeypatch.setattr(run_collector, "_run_one_manager", _fake_run_one)
+        return await _run(manager_type=ManagerType.UCS_CENTRAL)
+
+    async def test_a_complete_run_exits_zero(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: Any
+    ) -> None:
+        code = await self._run_with(monkeypatch, _outcome())
+
+        assert code == 0
+        assert "PARTIAL" not in capsys.readouterr().out
+
+    async def test_an_unreachable_domain_exits_three(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: Any
+    ) -> None:
+        code = await self._run_with(
+            monkeypatch,
+            _outcome(collection_errors=("domain 'b' (10.0.0.2) failed: bad credentials",)),
+        )
+
+        assert code == 3
+        out = capsys.readouterr().out
+        assert "PARTIAL" in out
+        # The specific domain is printed, not just a count — otherwise the
+        # operator still has to go log-diving to learn which one broke.
+        assert "10.0.0.2" in out
+
+    async def test_failed_ingests_alone_exit_three(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: Any
+    ) -> None:
+        """A server that reached the pipeline and failed to be written is
+        the same class of problem: the run did not record the whole fleet.
+        This one also used to exit 0.
+        """
+        code = await self._run_with(monkeypatch, _outcome(errors=2))
+
+        assert code == 3
+        assert "2 server(s) failed to ingest" in capsys.readouterr().out
+
+    async def test_a_total_failure_still_exits_one(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: Any
+    ) -> None:
+        """Partial and total failure stay distinguishable — 3 means "some
+        data landed", 1 means none did.
+        """
+        code = await self._run_with(monkeypatch, None)
+
+        assert code == 1
+        assert "FAILED" in capsys.readouterr().out
+
+    async def test_missing_configuration_still_exits_two(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(run_collector, "get_settings", lambda: _settings())
+
+        assert await _run(manager_type=ManagerType.UCS_CENTRAL) == 2
 
 
 class TestParseArgs:

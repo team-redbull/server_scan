@@ -39,8 +39,9 @@ Two things that will waste your morning if you get them wrong:
   front rather than failing later as an opaque connection error.
 - **The UCS Manager account must authenticate against *every* registered
   domain.** It is one service account used many times, not one per
-  domain. A domain that rejects it is skipped with a logged error and the
-  run still exits 0 — see "The failure that does not announce itself".
+  domain. A domain that rejects it is skipped so the rest of the fleet
+  still collects, but the run ends `PARTIAL` and exits `3` — see
+  "When a run comes back PARTIAL".
 
 Optional: `INVENTORY_UCS_CENTRAL_DOMAIN_CONCURRENCY` (default `4`) caps
 how many domains are read at once.
@@ -117,9 +118,17 @@ prints a summary line:
 manager=ucs-central fetched=412 created=412 updated=0 errors=0
 ```
 
-Exit codes: `0` success, `1` the run failed (see logs), `2` configuration
-is missing — and a `2` names the exact environment variables to set
-rather than making you guess.
+Exit codes:
+
+| Code | Meaning |
+|---|---|
+| `0` | complete — every registered domain was collected, every server ingested |
+| `1` | the run failed outright (see logs) |
+| `2` | configuration is missing — the message names the exact environment variables to set, rather than making you guess |
+| `3` | **partial** — servers were written, but this run did not see the whole fleet |
+
+A `3` is the one worth wiring an alert to; see "When a run comes back
+PARTIAL" below.
 
 ### In-cluster
 
@@ -147,6 +156,7 @@ Structured JSON, one event per line. The ones that matter:
 | `ucs_central.domain_without_address` | a registered domain with no address to connect to |
 | `ucs_central.domain_collected_nothing` | Central reported servers, its UCS Manager returned none |
 | `collector.name_filter_applied` | `kept` and `skipped` counts for `INVENTORY_COLLECTOR_NAME_PATTERN` |
+| `collector.partial_run` | **error level.** The run was incomplete: `unreachable` domains and `ingest_errors` servers. This is the one to alert on |
 
 Interpreting the name filter, which is the usual source of an
 unexpectedly empty inventory:
@@ -155,33 +165,68 @@ unexpectedly empty inventory:
 - `kept=0 skipped=0` — you reached nothing. Wrong endpoint, or every
   domain failed.
 
-## The failure that does not announce itself
+## When a run comes back PARTIAL
 
-**A domain that fails is logged and skipped, and the run still exits 0.**
-This is deliberate — one unreachable domain must not cost the other nine
-their collection — but it means a wrong password on a single domain looks
-exactly like a healthy run with a quietly smaller fleet.
+A domain that fails is logged and skipped so the rest of the fleet still
+collects — one unreachable domain must not cost the other nine their
+collection. But the run no longer *reports* that as success. It prints a
+`PARTIAL` block naming what it could not reach and exits `3`:
 
-Before trusting a result, check two things:
+```
+manager=ucs-central fetched=380 created=0 updated=380 errors=0
+manager=ucs-central PARTIAL — this run did not see the whole fleet:
+  - domain dc2-fabric (10.20.0.5) failed after 0 server(s): Login to 10.20.0.5 failed: ...
+```
+
+Read each line as: which domain, at what address, how far it got before
+failing, and why. `failed after 0 server(s)` with a login error is a
+credential or firewall problem; `failed after 137 server(s)` with a
+timeout is the domain going away mid-collection.
+
+Two things trigger `PARTIAL`:
+
+- **A domain that could not be collected** — login rejected, unreachable,
+  timed out, or registered with Central but reporting no address to
+  connect to at all.
+- **Servers that failed to ingest** — `summary.errors` above zero. The
+  collector reached them; something downstream rejected them (an
+  unrecognised vendor, for instance).
+
+**The distinction that matters: skipped is not failed.** A domain is
+*skipped* when Central lists profiles for it and none match your name
+pattern. That is the pruning working as designed — it is not an error and
+deliberately does **not** turn the run red, because a fleet where only two
+of eight domains hold `ocp` servers is normal, not broken. Only a domain
+that *should* have been readable and was not counts against the run. If a
+domain you expected is missing, check `ucs_central.domain_plan` to see
+whether it was skipped rather than failed.
+
+A domain for which Central lists *no* profiles at all is always collected,
+never skipped, precisely so an incomplete replica cannot silently shrink
+your fleet.
+
+### In Kubernetes
+
+A non-zero exit fails the pod, so a partial run shows as a failed Job
+rather than a green one, and is retried per the CronJob's `backoffLimit`.
+**A retry is safe**: ingestion is an idempotent upsert keyed on vendor
+plus serial, so re-collecting the domains that already succeeded rewrites
+the same documents rather than duplicating them. If the failure was
+transient the retry simply completes; if it was a bad credential the Job
+keeps failing, which is the point.
+
+### Cross-checking by hand
+
+The `PARTIAL` block is now the primary signal, but these still work as a
+sanity check against a log file:
 
 ```bash
-# every domain that succeeded
+# every domain that succeeded — should equal the number you expect
 grep ucs_central.domain_collected <logfile> | wc -l
 
 # every domain that did not
 grep ucs_central.domain_failed <logfile>
 ```
-
-The first count should equal the number of registered domains you expect.
-`domain_failed` should be empty.
-
-A related quiet case: a domain is **skipped** (never contacted) when
-Central lists profiles for it and none match your name pattern. That is
-correct behaviour, not a fault — but if a domain you expected is missing
-from `domain_collected`, check `domain_plan` to see whether it was skipped
-rather than failed. A domain for which Central lists *no* profiles at all
-is always collected, never skipped, precisely so an incomplete replica
-cannot silently shrink your fleet.
 
 ## 5. Confirming the data landed
 

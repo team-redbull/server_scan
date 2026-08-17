@@ -22,6 +22,7 @@ import asyncio
 import os
 import re
 from collections.abc import AsyncIterator, Awaitable, Callable
+from dataclasses import dataclass
 
 import structlog
 
@@ -204,6 +205,16 @@ class _NameFilteredProvider:
         self._pattern = re.compile(pattern)
         self.provider_type = inner.provider_type
 
+    @property
+    def collection_errors(self) -> tuple[str, ...]:
+        """Pass the wrapped collector's partial failures straight through.
+
+        Without this the wrapper would swallow them and every filtered run
+        would look complete. Providers that report none are treated as
+        having none.
+        """
+        return collection_errors_of(self._inner)
+
     async def health_check(self) -> None:
         await self._inner.health_check()
 
@@ -229,6 +240,24 @@ class _NameFilteredProvider:
 
 def _filtered(provider: ServerInventoryProvider, pattern: str) -> ServerInventoryProvider:
     return _NameFilteredProvider(provider, pattern) if pattern else provider
+
+
+def collection_errors_of(provider: object) -> tuple[str, ...]:
+    """Partial failures a collector recorded, or none if it reports any.
+
+    Read reflectively rather than added to the `ServerInventoryProvider`
+    Protocol: only a collector that fans out over several endpoints can
+    partially fail, so requiring the attribute of every provider — the
+    fake seeder included — would be ceremony for a single vendor's shape.
+
+    Args:
+        provider (object): Any collector, wrapped or not.
+
+    Returns:
+        tuple[str, ...]: One message per failure, empty if the run was
+            complete or the provider does not track this.
+    """
+    return tuple(getattr(provider, "collection_errors", ()) or ())
 
 
 async def _build_provider(
@@ -345,6 +374,24 @@ async def _dry_run_one_manager(
     return count
 
 
+@dataclass(frozen=True, slots=True)
+class _RunOutcome:
+    """What one manager's run produced, and what it could not reach.
+
+    `summary` alone cannot express a partial run: a domain that failed
+    contributes no servers and no ingest errors, so its absence is
+    invisible in the counts.
+
+    Attributes:
+        summary (IngestSummary): Fetched/created/updated/error counts.
+        collection_errors (tuple[str, ...]): One message per endpoint the
+            collector could not reach, empty for a complete run.
+    """
+
+    summary: IngestSummary
+    collection_errors: tuple[str, ...]
+
+
 async def _run_one_manager(
     manager: Manager,
     *,
@@ -353,7 +400,7 @@ async def _run_one_manager(
     timeout_seconds: float,
     name_pattern: str = "",
     settings: Settings | None = None,
-) -> IngestSummary | None:
+) -> _RunOutcome | None:
     try:
         provider = _filtered(
             await _build_provider(
@@ -371,7 +418,8 @@ async def _run_one_manager(
         # too would double that cost per manager and burn a second session
         # against UCS Manager's per-user session cap for nothing — this
         # `except` handles a health-check failure identically either way.
-        return await ingest_service.ingest(provider)
+        summary = await ingest_service.ingest(provider)
+        return _RunOutcome(summary=summary, collection_errors=collection_errors_of(provider))
     except Exception:
         logger.exception(
             "collector.manager_failed", manager_id=manager.id, manager_name=manager.name
@@ -452,7 +500,7 @@ async def _run(
             ),
             audit=AuditService(repo=MongoAuditEventRepository(mongo)),
         )
-        summary = await _run_one_manager(
+        outcome = await _run_one_manager(
             manager,
             ingest_service=ingest_service,
             credential_resolver=credential_resolver,
@@ -460,13 +508,32 @@ async def _run(
             name_pattern=settings.collector_name_pattern,
             settings=settings,
         )
-        if summary is None:
+        if outcome is None:
             print(f"manager={manager.name} FAILED (see logs)")
             return 1
+
+        summary = outcome.summary
         print(
             f"manager={manager.name} fetched={summary.fetched} "
             f"created={summary.created} updated={summary.updated} errors={summary.errors}"
         )
+        if outcome.collection_errors or summary.errors:
+            # Exit 3, not 0: some servers were written, but this run did not
+            # see the whole fleet. Reported as success it is indistinguishable
+            # from a healthy run against a smaller estate, which is how a bad
+            # credential on one domain stays invisible for weeks.
+            logger.error(
+                "collector.partial_run",
+                manager_id=manager.id,
+                unreachable=len(outcome.collection_errors),
+                ingest_errors=summary.errors,
+            )
+            print(f"manager={manager.name} PARTIAL — this run did not see the whole fleet:")
+            for message in outcome.collection_errors:
+                print(f"  - {message}")
+            if summary.errors:
+                print(f"  - {summary.errors} server(s) failed to ingest (see logs)")
+            return 3
         return 0
     finally:
         await mongo.close()

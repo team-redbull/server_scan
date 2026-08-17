@@ -578,6 +578,116 @@ class TestListServers:
         assert client.calls == ["login", "logout"]
 
 
+class TestCollectionErrors:
+    """What `tools.run_collector` turns into exit code 3.
+
+    A domain that fails contributes no servers and no ingest errors, so its
+    absence is invisible in the summary counts — a wrong password on one
+    domain reads exactly like a healthy run against a smaller estate. This
+    property is the only channel that distinguishes them, which makes its
+    *negative* cases as load-bearing as its positive ones: an error raised
+    for ordinary pruning would paint every healthy run red until someone
+    stopped believing the signal.
+    """
+
+    async def test_a_complete_run_reports_no_errors(self) -> None:
+        client = FakeCentralClient({"computeSystem": [_domain("1009", "a")]})
+        provider = _provider(
+            client,
+            {"10.0.0.9": FakeDomainProvider([_server("sys/chassis-1/blade-1", "ocp-1")])},
+        )
+        servers = await _collect(provider)
+
+        assert [s.name for s in servers] == ["ocp-1"]
+        assert provider.collection_errors == ()
+
+    async def test_a_failing_domain_is_reported_while_the_others_still_collect(self) -> None:
+        """The headline case: partial success must be distinguishable from
+        complete success, without costing the healthy domains their run.
+        """
+        client = FakeCentralClient({"computeSystem": [_domain("1009", "a"), _domain("1010", "b")]})
+        provider = _provider(
+            client,
+            {
+                "10.0.0.9": FakeDomainProvider([], error=RuntimeError("bad credentials")),
+                "10.0.0.0": FakeDomainProvider(
+                    [_server("sys/chassis-1/blade-1", "ocp4-prod-two-infra-01")]
+                ),
+            },
+        )
+        servers = await _collect(provider)
+
+        assert [s.name for s in servers] == ["ocp4-prod-two-infra-01"]
+        (error,) = provider.collection_errors
+        # The message has to name the domain and carry the cause, or an
+        # operator reading exit 3 still has to go digging in the logs.
+        assert "10.0.0.9" in error
+        assert "bad credentials" in error
+
+    async def test_ordinary_pruning_is_not_an_error(self) -> None:
+        """The critical negative case. A domain skipped because none of its
+        profiles match the name pattern is the collector working correctly,
+        not a fault — reporting it would make exit 3 permanent for any fleet
+        whose UCS Central also fronts non-OCP domains, and a signal that is
+        always on is a signal nobody reads.
+        """
+        client = FakeCentralClient(
+            {
+                "computeSystem": [_domain("1009", "a"), _domain("1010", "b")],
+                "lsServer": [
+                    _profile("ocp4-prod-one-infra-01", "a"),
+                    _profile("vmware-esx-07", "b"),
+                ],
+            }
+        )
+        provider = _provider(
+            client,
+            {"10.0.0.9": FakeDomainProvider([_server("sys/chassis-1/blade-1", "ocp-1")])},
+        )
+        await _collect(provider)
+
+        assert provider.collection_errors == ()
+
+    async def test_a_domain_with_no_address_is_an_error(self) -> None:
+        """Skipped for having no address is a fault, not a pruning decision:
+        Central registered the domain and then gave us nothing to connect
+        to, so its servers are missing from the run either way.
+
+        Both `name` and `address` are empty because the endpoint falls back
+        to the domain name — a domain with a name is still reachable by it.
+        """
+        client = FakeCentralClient({"computeSystem": [_domain("1009", "", address="")]})
+        provider = _provider(client)
+        await _collect(provider)
+
+        (error,) = provider.collection_errors
+        assert "no address" in error
+
+    async def test_errors_are_a_tuple(self) -> None:
+        """Returned by value, so a caller cannot mutate the provider's own
+        record of what failed.
+        """
+        client = FakeCentralClient({"computeSystem": [_domain("1009", "a")]})
+        provider = _provider(client, {"10.0.0.9": FakeDomainProvider([], error=RuntimeError("x"))})
+        await _collect(provider)
+
+        assert isinstance(provider.collection_errors, tuple)
+
+    async def test_errors_do_not_accumulate_across_iterations(self) -> None:
+        """`collection_errors` describes one run, so re-iterating the same
+        provider must report each failure once, not once per iteration.
+        """
+        client = FakeCentralClient({"computeSystem": [_domain("1009", "a")]})
+        provider = _provider(
+            client, {"10.0.0.9": FakeDomainProvider([], error=RuntimeError("unreachable"))}
+        )
+        await _collect(provider)
+        assert len(provider.collection_errors) == 1
+
+        await _collect(provider)
+        assert len(provider.collection_errors) == 1
+
+
 class TestDomainSummaryDiagnostics:
     """The domain *list* is the one thing this collector still takes from
     Central's replica and cannot verify any other way, so every run reports

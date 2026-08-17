@@ -511,6 +511,14 @@ Three rules, in the order they apply:
    about, and the symptom would be a mysteriously small inventory rather
    than an error. Absence of evidence gets a round trip, not a guess.
 
+Rules 2 and 3 are pruning and are silent by design. Rule 1 is a fault:
+a registered domain with no address is recorded in the provider's
+`collection_errors`, alongside any domain whose collection raised, and
+`tools.run_collector` turns a non-empty list into a `PARTIAL` report and
+exit status 3. So a domain that *should* have been readable and was not
+turns the run red, while a domain that genuinely holds nothing of ours
+does not.
+
 The pattern is applied with **`re.search`**, matching
 `tools.run_collector._NameFilteredProvider` exactly. This function must
 never be stricter than that filter, which is the only thing that decides

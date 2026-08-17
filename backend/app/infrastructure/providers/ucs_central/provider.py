@@ -231,6 +231,7 @@ class UcsCentralProvider:
         self._domain_login = domain_login
         self._name_pattern = name_pattern
         self._concurrency = max(1, concurrency)
+        self._collection_errors: list[str] = []
         self._client_factory: Callable[[], Any] = client_factory or self._new_client
         self._domain_provider_factory: Callable[[DomainTarget], Any] = (
             domain_provider_factory or self._new_domain_provider
@@ -275,6 +276,25 @@ class UcsCentralProvider:
             ),
             timeout_seconds=self._timeout_seconds,
         )
+
+    @property
+    def collection_errors(self) -> tuple[str, ...]:
+        """
+        Report the domains this run could not collect, one message each.
+
+        A domain that fails is logged and skipped so the rest of the fleet
+        still collects, which means a run can succeed overall while silently
+        returning fewer servers than it should. This is how a caller tells
+        the two apart; `tools.run_collector` turns a non-empty result into a
+        non-zero exit status.
+
+        Empty until `list_servers` has been iterated to exhaustion.
+
+        Returns:
+            tuple[str, ...]: One human-readable message per unreachable or
+                failed domain, empty if every domain was collected.
+        """
+        return tuple(self._collection_errors)
 
     async def health_check(self) -> None:
         """
@@ -335,6 +355,14 @@ class UcsCentralProvider:
             skipping=len(skipped),
             name_pattern=self._name_pattern or None,
             concurrency=self._concurrency,
+        )
+        # A domain skipped for having no address is a fault, not a pruning
+        # decision: Central registered it but gave us nothing to connect to.
+        self._collection_errors.extend(
+            f"domain {t.name or t.domain_id!r} is registered with UCS Central but reports "
+            "no address to connect to"
+            for t in skipped
+            if not t.endpoint
         )
         for target in skipped:
             logger.info(
@@ -398,13 +426,17 @@ class UcsCentralProvider:
                                 ),
                             )
                         )
-            except Exception:
+            except Exception as exc:
                 logger.exception(
                     "ucs_central.domain_failed",
                     domain_id=target.domain_id,
                     domain_name=target.name,
                     endpoint=target.endpoint,
                     collected_before_failure=len(collected),
+                )
+                self._collection_errors.append(
+                    f"domain {target.name or target.domain_id!r} ({target.endpoint}) failed "
+                    f"after {len(collected)} server(s): {exc}"
                 )
                 return []
             logger.info(
@@ -431,6 +463,10 @@ class UcsCentralProvider:
             UcsCentralConnectionError: If UCS Central itself is unreachable.
                 A single failing domain is logged and skipped instead.
         """
+        # Reset first: `collection_errors` describes *this* run, so a second
+        # iteration of the same provider must not inherit the first's
+        # failures and report each one twice.
+        self._collection_errors.clear()
         targets, domain_mo_by_id = await self._plan()
         sem = asyncio.Semaphore(self._concurrency)
         per_domain = await asyncio.gather(
