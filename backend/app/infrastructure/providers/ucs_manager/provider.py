@@ -116,17 +116,24 @@ class UcsManagerProvider:
             rack_units = await client.query_classid("computeRackUnit")
             ls_servers = await client.query_classid("lsServer")
             mgmt_ifs = await client.query_classid("mgmtIf")
-            # Both adapter interface classes, unioned per server. They are
-            # complementary, not alternatives: `adaptorExtEthIf` is the
-            # physical adapter port (present on every discovered server,
-            # burned-in MAC, cabled to a fabric interconnect), while
-            # `adaptorHostEthIf` is a logical vNIC that only exists once a
-            # service profile is associated. Verified against UCSPE 4.2:
-            # of 14 servers, 12 had only ext-eth ports and 2 had only
-            # host-eth — querying either class alone left most of the
-            # fleet with no MACs and no fabric attachments at all.
-            adapter_ifs_all = await client.query_classid("adaptorExtEthIf")
-            adapter_ifs_all += await client.query_classid("adaptorHostEthIf")
+            # Both adapter interface classes, grouped separately per
+            # server (not unioned) — `mapping.compute_unit_to_provider_
+            # server` treats them as different things, not duplicates.
+            # `adaptorExtEthIf` is the physical adapter port (present on
+            # every discovered server, burned-in MAC, cabled to a fabric
+            # interconnect) and `adaptorHostEthIf` is the logical vNIC
+            # that only exists once a service profile is associated — the
+            # OS's own NICs (`eno1`/`eno2`) bind to the vNIC's MAC, not
+            # the physical port's, since a Cisco VIC presents virtual
+            # interfaces to the OS rather than exposing the uplink port
+            # directly. `nic_macs` prefers host-eth for that reason,
+            # falling back to ext-eth only when no vNIC exists yet.
+            # Fabric attachments still use both together: verified
+            # against UCSPE 4.2, of 14 servers 12 had only ext-eth ports
+            # and 2 had only host-eth, so querying either class alone left
+            # most of the fleet with no fabric attachments at all.
+            ext_eth_ifs_all = await client.query_classid("adaptorExtEthIf")
+            host_eth_ifs_all = await client.query_classid("adaptorHostEthIf")
             # `processorUnit` (child of `computeBoard`) and
             # `storageLocalDisk` (child of `storageController`, itself a
             # child of `computeBoard` *or* `equipmentChassis`) are both
@@ -145,8 +152,11 @@ class UcsManagerProvider:
             servers = [mo for mo in (*blades, *rack_units) if _is_equipped(mo)]
             server_dns = [mo.dn for mo in servers]
             mgmt_ifs_by_server = _group_by_owning_server_dn(mgmt_ifs, server_dns=server_dns)
-            adapter_ifs_by_server = _group_by_owning_server_dn(
-                adapter_ifs_all, server_dns=server_dns
+            ext_eth_ifs_by_server = _group_by_owning_server_dn(
+                ext_eth_ifs_all, server_dns=server_dns
+            )
+            host_eth_ifs_by_server = _group_by_owning_server_dn(
+                host_eth_ifs_all, server_dns=server_dns
             )
             cpu_units_by_server = _group_by_owning_server_dn(cpu_units_all, server_dns=server_dns)
             disk_units_by_server = _group_by_owning_server_dn(disk_units_all, server_dns=server_dns)
@@ -159,7 +169,8 @@ class UcsManagerProvider:
                     profile_by_dn=profile_by_dn,
                     template_dn_by_name=template_dn_by_name,
                     mgmt_if=mgmt_if,
-                    adapter_ifs=adapter_ifs_by_server[server_mo.dn],
+                    ext_eth_ifs=ext_eth_ifs_by_server[server_mo.dn],
+                    host_eth_ifs=host_eth_ifs_by_server[server_mo.dn],
                     cpu_units=cpu_units_by_server[server_mo.dn],
                     disk_units=disk_units_by_server[server_mo.dn],
                 )

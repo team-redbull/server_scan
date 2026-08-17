@@ -144,14 +144,21 @@ class UcsCentralProvider:
             rack_units = await client.query_classid("computeRackUnit")
             ls_servers = await client.query_classid("lsServer")
             mgmt_ifs = await client.query_classid("mgmtIf")
-            # Complementary, not alternatives — `adaptorExtEthIf` is the
+            # Grouped separately, not unioned — `..ucs_manager.mapping`
+            # treats them as different things: `adaptorExtEthIf` is the
             # physical adapter port, `adaptorHostEthIf` the logical vNIC
-            # that only exists once a profile is associated. UCSPE 4.2
-            # showed most servers have only one or the other, so querying
-            # either alone leaves much of the fleet with no MACs and no
-            # fabric attachments (`docs/adr/0009`).
-            adapter_ifs_all = await client.query_classid("adaptorExtEthIf")
-            adapter_ifs_all += await client.query_classid("adaptorHostEthIf")
+            # that only exists once a profile is associated, and only the
+            # vNIC's MAC is what the OS itself binds to (`eno1`/`eno2`),
+            # since a Cisco VIC presents virtual interfaces to the OS
+            # rather than exposing its physical uplink port directly.
+            # `nic_macs` prefers host-eth for that reason, falling back
+            # to ext-eth only for a server with no vNIC yet. Fabric
+            # attachments still use both together: UCSPE 4.2 showed most
+            # servers have only one or the other, so querying either
+            # alone leaves much of the fleet with no fabric attachments
+            # (`docs/adr/0009`).
+            ext_eth_ifs_all = await client.query_classid("adaptorExtEthIf")
+            host_eth_ifs_all = await client.query_classid("adaptorHostEthIf")
             # `processorUnit`/`storageLocalDisk` exist as real classes in
             # `ucscsdk` itself, property-identical to `ucsmsdk` (see
             # `..ucs_manager.mapping`'s module docstring) — confirmed
@@ -168,8 +175,11 @@ class UcsCentralProvider:
             servers = [mo for mo in (*blades, *rack_units) if is_equipped(mo)]
             server_dns = [mo.dn for mo in servers]
             mgmt_ifs_by_server = group_by_owning_server_dn(mgmt_ifs, server_dns=server_dns)
-            adapter_ifs_by_server = group_by_owning_server_dn(
-                adapter_ifs_all, server_dns=server_dns
+            ext_eth_ifs_by_server = group_by_owning_server_dn(
+                ext_eth_ifs_all, server_dns=server_dns
+            )
+            host_eth_ifs_by_server = group_by_owning_server_dn(
+                host_eth_ifs_all, server_dns=server_dns
             )
             cpu_units_by_server = group_by_owning_server_dn(cpu_units_all, server_dns=server_dns)
             disk_units_by_server = group_by_owning_server_dn(disk_units_all, server_dns=server_dns)
@@ -184,7 +194,8 @@ class UcsCentralProvider:
                     profile_by_dn=profile_by_dn,
                     template_dn_by_name=template_dn_by_name,
                     mgmt_if=mgmt_if,
-                    adapter_ifs=adapter_ifs_by_server[server_mo.dn],
+                    ext_eth_ifs=ext_eth_ifs_by_server[server_mo.dn],
+                    host_eth_ifs=host_eth_ifs_by_server[server_mo.dn],
                     cpu_units=cpu_units_by_server[server_mo.dn],
                     disk_units=disk_units_by_server[server_mo.dn],
                     provider_type=_PROVIDER_TYPE,

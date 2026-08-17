@@ -254,8 +254,10 @@ async def _dry_run_one_manager(
             f"\n     vendor/model: {ps.vendor} / {ps.model}"
             f"\n     serial/uuid : {ps.serial} / {ps.system_uuid}"
             f"\n     cpu         : {ps.cpu_sockets} sockets, {ps.cpu_cores} cores,"
-            f" {ps.cpu_threads} threads"
+            f" {ps.cpu_threads} threads ({ps.cpu_model or 'model unknown'})"
             f"\n     memory      : {ps.memory_total_bytes / 1024**3:.1f} GiB"
+            f"\n     storage     : {ps.storage_total_bytes / 1024**3:.1f} GiB total across"
+            f" {len(ps.storage_drives)} drive(s)"
             f"\n     bmc         : {ps.bmc_address_raw or '—'} (mac {ps.bmc_mac or '—'})"
             f"\n     profile tmpl: {ps.profile_template_name or '—'}"
             f" [{ps.profile_template_external_id or '—'}]"
@@ -267,6 +269,18 @@ async def _dry_run_one_manager(
                 f"        fabric {a.fabric}  if={a.server_interface}"
                 f"  admin={a.admin_state} oper={a.oper_state}"
                 f"  peer={a.fabric_port or '—'}"
+            )
+        for drive in ps.storage_drives:
+            capacity_bytes = drive.get("capacity_bytes")
+            size = (
+                f"{capacity_bytes / 1024**3:.1f} GiB"
+                if isinstance(capacity_bytes, int)
+                else "size unknown"
+            )
+            print(
+                f"        disk {drive.get('id')}  {drive.get('model') or '—'}"
+                f"  serial={drive.get('serial') or '—'}"
+                f"  {drive.get('media_type')}  {size}  health={drive.get('health')}"
             )
     print(f"\n{manager.name}: {count} server(s) reported. Nothing was written.")
     return count

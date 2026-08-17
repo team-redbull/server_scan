@@ -59,10 +59,21 @@ ASSUMED, NOT INDEPENDENTLY VERIFIED — flagged inline where used:
     (no MO had been confirmed yet); both are now mapped — see
     `_cpu_model`/`_storage_drives` — but neither has been exercised
     against a live domain yet, unlike the fields above them.
+
+`nic_macs` reports `adaptorHostEthIf` (vNIC) MACs when present, falling
+back to `adaptorExtEthIf` (physical port) MACs only for a server with no
+vNIC — see `_nic_macs`. This was confirmed against a live UCS Central run
+(2026-08-17): a fully-associated server reported one physical and one
+logical MAC *per adapter port*, both real Cisco OUIs, and only the vNIC's
+MAC matched what the OS itself reported on `eno1`/`eno2` — a Cisco VIC
+presents virtual interfaces to the OS rather than exposing its physical
+uplink port directly, so the physical port's own MAC is never visible
+inside the OS at all.
 """
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from typing import Any
 
 from app.domain.ports.provider import ProviderAttachment, ProviderServer
@@ -138,13 +149,32 @@ def _bmc_address(mgmt_if: Any | None) -> str | None:
     return f"ipmi://{ext_ip}:623"
 
 
-def _nic_macs(adapter_ifs: list[Any]) -> tuple[str, ...]:
+def _extract_macs(adapter_ifs: list[Any]) -> tuple[str, ...]:
     macs: list[str] = []
     for mo in adapter_ifs:
         mac = getattr(mo, "mac", None)
         if mac and mac.lower() not in ("not applicable", "derived"):
             macs.append(mac)
     return tuple(macs)
+
+
+def _nic_macs(*, host_eth_ifs: list[Any], ext_eth_ifs: list[Any]) -> tuple[str, ...]:
+    """The MACs an operating system on this server would actually report
+    on its own NICs (`eno1`, `eno2`, ...).
+
+    That is the logical vNIC (`adaptorHostEthIf`)'s MAC, not the adapter's
+    physical port (`adaptorExtEthIf`): a Cisco VIC presents virtual
+    interfaces to the OS rather than exposing its physical uplink port
+    directly, so the vNIC's pool-assigned MAC is what the OS binds to,
+    while the physical port's burned-in MAC faces the fabric interconnect
+    and is never seen inside the OS. Falls back to the physical MAC only
+    when no vNIC exists yet — an unassociated server, or an
+    older-generation adapter with no vNIC abstraction — so a physically
+    cabled server doesn't report zero NICs just because it isn't
+    associated to a service profile.
+    """
+    host_macs = _extract_macs(host_eth_ifs)
+    return host_macs if host_macs else _extract_macs(ext_eth_ifs)
 
 
 # UCS reports interface state in its own vocabulary; the platform's
@@ -184,7 +214,9 @@ def _admin_state(mo: Any) -> str:
     return _ADMIN_STATE_MAP.get(str(getattr(mo, "admin_state", "") or "").lower(), "UNKNOWN")
 
 
-def _attachments(adapter_ifs: list[Any], *, provider_type: str) -> tuple[ProviderAttachment, ...]:
+def _attachments(
+    adapter_ifs: Iterable[Any], *, provider_type: str
+) -> tuple[ProviderAttachment, ...]:
     attachments: list[ProviderAttachment] = []
     for mo in adapter_ifs:
         switch_id = getattr(mo, "switch_id", None)
@@ -314,7 +346,8 @@ def compute_unit_to_provider_server(
     profile_by_dn: dict[str, Any],
     template_dn_by_name: dict[str, str],
     mgmt_if: Any | None,
-    adapter_ifs: list[Any],
+    ext_eth_ifs: list[Any],
+    host_eth_ifs: list[Any],
     cpu_units: list[Any],
     disk_units: list[Any],
     provider_type: str = "UCS_MANAGER",
@@ -343,7 +376,7 @@ def compute_unit_to_provider_server(
         model=getattr(server_mo, "model", None) or None,
         serial=getattr(server_mo, "serial", None) or None,
         system_uuid=getattr(server_mo, "uuid", None) or None,
-        nic_macs=_nic_macs(adapter_ifs),
+        nic_macs=_nic_macs(host_eth_ifs=host_eth_ifs, ext_eth_ifs=ext_eth_ifs),
         bmc_address_raw=_bmc_address(mgmt_if),
         bmc_mac=getattr(mgmt_if, "mac", None) if mgmt_if is not None else None,
         manager_id=manager_id,
@@ -356,7 +389,7 @@ def compute_unit_to_provider_server(
         memory_total_bytes=total_memory_mb * _BYTES_PER_MB,
         storage_total_bytes=storage_total_bytes,
         storage_drives=storage_drives,
-        attachments=_attachments(adapter_ifs, provider_type=provider_type),
+        attachments=_attachments((*ext_eth_ifs, *host_eth_ifs), provider_type=provider_type),
         tags=(),
     )
 

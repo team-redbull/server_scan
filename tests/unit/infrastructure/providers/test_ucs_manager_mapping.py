@@ -84,7 +84,8 @@ class TestComputeUnitToProviderServer:
             profile_by_dn={profile.dn: profile},
             template_dn_by_name={template.name: template.dn},
             mgmt_if=mgmt_if,
-            adapter_ifs=[adapter_if],
+            ext_eth_ifs=[adapter_if],
+            host_eth_ifs=[],
             cpu_units=[],
             disk_units=[],
         )
@@ -117,7 +118,8 @@ class TestComputeUnitToProviderServer:
             profile_by_dn={},
             template_dn_by_name={},
             mgmt_if=None,
-            adapter_ifs=[],
+            ext_eth_ifs=[],
+            host_eth_ifs=[],
             cpu_units=[],
             disk_units=[],
         )
@@ -133,7 +135,8 @@ class TestComputeUnitToProviderServer:
             profile_by_dn={profile.dn: profile},
             template_dn_by_name={},
             mgmt_if=None,
-            adapter_ifs=[],
+            ext_eth_ifs=[],
+            host_eth_ifs=[],
             cpu_units=[],
             disk_units=[],
         )
@@ -149,7 +152,8 @@ class TestComputeUnitToProviderServer:
             profile_by_dn={profile.dn: profile},
             template_dn_by_name={},  # no lsServiceProfileTemplate matched
             mgmt_if=None,
-            adapter_ifs=[],
+            ext_eth_ifs=[],
+            host_eth_ifs=[],
             cpu_units=[],
             disk_units=[],
         )
@@ -163,7 +167,8 @@ class TestComputeUnitToProviderServer:
             profile_by_dn={},
             template_dn_by_name={},
             mgmt_if=None,
-            adapter_ifs=[],
+            ext_eth_ifs=[],
+            host_eth_ifs=[],
             cpu_units=[],
             disk_units=[],
         )
@@ -178,7 +183,8 @@ class TestComputeUnitToProviderServer:
             profile_by_dn={},
             template_dn_by_name={},
             mgmt_if=_mgmt_if(ext_ip=unset_ip),
-            adapter_ifs=[],
+            ext_eth_ifs=[],
+            host_eth_ifs=[],
             cpu_units=[],
             disk_units=[],
         )
@@ -191,7 +197,8 @@ class TestComputeUnitToProviderServer:
             profile_by_dn={},
             template_dn_by_name={},
             mgmt_if=None,
-            adapter_ifs=[_adapter_if(switch_id="NONE")],
+            ext_eth_ifs=[_adapter_if(switch_id="NONE")],
+            host_eth_ifs=[],
             cpu_units=[],
             disk_units=[],
         )
@@ -207,14 +214,68 @@ class TestComputeUnitToProviderServer:
             profile_by_dn={},
             template_dn_by_name={},
             mgmt_if=None,
-            adapter_ifs=[
+            ext_eth_ifs=[
                 _adapter_if(name="eth0", mac="AA:00:00:00:00:00", switch_id="A"),
                 _adapter_if(name="eth1", mac="AA:00:00:00:00:01", switch_id="B"),
             ],
+            host_eth_ifs=[],
             cpu_units=[],
             disk_units=[],
         )
         assert result.nic_macs == ("AA:00:00:00:00:00", "AA:00:00:00:00:01")
+        assert [a.fabric for a in result.attachments] == ["A", "B"]
+
+    def test_nic_macs_prefer_the_logical_vnic_over_the_physical_port(self) -> None:
+        """The OS binds to the vNIC's MAC (`eno1`/`eno2`), not the
+        physical adapter port's burned-in one — see `_nic_macs`.
+        """
+        result = compute_unit_to_provider_server(
+            _blade(),
+            manager_id="mgr_1",
+            profile_by_dn={},
+            template_dn_by_name={},
+            mgmt_if=None,
+            ext_eth_ifs=[_adapter_if(mac="6C:B2:AE:00:00:01", switch_id="A")],
+            host_eth_ifs=[_adapter_if(mac="00:25:B5:00:00:01", switch_id="A")],
+            cpu_units=[],
+            disk_units=[],
+        )
+        assert result.nic_macs == ("00:25:B5:00:00:01",)
+
+    def test_nic_macs_fall_back_to_the_physical_port_with_no_vnic(self) -> None:
+        """A server with no service profile associated yet has no vNIC at
+        all, but is still physically cabled — it should not report zero
+        NICs just because it isn't associated.
+        """
+        result = compute_unit_to_provider_server(
+            _blade(assigned_to_dn=""),
+            manager_id="mgr_1",
+            profile_by_dn={},
+            template_dn_by_name={},
+            mgmt_if=None,
+            ext_eth_ifs=[_adapter_if(mac="6C:B2:AE:00:00:01", switch_id="A")],
+            host_eth_ifs=[],
+            cpu_units=[],
+            disk_units=[],
+        )
+        assert result.nic_macs == ("6C:B2:AE:00:00:01",)
+
+    def test_attachments_include_both_physical_and_logical_interfaces(self) -> None:
+        """Fabric-attachment coverage is unaffected by the `nic_macs`
+        preference — UCSPE 4.2 showed most servers have only one of the
+        two classes populated, so both still count toward connectivity.
+        """
+        result = compute_unit_to_provider_server(
+            _blade(),
+            manager_id="mgr_1",
+            profile_by_dn={},
+            template_dn_by_name={},
+            mgmt_if=None,
+            ext_eth_ifs=[_adapter_if(name="eth0", switch_id="A")],
+            host_eth_ifs=[_adapter_if(name="vnic0", switch_id="B")],
+            cpu_units=[],
+            disk_units=[],
+        )
         assert [a.fabric for a in result.attachments] == ["A", "B"]
 
     @pytest.mark.parametrize(
@@ -227,7 +288,8 @@ class TestComputeUnitToProviderServer:
             profile_by_dn={},
             template_dn_by_name={},
             mgmt_if=None,
-            adapter_ifs=[],
+            ext_eth_ifs=[],
+            host_eth_ifs=[],
             cpu_units=[],
             disk_units=[],
         )
@@ -258,7 +320,8 @@ class TestComputeUnitToProviderServer:
             profile_by_dn={},
             template_dn_by_name={},
             mgmt_if=None,
-            adapter_ifs=[],
+            ext_eth_ifs=[],
+            host_eth_ifs=[],
             cpu_units=[],
             disk_units=[],
         )
@@ -299,7 +362,8 @@ class TestCpuAndStorage:
             profile_by_dn={},
             template_dn_by_name={},
             mgmt_if=None,
-            adapter_ifs=[],
+            ext_eth_ifs=[],
+            host_eth_ifs=[],
             cpu_units=[
                 _processor_unit(dn=".../cpu-2", presence="empty", model=""),
                 _processor_unit(),
@@ -315,7 +379,8 @@ class TestCpuAndStorage:
             profile_by_dn={},
             template_dn_by_name={},
             mgmt_if=None,
-            adapter_ifs=[],
+            ext_eth_ifs=[],
+            host_eth_ifs=[],
             cpu_units=[_processor_unit(presence="empty")],
             disk_units=[],
         )
@@ -328,7 +393,8 @@ class TestCpuAndStorage:
             profile_by_dn={},
             template_dn_by_name={},
             mgmt_if=None,
-            adapter_ifs=[],
+            ext_eth_ifs=[],
+            host_eth_ifs=[],
             cpu_units=[],
             disk_units=[
                 _storage_disk(dn="disk-1", size="1144641"),
@@ -351,7 +417,8 @@ class TestCpuAndStorage:
             profile_by_dn={},
             template_dn_by_name={},
             mgmt_if=None,
-            adapter_ifs=[],
+            ext_eth_ifs=[],
+            host_eth_ifs=[],
             cpu_units=[],
             disk_units=[_storage_disk(presence="empty")],
         )
@@ -365,7 +432,8 @@ class TestCpuAndStorage:
             profile_by_dn={},
             template_dn_by_name={},
             mgmt_if=None,
-            adapter_ifs=[],
+            ext_eth_ifs=[],
+            host_eth_ifs=[],
             cpu_units=[],
             disk_units=[_storage_disk(size="not-applicable")],
         )
@@ -391,7 +459,8 @@ class TestCpuAndStorage:
             profile_by_dn={},
             template_dn_by_name={},
             mgmt_if=None,
-            adapter_ifs=[],
+            ext_eth_ifs=[],
+            host_eth_ifs=[],
             cpu_units=[],
             disk_units=[_storage_disk(disk_state=disk_state)],
         )
@@ -404,7 +473,8 @@ class TestCpuAndStorage:
             profile_by_dn={},
             template_dn_by_name={},
             mgmt_if=None,
-            adapter_ifs=[],
+            ext_eth_ifs=[],
+            host_eth_ifs=[],
             cpu_units=[],
             disk_units=[_storage_disk(device_type="unspecified")],
         )
