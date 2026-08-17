@@ -361,9 +361,7 @@ class TestListServers:
         assert server.bmc_mac is None
 
     async def test_server_with_no_descendants_still_yields(self) -> None:
-        domain = _domain(
-            mgmtIf=[], adaptorHostEthIf=[], processorUnit=[], storageLocalDisk=[]
-        )
+        domain = _domain(mgmtIf=[], adaptorHostEthIf=[], processorUnit=[], storageLocalDisk=[])
         client = FakeUcsClient(responses=domain)
         [server] = await _collect(_provider(client))
 

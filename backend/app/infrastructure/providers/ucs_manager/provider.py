@@ -149,9 +149,7 @@ class UcsManagerProvider:
                 adapter_ifs_all, server_dns=server_dns
             )
             cpu_units_by_server = _group_by_owning_server_dn(cpu_units_all, server_dns=server_dns)
-            disk_units_by_server = _group_by_owning_server_dn(
-                disk_units_all, server_dns=server_dns
-            )
+            disk_units_by_server = _group_by_owning_server_dn(disk_units_all, server_dns=server_dns)
 
             for server_mo in servers:
                 mgmt_if = _bmc_interface(mgmt_ifs_by_server[server_mo.dn], server_dn=server_mo.dn)
