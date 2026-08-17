@@ -51,12 +51,22 @@ Real vendor collectors run as Kubernetes `CronJob`s, one per manager
 *type*, invoking `tools/run_collector.py --manager-type <TYPE>` in the
 same image as the API (`Containerfile` copies `tools/` alongside `app/`
 specifically so no second image is needed). See the repo root
-`README.md`'s "How data actually gets in" section and
-`docs/adr/0009-ucs-manager-collector.md` for the full design.
+`README.md`'s "How data actually gets in" section for the full design,
+`docs/adr/0009-ucs-manager-collector.md` for how the UCS Manager data
+path was built and validated, and `docs/adr/0014-ucs-central-multi-
+domain-collector.md` for how the Cisco collector drives it per domain.
 
 A collector's entire connection config is one endpoint and one login per
 manager type, set in `collectors.<vendor>` in `values.yaml`. There are no
 `Manager` documents to create first and no credentials volume to mount.
+
+`collectors.ucsManager` is the one carve-out and has no `ip` at all: the
+UCS Central collector reads every domain's address from Central at
+runtime (`ComputeSystem.address`) and logs into each one with
+`collectors.ucsManager.username`/`.password`, so that account has to
+authenticate against every registered domain. There is no UCS Manager
+CronJob to enable.
+
 Those values render into a single `Secret`
 (`templates/collector-credentials-secret.yaml`) and reach the pod as
 `INVENTORY_*` environment variables via `envFrom`.
@@ -67,14 +77,32 @@ out of git (`-f secrets.yaml`), or — for production — set
 `collectors.existingSecret` to a Secret managed by Vault, External
 Secrets or sealed-secrets, which makes the chart skip rendering its own.
 
+An externally managed Secret is consumed with `envFrom`, so its keys are
+environment variable names and the chart cannot validate them — a typo
+surfaces as "not configured" at collector runtime, not at install. For
+the Cisco collector the required set is:
+
+```
+INVENTORY_UCS_CENTRAL_IP
+INVENTORY_UCS_CENTRAL_USERNAME
+INVENTORY_UCS_CENTRAL_PASSWORD
+INVENTORY_UCS_MANAGER_USERNAME     # no _IP — see the carve-out above
+INVENTORY_UCS_MANAGER_PASSWORD
+```
+
+Other vendors follow the `INVENTORY_<TYPE>_IP`/`_USERNAME`/`_PASSWORD`
+shape; `templates/collector-credentials-secret.yaml` is the full list.
+
 `envFrom` a Secret rather than inline `env` values is deliberate:
 `kubectl get cronjob -o yaml` and `kubectl describe pod` both print plain
 `env` values to anyone who can read workloads in the namespace, while a
 `secretRef` shows only the reference.
 
-Only `UCS_MANAGER` has a collector so far. `OPENMANAGE`, `INTERSIGHT` and
-`ONEVIEW` have configuration slots but no provider — add the CronJob
-template together with that vendor's `ServerInventoryProvider`.
+`UCS_CENTRAL` is the only manager type with a CronJob, and it covers the
+whole Cisco fleet — every domain registered with Central, read through
+that domain's own UCS Manager. `OPENMANAGE`, `INTERSIGHT` and `ONEVIEW`
+have configuration slots but no provider — add the CronJob template
+together with that vendor's `ServerInventoryProvider`.
 
 Note that Intersight's three fields mean something different: it signs
 requests with an API key rather than logging in, so `username` is the API

@@ -1,13 +1,16 @@
 {{- /*
-The UCS Central collector: one CronJob covering every registered UCS
-Manager domain, versus ucs-manager-collector-cronjob.yaml's one domain
-per CronJob.
+The only Cisco collector: one CronJob covering every UCS Manager domain
+registered with UCS Central.
 
-Running both at once is legal but usually wrong — they would ingest the
-same servers under two different manager_ids and two different external
-id roots (`compute/sys-<id>/...` versus `sys/...`), so the same machine
-would appear twice. Pick one per fleet, or scope them to disjoint
-domains.
+The pod talks to both products. It asks Central which domains exist and
+what their addresses are, then opens a session against each domain's own
+UCS Manager using the `ucsManager.username`/`password` the collector
+Secret carries — there is no `ucsManager.ip`, because Central supplies
+the addresses. That is why the `envFrom` below pulls the whole vendor
+Secret rather than just this vendor's keys.
+
+A domain not registered with Central is not collected: Central is the
+only source of the domain list. See docs/adr/0014's Consequences.
 */ -}}
 {{- if .Values.collectors.ucsCentral.enabled }}
 apiVersion: batch/v1
@@ -43,6 +46,10 @@ spec:
                 # here rather than in the API ConfigMap this also mounts.
                 - name: INVENTORY_COLLECTOR_NAME_PATTERN
                   value: {{ .Values.collectors.namePattern | quote }}
+                # How many domains to read at once. Collector-scoped like
+                # the pattern above.
+                - name: INVENTORY_UCS_CENTRAL_DOMAIN_CONCURRENCY
+                  value: {{ .Values.collectors.ucsCentral.domainConcurrency | quote }}
                 - name: INVENTORY_MONGO_URI
                   valueFrom:
                     secretKeyRef:

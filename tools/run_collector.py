@@ -30,6 +30,7 @@ from app.application.services.classification_service import ClassificationServic
 from app.application.services.health_policy_service import HealthPolicyService
 from app.application.services.ingest import IngestService, IngestSummary
 from app.config import get_settings
+from app.config.settings import Settings
 from app.domain.enums import ManagerType
 from app.domain.models.common import AuditFields
 from app.domain.models.manager import Manager
@@ -43,6 +44,7 @@ from app.domain.services.health.metrics import build_default_registry
 from app.domain.services.regex_engine import RegexModuleEngine
 from app.domain.value_objects.site import parse_site_code
 from app.infrastructure.credentials import EnvConnectionResolver
+from app.infrastructure.credentials.env import resolve_login
 from app.infrastructure.logging import configure_logging
 from app.infrastructure.mongodb import MongoClientHolder
 from app.infrastructure.mongodb.audit_event_repository import MongoAuditEventRepository
@@ -55,37 +57,66 @@ from app.infrastructure.mongodb.manager_repository import MongoManagerRepository
 from app.infrastructure.mongodb.server_repository import MongoServerRepository
 from app.infrastructure.mongodb.site_repository import MongoSiteRepository
 from app.infrastructure.providers.ucs_central.provider import UcsCentralProvider
-from app.infrastructure.providers.ucs_manager.provider import UcsManagerProvider
 
 logger = structlog.get_logger(__name__)
 
-# One entry per manager type this tool actually knows how to collect
-# from. A missing entry is a real gap (OpenManage, Intersight, OneView),
-# not an oversight: `_build_provider` raises a clear "not implemented
-# yet" for any `manager.type` without an entry here, rather than silently
-# skipping that manager.
+
+def _ucs_central_provider(
+    *,
+    manager: Manager,
+    credentials: ManagerConnection,
+    timeout_seconds: float,
+    settings: Settings,
+) -> ServerInventoryProvider:
+    """Central for the domain list, each domain's own UCS Manager for the
+    servers — see `_PROVIDER_FACTORIES`' comment below.
+    """
+    # Raised here, before any connection is attempted, so a half-configured
+    # deployment gets the variable names to set rather than a per-domain
+    # login failure that reads like bad credentials. `_run` turns
+    # `ManagerNotConfiguredError` into exit code 2 with this message.
+    domain_login = resolve_login(settings, ManagerType.UCS_MANAGER)
+    return UcsCentralProvider(
+        manager=manager,
+        credentials=credentials,
+        timeout_seconds=timeout_seconds,
+        domain_login=domain_login,
+        # The same pattern `_NameFilteredProvider` applies, reused only to
+        # skip domains that certainly hold nothing of ours. It never
+        # decides which *servers* are ingested — see `domains_to_collect`.
+        name_pattern=settings.collector_name_pattern,
+        concurrency=settings.ucs_central_domain_concurrency,
+    )
+
+
+# One entry per manager type this tool can be pointed at. A missing entry
+# is a real gap (OpenManage, Intersight, OneView), not an oversight:
+# `_build_provider` raises a clear "not implemented yet" for any
+# `manager.type` without one, rather than silently skipping that manager.
 #
-# UCS_MANAGER and UCS_CENTRAL are both collection sources, and which one
-# to run is a deployment choice rather than a hierarchy:
+# Cisco has exactly one entry point, and it is UCS_CENTRAL:
 #
-#   UCS_MANAGER  one domain, live and authoritative. One endpoint reaches
-#                exactly one domain, so a multi-domain fleet needs one
-#                configured endpoint per domain — which this tool's
-#                one-endpoint-per-type config cannot express.
-#   UCS_CENTRAL  every registered domain in one login. The tradeoff is
-#                that Central serves a *replica* of each domain's
-#                inventory, and it is unconfirmed whether that replica
-#                includes domain-local service profiles — the source of
-#                a server's name. See `..ucs_central.provider`'s module
-#                docstring; the provider logs per-domain coverage so the
-#                answer is visible in the first real run.
+#   UCS_CENTRAL  Central enumerates the registered domains and their
+#                service-profile names; each domain's real inventory is
+#                then read live from that domain's own UCS Manager through
+#                the emulator-validated `..ucs_manager` path. One Central
+#                login (INVENTORY_UCS_CENTRAL_*) plus one UCS Manager login
+#                valid fleet-wide (INVENTORY_UCS_MANAGER_USERNAME/
+#                _PASSWORD). There is no INVENTORY_UCS_MANAGER_IP: Central
+#                supplies each domain's address.
 #
-# Annotated rather than inferred: with two entries mypy widens the value
-# type to `object`, and the annotation is also what pins the constructor
-# contract every future provider must match.
+# UCS_MANAGER is deliberately absent. `UcsManagerProvider` is not gone —
+# it is the engine this collector drives once per domain — but it has no
+# endpoint of its own to be configured with any more, so pointing this
+# tool at UCS_MANAGER is a usage error rather than a missing feature, and
+# `_build_provider` says so in its own words instead of claiming no
+# collector exists.
+#
+# Annotated rather than inferred: mypy would otherwise widen the value
+# type, and the annotation is also what pins the factory contract every
+# future provider must match.
 _PROVIDER_FACTORIES: dict[ManagerType, Callable[..., ServerInventoryProvider]] = {
-    ManagerType.UCS_MANAGER: UcsManagerProvider,
-    ManagerType.UCS_CENTRAL: UcsCentralProvider,
+    ManagerType.UCS_CENTRAL: _ucs_central_provider,
 }
 
 
@@ -201,15 +232,39 @@ def _filtered(provider: ServerInventoryProvider, pattern: str) -> ServerInventor
 
 
 async def _build_provider(
-    manager: Manager, *, credential_resolver: CredentialResolver, timeout_seconds: float
+    manager: Manager,
+    *,
+    credential_resolver: CredentialResolver,
+    timeout_seconds: float,
+    settings: Settings | None = None,
 ) -> ServerInventoryProvider:
+    """`settings` is threaded in rather than read here so a caller (and a
+    test) can decide which collector variant it is exercising. It defaults
+    to the process-wide settings for the callers that have no opinion.
+    """
     factory = _PROVIDER_FACTORIES.get(manager.type)
     if factory is None:
+        # UCS Manager gets its own message: the collector for it very much
+        # exists and runs on every Central run, it just has no endpoint of
+        # its own to be pointed at. "Not implemented yet" would send an
+        # operator looking for code that is already there.
+        if manager.type is ManagerType.UCS_MANAGER:
+            raise NotImplementedError(
+                "UCS Manager has no collector entry point of its own — it is collected "
+                "through `--manager-type UCS_CENTRAL`, which discovers every registered "
+                "domain's address from UCS Central and logs into each one with "
+                "INVENTORY_UCS_MANAGER_USERNAME/_PASSWORD."
+            )
         raise NotImplementedError(
             f"No collector implemented yet for manager type {manager.type!r}."
         )
     connection = credential_resolver.resolve(manager.type)
-    return factory(manager=manager, credentials=connection, timeout_seconds=timeout_seconds)
+    return factory(
+        manager=manager,
+        credentials=connection,
+        timeout_seconds=timeout_seconds,
+        settings=settings if settings is not None else get_settings(),
+    )
 
 
 async def _dry_run_one_manager(
@@ -219,6 +274,7 @@ async def _dry_run_one_manager(
     timeout_seconds: float,
     limit: int | None,
     name_pattern: str = "",
+    settings: Settings | None = None,
     provider_factory: Callable[..., Awaitable[ServerInventoryProvider]] | None = None,
 ) -> int:
     """Print what `manager` reports, writing nothing. Returns the count.
@@ -232,7 +288,10 @@ async def _dry_run_one_manager(
     build = provider_factory or _build_provider
     provider = _filtered(
         await build(
-            manager, credential_resolver=credential_resolver, timeout_seconds=timeout_seconds
+            manager,
+            credential_resolver=credential_resolver,
+            timeout_seconds=timeout_seconds,
+            settings=settings,
         ),
         name_pattern,
     )
@@ -293,11 +352,15 @@ async def _run_one_manager(
     credential_resolver: CredentialResolver,
     timeout_seconds: float,
     name_pattern: str = "",
+    settings: Settings | None = None,
 ) -> IngestSummary | None:
     try:
         provider = _filtered(
             await _build_provider(
-                manager, credential_resolver=credential_resolver, timeout_seconds=timeout_seconds
+                manager,
+                credential_resolver=credential_resolver,
+                timeout_seconds=timeout_seconds,
+                settings=settings,
             ),
             name_pattern,
         )
@@ -336,6 +399,15 @@ async def _run(
         # read from the `managers` collection to decide where to connect.
         try:
             connection = credential_resolver.resolve(manager_type)
+            # Pre-flight for the one collector that needs a *second* set of
+            # credentials: UCS Central also logs into each domain's UCS
+            # Manager. Checked here, beside the endpoint resolution, so a
+            # half-configured deployment exits 2 naming the variables to set
+            # — the provider factory raises the same error later, but by
+            # then the dry-run/ingest paths have turned it into a generic
+            # "FAILED (see logs)" exit 1.
+            if manager_type is ManagerType.UCS_CENTRAL:
+                resolve_login(settings, ManagerType.UCS_MANAGER)
         except ManagerNotConfiguredError as exc:
             logger.error("collector.not_configured", manager_type=manager_type.value)
             print(f"{exc}")
@@ -351,6 +423,7 @@ async def _run(
                     timeout_seconds=settings.collector_connect_timeout_seconds,
                     limit=limit,
                     name_pattern=settings.collector_name_pattern,
+                    settings=settings,
                 )
             except Exception:
                 logger.exception("collector.dry_run_failed", manager_id=manager.id)
@@ -385,6 +458,7 @@ async def _run(
             credential_resolver=credential_resolver,
             timeout_seconds=settings.collector_connect_timeout_seconds,
             name_pattern=settings.collector_name_pattern,
+            settings=settings,
         )
         if summary is None:
             print(f"manager={manager.name} FAILED (see logs)")

@@ -120,6 +120,13 @@ Kubernetes kills it with no logged reason.
 
 ## What is still unproven
 
+> Narrowed by the 2026-08-17 update at the end of this file, which moved
+> collection to each domain's own UCS Manager. The question below is
+> still open, but it no longer decides whether the collector works — only
+> whether it can *skip* domains safely, and the answer to "don't know" is
+> now "collect it anyway". Read this section for the evidence, then that
+> update for what the collector actually does with it.
+
 **Whether Central's `lsServer` includes domain-*local* service profiles,
 or only the global ones Central owns.** This single question decides
 whether the collector works at all, because a UCS server's name comes
@@ -217,6 +224,12 @@ avoidable cost this collector doesn't need to pay.
 
 ## Consequences
 
+> The first two bullets are superseded by the 2026-08-17 update below,
+> which removed the standalone UCS Manager collector: there is no longer
+> a second Cisco collector to run alongside this one, and the connection
+> config is now one endpoint plus *two* logins. That update has its own
+> Consequences section.
+
 - A multi-domain Cisco fleet is reachable with one endpoint and one
   credential pair.
 - Running both Cisco collectors at once double-counts: the same machine
@@ -235,3 +248,127 @@ avoidable cost this collector doesn't need to pay.
   quarterly CI pass (ADR-0013) should watch.
 - Data is a replica, not live. `last_refreshed_ts` is logged per domain so
   staleness is observable rather than assumed.
+
+## Update (2026-08-17): Central discovers, UCS Manager collects
+
+This supersedes the design above. The collector no longer reads inventory
+from Central's replica at all, and there is no setting to make it do so
+again — the replica path is deleted, not disabled.
+
+**What it does now.** Two queries go to Central, regardless of fleet
+size: `computeSystem`, for the registered domains and each one's
+`address`, and `lsServer`, for the service-profile names and which domain
+each profile belongs to. Everything else comes from each domain's own UCS
+Manager, collected through `..providers.ucs_manager` unchanged, up to
+`INVENTORY_UCS_CENTRAL_DOMAIN_CONCURRENCY` domains at a time.
+
+**At the same time, the standalone UCS Manager collector was removed.**
+`--manager-type UCS_MANAGER` is no longer a runnable collector, its
+CronJob template is deleted, and `INVENTORY_UCS_MANAGER_IP` is gone from
+settings. `UcsManagerProvider` itself is untouched and busier than
+before: it is now the engine this collector drives once per domain, and
+`INVENTORY_UCS_MANAGER_USERNAME`/`_PASSWORD` are what it logs into every
+domain with.
+
+### Why
+
+1. **The detail is live.** It comes from the domain itself, so the
+   replication lag flagged in Consequences above stops mattering for
+   everything except the profile-name list. The data path is also the one
+   ADR-0009 validated end to end against a live UCS Platform Emulator,
+   rather than a second path that has never met real hardware — which is
+   the whole reason it was reused rather than reimplemented.
+2. **It shrinks what rests on the replica to one field.** Only the
+   *names* still come from Central, and names are precisely what this
+   ADR's "The schema says yes" section argues Central does hold:
+   `LsSPMeta.ownership_state` enumerating `localized` alongside
+   `global-controlled`, on a child of `lsServer`. It is also the part the
+   sibling project team-redbull/ServerScanner depends on in production —
+   its `CiscoStrategy` reads `lsServer` from Central for names, then logs
+   into `lsServer.domain` with one shared UCS Manager credential pair.
+   That is independent operational evidence for both the name list and
+   the single-credential assumption on a real deployment.
+3. **It closes the deep-inventory question instead of assuming it.** The
+   2026-08-16 update above reasoned from `ucscsdk` class definitions that
+   Central's replica carries `processorUnit`/`storageLocalDisk`, and the
+   same assumption was riding on `adaptorHostEthIf` and `mgmtIf`. Class
+   definitions prove the model *can express* those objects, not that a
+   given Central populates them. Nothing needs that to be true now.
+
+The cost, stated plainly: one login plus ~9 queries per collected domain
+instead of 9 queries in total, and a UCS Manager account that works on
+every domain. For the ~8-domain fleet this was built for that is a minute
+or two of wall-clock, bounded further by collecting several domains
+concurrently.
+
+### What was deliberately not copied
+
+The sibling project fetches per server: `query_dn(profile.dn)` then
+`query_children` for `VnicEther`, `VnicIpV4PooledAddr`, `ComputeBoard`,
+`ProcessorUnit`, `StorageController`, `StorageLocalDisk`. That is O(number
+of servers) round trips. This collector keeps the domain-wide
+`query_classid` + client-side DN join that ADR-0009's module docstring
+justifies — O(number of classes) per domain, independent of server count,
+and correct for the grandchild classes a DN-scoped
+`configResolveChildren` does not match at all.
+
+### The new failure mode, and the guard against it
+
+Pruning. If Central does *not* list a domain's local profiles, that
+domain's names are invisible here, and a name-pattern check would skip a
+domain that in fact holds the fleet — trading the old "servers arrive
+unnamed" symptom for a quieter "servers never arrive".
+
+So the rule is asymmetric: a domain is skipped **only** when Central
+lists profiles for it and none match
+`INVENTORY_COLLECTOR_NAME_PATTERN`. A domain Central lists no profiles
+for is always collected. Absence of evidence never prunes; only positive
+evidence of a non-match does. Pruning stays an optimisation, never the
+source of truth — `run_collector._NameFilteredProvider` still applies the
+same pattern to every server that comes back, so a domain wrongly kept
+costs one wasted login and nothing else.
+
+### Identity
+
+A UCS Manager DN is domain-local: `sys/chassis-1/blade-1` exists in every
+domain, so using it verbatim would collide across domains. Collected
+servers therefore have their `external_id` rewritten to
+`compute/sys-<domainId>/...`, the same form the replica path emitted, so
+`Server.external_ids[mgr_ucs_central]` still names exactly one machine
+and still identifies its owning domain. (Identity correlation itself is
+vendor + normalized serial — see `IngestService` — so the DN was never
+the dedup key; this is about the recorded reference staying meaningful,
+and about documents ingested before this change still matching.)
+
+### Consequences of this update
+
+- **A domain not registered with UCS Central is uncollectable.** There is
+  no longer any way to point this platform at a single UCS Manager. That
+  is a real capability loss, accepted knowingly: the fleet this serves is
+  fully registered with Central, and keeping a second entry point meant
+  keeping a second way to configure, deploy and mis-deploy Cisco
+  collection.
+- **Central is now a hard single point of failure for all Cisco
+  collection.** Previously it was one of two routes to a domain; now
+  Central being down, unreachable, or wrong about the domain list stops
+  every Cisco collection, including for domains that are themselves
+  perfectly healthy. There is no fallback path, and adding one means
+  restoring the removed entry point.
+- Both of the above are recoverable by reverting this commit —
+  `UcsManagerProvider`, its client and its tests are all still present
+  and exercised, so what would need rebuilding is the CronJob template,
+  the `_PROVIDER_FACTORIES` entry and the `ip` setting, not the collector.
+- A domain that rejects the shared UCS Manager login fails that domain
+  alone and is logged; the rest of the run continues.
+
+### Still unproven
+
+- Whether Central's `lsServer` lists domain-local profiles — unchanged,
+  but demoted from "decides whether this works" to "decides whether
+  pruning can skip anything", with the guard above making the unknown
+  case safe. `tools/verify_ucs_central.py` still answers it directly.
+- That one UCS Manager credential pair authenticates against every
+  registered domain. True for the sibling project's fleet; a property of
+  how the domains are configured, not something Cisco guarantees.
+- The `total_memory` MB assumption inherited from ADR-0009.
+

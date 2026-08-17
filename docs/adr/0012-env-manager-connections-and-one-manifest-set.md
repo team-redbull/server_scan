@@ -2,7 +2,13 @@
 
 ## Status
 
-Accepted
+Accepted. **Partially superseded by ADR-0014's 2026-08-17 update**, which
+carves out one exception to the rule this ADR establishes: `UCS_MANAGER`
+now has a login but no endpoint. Its domains are reached by the UCS
+Central collector at the addresses Central reports for them, so
+`INVENTORY_UCS_MANAGER_IP` — used as the headline example below — no
+longer exists. The one-endpoint-and-login-per-type shape still holds for
+every other manager type, and the reasoning for it is unchanged.
 
 ## Context
 

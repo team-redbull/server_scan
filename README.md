@@ -45,10 +45,13 @@ its own **Kubernetes `CronJob`** — one CronJob per manager *type*, not per
 physical manager. On a schedule, a CronJob's pod:
 
 1. Reads that vendor's endpoint and login from configuration — one set
-   per manager type (`INVENTORY_UCS_MANAGER_IP` / `_USERNAME` /
-   `_PASSWORD`, and the same shape for OneView, OME, UCS Central and
-   Intersight). No `Manager` document to create, no secret volume to
-   mount; in Kubernetes these arrive from a `Secret` via `envFrom`.
+   per manager type (`INVENTORY_UCS_CENTRAL_IP` / `_USERNAME` /
+   `_PASSWORD`, and the same shape for OneView, OME and Intersight). No
+   `Manager` document to create, no secret volume to mount; in Kubernetes
+   these arrive from a `Secret` via `envFrom`. (The Cisco collector needs
+   one thing more, and one thing less: `INVENTORY_UCS_MANAGER_USERNAME` /
+   `_PASSWORD` to log into each domain, and no UCS Manager endpoint,
+   because Central reports every domain's address itself.)
 2. Talks to that vendor's real API and normalizes what it reports into
    the platform's vendor-neutral `ProviderServer` shape
    (`app.domain.ports.provider`).
@@ -63,7 +66,7 @@ misconfigured manager cannot mislabel everything it collects. A name with
 no site token is surfaced as "Unassigned" rather than defaulted.
 
 ```
- UCS Manager CronJob ─┐
+ UCS Central CronJob ─┐   (one login per UCS Manager domain)
  OpenManage CronJob ──┼──▶  ProviderServer  ──▶  IngestService  ──▶  MongoDB
  Intersight CronJob ──┤       (vendor-neutral)   (classify, health,        │
  OneView CronJob ─────┘                           audit, upsert)          │
@@ -84,37 +87,50 @@ implementation for it (see `app.infrastructure.providers.ucs_manager` as
 the reference), register it in `tools/run_collector.py`, and add a
 CronJob manifest — nothing in the API, the classification engine, the
 health engine, or the frontend needs to change. `docs/adr/0009-ucs-
-manager-collector.md` is the detailed writeup of how the first one
-(UCS Manager) was actually built.
+manager-collector.md` is the detailed writeup of how the first provider
+was built and validated, and `docs/adr/0014-ucs-central-multi-domain-
+collector.md` of how the Cisco collector drives it once per domain.
 
-Right now, only UCS Manager has a real collector, and it has been
-validated end to end against a live Cisco UCS Platform Emulator (see
-`docs/adr/0009`'s validation sections). The other manager types have
-configuration slots but no provider — `tools/run_collector.py` raises a
-clear `NotImplementedError` for them rather than silently doing nothing.
+Right now one collector exists, `UCS_CENTRAL`, and it covers the whole
+Cisco fleet. It asks UCS Central which domains are registered and what
+their addresses are, then reads each domain's inventory live from that
+domain's own UCS Manager — the data path validated end to end against a
+live Cisco UCS Platform Emulator (see `docs/adr/0009`'s validation
+sections). Central supplies the domain list and the service-profile
+names; the servers themselves come from the domains. `docs/adr/0014`
+covers the design, its costs, and what is still unproven — including that
+a domain not registered with Central cannot be collected at all.
 
-### Running a collector by hand
+The other manager types have configuration slots but no provider —
+`tools/run_collector.py` raises a clear `NotImplementedError` for them
+rather than silently doing nothing.
 
-A collector needs three environment variables — where the manager is, and
-a login. Set them in `.env` (see `.env.example`) or inline:
+### Running the collector by hand
+
+It needs five values: where UCS Central is and how to log in, plus a UCS
+Manager login that works on every domain. There is deliberately no UCS
+Manager endpoint — Central reports each domain's address itself. Set them
+in `.env` (see `.env.example`) or inline:
 
 ```bash
-export INVENTORY_UCS_MANAGER_IP=ucsm.example.com   # bare host, never a URL
-export INVENTORY_UCS_MANAGER_USERNAME=inventory-svc
+export INVENTORY_UCS_CENTRAL_IP=ucsc.example.com   # bare host, never a URL
+export INVENTORY_UCS_CENTRAL_USERNAME=inventory-svc
+export INVENTORY_UCS_CENTRAL_PASSWORD=...
+export INVENTORY_UCS_MANAGER_USERNAME=inventory-svc  # used on every domain
 export INVENTORY_UCS_MANAGER_PASSWORD=...
 
-# See what a manager reports, without writing anything at all:
-uv run python -m tools.run_collector --manager-type UCS_MANAGER --dry-run
+# See what the fleet reports, without writing anything at all:
+uv run python -m tools.run_collector --manager-type UCS_CENTRAL --dry-run
 
 # ...one server only, plus every XML request/response on the wire:
-uv run python -m tools.run_collector --manager-type UCS_MANAGER \
+uv run python -m tools.run_collector --manager-type UCS_CENTRAL \
   --dry-run --limit 1 --debug-xml
 
 # The real thing — classify, health-evaluate, audit and upsert:
-uv run python -m tools.run_collector --manager-type UCS_MANAGER
+uv run python -m tools.run_collector --manager-type UCS_CENTRAL
 ```
 
-A vendor with any of its three values missing is rejected as a
+A vendor with any of its required values missing is rejected as a
 configuration error naming exactly what to set, rather than attempted as
 a login that fails as "bad credentials".
 

@@ -85,12 +85,22 @@ class Settings(BaseSettings):
 
     # --- Collectors (tools/run_collector.py, not the API process) ---
     #
-    # One endpoint + credential pair per manager type, and that is the
-    # whole of a collector's connection config — there is no per-manager
-    # document to maintain and no secret directory to mount. Every value
-    # is empty by default so a collector for an unconfigured vendor fails
-    # with an explicit "not configured" error naming the variables to
-    # set, rather than attempting a connection to nowhere.
+    # A credential pair per manager type, plus an endpoint for every type
+    # that is pointed at directly — and that is the whole of a collector's
+    # connection config. There is no per-manager document to maintain and
+    # no secret directory to mount. Every value is empty by default so a
+    # collector for an unconfigured vendor fails with an explicit "not
+    # configured" error naming the variables to set, rather than
+    # attempting a connection to nowhere.
+    #
+    # Cisco UCS Manager is the one type with a login but **no endpoint**.
+    # It is never pointed at directly: the UCS Central collector reaches
+    # every registered domain in turn, at the address Central reports for
+    # each (`ComputeSystem.address`), using this one fleet-wide service
+    # account. An `ucs_manager_ip` would have to name a single domain,
+    # which would be either unused or actively misleading — see
+    # `app.infrastructure.credentials.env`, where the split between
+    # "has a login" and "has an endpoint" is a difference of type.
     #
     # `INVENTORY_`-prefixed, so `ucs_manager_ip` is
     # `INVENTORY_UCS_MANAGER_IP`. In Kubernetes these arrive from a
@@ -103,7 +113,6 @@ class Settings(BaseSettings):
     # for the SaaS tenant, or the appliance FQDN for Connected Virtual
     # Appliance. Called out here and in values.yaml because handing
     # Intersight an account password would look plausible and never work.
-    ucs_manager_ip: str = ""
     ucs_manager_username: str = ""
     ucs_manager_password: str = ""
 
@@ -125,6 +134,19 @@ class Settings(BaseSettings):
     intersight_password: str = ""
 
     collector_connect_timeout_seconds: float = 15.0
+
+    # How many domains the UCS Central collector talks to at once. It uses
+    # Central only to enumerate registered domains and their service-profile
+    # names, then reads each domain's real inventory from that domain's own
+    # UCS Manager — so it needs INVENTORY_UCS_MANAGER_USERNAME/_PASSWORD
+    # (one login valid across the fleet; the addresses come from Central,
+    # so INVENTORY_UCS_MANAGER_IP is not used by this collector).
+    #
+    # Domains are independent, and each costs a login plus ~9 queries no
+    # matter how many servers it holds, so this bounds wall-clock without
+    # bounding correctness. Kept modest: every concurrent domain is one
+    # blocking SDK call parked in a worker thread.
+    ucs_central_domain_concurrency: int = 4
 
     # Which servers a collector is allowed to ingest at all, as a regex
     # matched against the server's name (`re.search`, so "starts with" is

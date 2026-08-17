@@ -423,3 +423,25 @@ its own vendor-provider abstraction.
 collector run (six -> eight for UCS Manager). Real-hardware verification
 of the `size` unit and of these classes' actual presence/depth against a
 live domain is still open, same as `total_memory` always was.
+
+## Update (2026-08-17): the entry point moved, the collector did not
+
+`--manager-type UCS_MANAGER` and its CronJob template were removed. This
+ADR is not deprecated by that, and nothing it validated has changed.
+
+What was deleted is the *entry point*: the standalone way to point the
+platform at one UCS Manager domain, plus the `INVENTORY_UCS_MANAGER_IP`
+setting that named that one domain. `UcsManagerProvider`, its client, its
+mapping and its tests are all untouched and run more often than before —
+the UCS Central collector now drives them once per registered domain,
+with the addresses coming from Central (`ComputeSystem.address`) and
+`INVENTORY_UCS_MANAGER_USERNAME`/`_PASSWORD` as the login for each.
+
+The reason that reuse is safe is this document: the UCSPE run recorded
+above is the only validation against real UCS Manager behaviour that this
+platform has, and every defect it found — the nonexistent MO class, the
+BMC filter that matched nothing, the missing adapter interface class, the
+always-zero fabric path counts, the chassis-slot naming — is fixed in the
+code being reused. Reimplementing this data path against UCS Central's
+replica instead would have thrown that evidence away. See
+`docs/adr/0014`'s 2026-08-17 update for the design and its costs.

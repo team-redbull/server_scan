@@ -5,12 +5,23 @@ Settings are environment-sourced (`app.config.settings.Settings`, prefix
 `envFrom` — the values live in the Helm chart's `values.yaml`, get
 rendered into a Secret, and never appear in the pod spec itself.
 
-The mapping below is explicit rather than derived from the enum member
+The mappings below are explicit rather than derived from the enum member
 name (`ManagerType.UCS_MANAGER` -> `ucs_manager_*`). A convention would
 work today and silently break the day a member is renamed: the rename
 would change which environment variables a deployment must set, with
 nothing failing until a collector runs against a live domain and reports
 "not configured". Naming the fields makes that a type error instead.
+
+**A login and an endpoint are separate questions**, which is why there
+are two maps rather than one three-tuple. UCS Manager has a login but no
+configured endpoint: it is never pointed at directly any more, it is
+reached once per registered domain by the UCS Central collector, which
+gets each domain's address from Central itself
+(`ComputeSystem.address`). A single `_SETTINGS_FIELDS` tuple could only
+express that with an empty-string or `None` endpoint field, which would
+make `resolve()` fail with "set INVENTORY_UCS_MANAGER_IP" — naming a
+variable that does not exist. Splitting the maps makes the absence a
+fact of the type instead of a runtime surprise.
 """
 
 from __future__ import annotations
@@ -22,22 +33,36 @@ from app.domain.ports.credentials import (
     ManagerNotConfiguredError,
 )
 
-# manager type -> the `Settings` field names holding its endpoint, user
-# and password. Every type this platform knows about is here, so the
-# values file is uniform across vendors; a type absent from the map has
-# no configuration at all and `resolve` says so explicitly.
+# manager type -> the `Settings` fields holding its username and password.
+# Every type this platform knows about is here, so the values file is
+# uniform across vendors.
 #
-# Intersight reuses the same three fields with different meanings — API
-# Key ID and secret key rather than a login. That is a documentation
-# problem, not a shape problem: the collector for it knows how to sign
-# with them, and keeping one shape means one Secret and one values block
-# per vendor rather than a special case.
-_SETTINGS_FIELDS: dict[ManagerType, tuple[str, str, str]] = {
-    ManagerType.UCS_MANAGER: ("ucs_manager_ip", "ucs_manager_username", "ucs_manager_password"),
-    ManagerType.UCS_CENTRAL: ("ucs_central_ip", "ucs_central_username", "ucs_central_password"),
-    ManagerType.ONEVIEW: ("oneview_ip", "oneview_username", "oneview_password"),
-    ManagerType.OPENMANAGE: ("ome_ip", "ome_username", "ome_password"),
-    ManagerType.INTERSIGHT: ("intersight_ip", "intersight_username", "intersight_password"),
+# Intersight reuses these two fields with different meanings — API Key ID
+# and secret key rather than a login. That is a documentation problem, not
+# a shape problem: the collector for it knows how to sign with them, and
+# keeping one shape means one Secret and one values block per vendor
+# rather than a special case.
+_LOGIN_FIELDS: dict[ManagerType, tuple[str, str]] = {
+    ManagerType.UCS_MANAGER: ("ucs_manager_username", "ucs_manager_password"),
+    ManagerType.UCS_CENTRAL: ("ucs_central_username", "ucs_central_password"),
+    ManagerType.ONEVIEW: ("oneview_username", "oneview_password"),
+    ManagerType.OPENMANAGE: ("ome_username", "ome_password"),
+    ManagerType.INTERSIGHT: ("intersight_username", "intersight_password"),
+}
+
+# manager type -> the `Settings` field holding the address to connect to.
+#
+# `UCS_MANAGER` is deliberately absent, and that absence is the whole
+# point of this map being separate: a UCS Manager domain is reached by the
+# UCS Central collector, once per domain, at the address Central reports
+# for it. There is no `INVENTORY_UCS_MANAGER_IP` to set, so `resolve()`
+# says that in as many words rather than demanding a variable that no
+# longer exists.
+_ENDPOINT_FIELD: dict[ManagerType, str] = {
+    ManagerType.UCS_CENTRAL: "ucs_central_ip",
+    ManagerType.ONEVIEW: "oneview_ip",
+    ManagerType.OPENMANAGE: "ome_ip",
+    ManagerType.INTERSIGHT: "intersight_ip",
 }
 
 
@@ -56,13 +81,23 @@ class EnvConnectionResolver:
         self._settings = settings
 
     def resolve(self, manager_type: ManagerType) -> ManagerConnection:
-        fields = _SETTINGS_FIELDS.get(manager_type)
-        if fields is None:
+        if manager_type is ManagerType.UCS_MANAGER:
+            raise ManagerNotConfiguredError(
+                "UCS_MANAGER has no endpoint of its own to configure — each domain is "
+                "reached through UCS Central, which reports its address. Configure "
+                "INVENTORY_UCS_CENTRAL_IP/_USERNAME/_PASSWORD plus the fleet-wide "
+                "INVENTORY_UCS_MANAGER_USERNAME/_PASSWORD, and collect with "
+                "--manager-type UCS_CENTRAL."
+            )
+        endpoint_field = _ENDPOINT_FIELD.get(manager_type)
+        login_fields = _LOGIN_FIELDS.get(manager_type)
+        if endpoint_field is None or login_fields is None:
             raise ManagerNotConfiguredError(
                 f"{manager_type.value} has no connection configuration defined."
             )
 
-        endpoint_field, username_field, password_field = fields
+        username_field, password_field = login_fields
+        fields = (endpoint_field, username_field, password_field)
         values = {name: str(getattr(self._settings, name, "") or "").strip() for name in fields}
 
         missing = [_env_var(name) for name, value in values.items() if not value]
@@ -78,15 +113,56 @@ class EnvConnectionResolver:
         )
 
 
-def configured_manager_types(settings: Settings) -> list[ManagerType]:
-    """Every manager type with a complete set of connection details.
+def resolve_login(settings: Settings, manager_type: ManagerType) -> tuple[str, str]:
+    """A manager type's `(username, password)` **without** its endpoint.
 
-    Used to report what a deployment actually has configured, without
-    each caller re-implementing "is this one filled in".
+    For the one collector that discovers its endpoints at runtime instead
+    of reading one from configuration: the UCS Central collector logs into
+    each registered domain's UCS Manager, and Central itself supplies those
+    addresses (`ComputeSystem.address`). One UCS Manager service account is
+    valid across the domains of one fleet, so this is a single login used
+    many times, not a login per domain.
+
+    Same error shape as `EnvConnectionResolver.resolve`: a missing value
+    names the environment variable to set.
+    """
+    login_fields = _LOGIN_FIELDS.get(manager_type)
+    if login_fields is None:
+        raise ManagerNotConfiguredError(
+            f"{manager_type.value} has no connection configuration defined."
+        )
+    username_field, password_field = login_fields
+    username = str(getattr(settings, username_field, "") or "").strip()
+    password = str(getattr(settings, password_field, "") or "").strip()
+
+    missing = [
+        _env_var(field)
+        for field, value in ((username_field, username), (password_field, password))
+        if not value
+    ]
+    if missing:
+        raise ManagerNotConfiguredError(
+            f"{manager_type.value} has no login configured — set {', '.join(sorted(missing))}."
+        )
+    return username, password
+
+
+def configured_manager_types(settings: Settings) -> list[ManagerType]:
+    """Every manager type this deployment can be pointed at directly.
+
+    Used to report what a deployment actually has configured, without each
+    caller re-implementing "is this one filled in".
+
+    `UCS_MANAGER` can never appear, by construction rather than by
+    accident: it is absent from `_ENDPOINT_FIELD`, so it has no address to
+    be pointed at and is collected only as part of a `UCS_CENTRAL` run.
+    Iterating the endpoint map rather than the login map is what makes
+    that a statement of intent instead of a `resolve()` call that is
+    guaranteed to fail.
     """
     resolver = EnvConnectionResolver(settings)
     configured: list[ManagerType] = []
-    for manager_type in _SETTINGS_FIELDS:
+    for manager_type in _ENDPOINT_FIELD:
         try:
             resolver.resolve(manager_type)
         except ManagerNotConfiguredError:

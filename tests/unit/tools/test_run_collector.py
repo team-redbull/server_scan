@@ -19,6 +19,7 @@ from tools.run_collector import (
     _run_one_manager,
 )
 
+from app.config.settings import Settings
 from app.domain.enums import ManagerType
 from app.domain.models.common import AuditFields
 from app.domain.models.manager import Manager
@@ -28,13 +29,38 @@ from app.domain.ports.provider import ProviderServer
 pytestmark = pytest.mark.unit
 
 
+def _settings(**overrides: Any) -> Settings:
+    """Settings built from explicit values only.
+
+    `_env_file=None` matters: `Settings` reads `.env` by default, so a
+    developer's real UCS credentials sitting in one would otherwise decide
+    which collector these tests build.
+    """
+    return Settings(_env_file=None, **overrides)
+
+
+def _central_settings(**overrides: Any) -> Settings:
+    """Settings that can actually build the UCS Central collector: it needs
+    a fleet-wide UCS Manager login on top of the Central connection, since
+    it logs into each registered domain itself.
+    """
+    return _settings(
+        ucs_manager_username="domain-admin",
+        ucs_manager_password="domain-secret",
+        **overrides,
+    )
+
+
 def _manager(**overrides: Any) -> Manager:
+    """Defaults to UCS Central — the only manager type this tool can be
+    pointed at since the standalone UCS Manager entry point was removed.
+    """
     defaults: dict[str, Any] = {
         "_id": "mgr-1",
-        "name": "ucsm-lab",
-        "type": ManagerType.UCS_MANAGER,
+        "name": "ucs-central-lab",
+        "type": ManagerType.UCS_CENTRAL,
         "site_id": "site-1",
-        "endpoint": "ucsm.lab.example.com",
+        "endpoint": "central.lab.example.com",
         "audit": AuditFields.new(),
     }
     defaults.update(overrides)
@@ -56,14 +82,6 @@ class FakeCredentialResolver:
 
 
 class TestBuildProvider:
-    async def test_builds_a_provider_for_ucs_manager(self) -> None:
-        resolver = FakeCredentialResolver()
-        provider = await _build_provider(
-            _manager(), credential_resolver=resolver, timeout_seconds=5.0
-        )
-        assert provider.provider_type == ManagerType.UCS_MANAGER.value
-        assert resolver.resolved == [ManagerType.UCS_MANAGER]
-
     @pytest.mark.parametrize(
         "manager_type",
         [ManagerType.OPENMANAGE, ManagerType.INTERSIGHT, ManagerType.ONEVIEW],
@@ -80,19 +98,61 @@ class TestBuildProvider:
             )
 
     async def test_builds_a_provider_for_ucs_central(self) -> None:
-        """UCS Central is a collection source in its own right, not only a
-        discovery parent: one login covers every registered domain, which
-        is the only way this tool reaches a multi-domain fleet given it
-        resolves exactly one endpoint per manager type.
+        """The one Cisco entry point: Central discovers every registered
+        domain, and each domain's own UCS Manager supplies the inventory.
+
+        `settings` is passed explicitly rather than left to default,
+        because the collector reads its domain login and name pattern from
+        there — a test that did not pin it would silently exercise whatever
+        the ambient environment happened to configure.
         """
         resolver = FakeCredentialResolver()
         provider = await _build_provider(
-            _manager(type=ManagerType.UCS_CENTRAL),
+            _manager(),
             credential_resolver=resolver,
             timeout_seconds=5.0,
+            settings=_central_settings(),
         )
         assert provider.provider_type == ManagerType.UCS_CENTRAL.value
         assert resolver.resolved == [ManagerType.UCS_CENTRAL]
+
+    async def test_pointing_the_tool_at_ucs_manager_says_use_ucs_central(self) -> None:
+        """`UcsManagerProvider` is not gone — it is the engine the Central
+        collector drives once per domain — so "no collector implemented
+        yet" would send an operator looking for code that is already there.
+        The message has to name the replacement instead.
+        """
+        with pytest.raises(NotImplementedError) as excinfo:
+            await _build_provider(
+                _manager(type=ManagerType.UCS_MANAGER),
+                credential_resolver=FakeCredentialResolver(),
+                timeout_seconds=5.0,
+                settings=_central_settings(),
+            )
+        message = str(excinfo.value)
+        assert "No collector implemented" not in message
+        assert "--manager-type UCS_CENTRAL" in message
+        assert "INVENTORY_UCS_MANAGER_USERNAME" in message
+
+    async def test_without_a_domain_login_the_variables_are_named(self) -> None:
+        """The established failure shape for a half-configured vendor: say
+        exactly which environment variables to set, rather than attempting
+        a login that fails as "bad credentials". Raised before any
+        connection, so it costs no round trip.
+        """
+        with pytest.raises(ManagerNotConfiguredError) as excinfo:
+            await _build_provider(
+                _manager(),
+                credential_resolver=FakeCredentialResolver(),
+                timeout_seconds=5.0,
+                settings=_settings(),
+            )
+        message = str(excinfo.value)
+        assert "INVENTORY_UCS_MANAGER_USERNAME" in message
+        assert "INVENTORY_UCS_MANAGER_PASSWORD" in message
+        # The IP is genuinely not needed, so demanding it would send the
+        # operator to invent a value that is never used.
+        assert "INVENTORY_UCS_MANAGER_IP" not in message
 
     async def test_unconfigured_manager_type_is_rejected_before_connecting(self) -> None:
         resolver = FakeCredentialResolver(error=ManagerNotConfiguredError("not configured"))
@@ -105,6 +165,7 @@ class TestBuildProvider:
                 _manager(endpoint=None),
                 credential_resolver=FakeCredentialResolver(),
                 timeout_seconds=5.0,
+                settings=_central_settings(),
             )
 
 
@@ -128,6 +189,7 @@ class TestRunOneManager:
             ingest_service=ingest,  # type: ignore[arg-type]
             credential_resolver=FakeCredentialResolver(),  # type: ignore[arg-type]
             timeout_seconds=5.0,
+            settings=_central_settings(),
         )
         assert result == "summary"
 
@@ -151,7 +213,12 @@ class TestRunOneManager:
         ingest = RecordingIngest()
         manager = _manager()
         resolver = FakeCredentialResolver()
-        provider = await _build_provider(manager, credential_resolver=resolver, timeout_seconds=5.0)
+        provider = await _build_provider(
+            manager,
+            credential_resolver=resolver,
+            timeout_seconds=5.0,
+            settings=_central_settings(),
+        )
         provider.health_check = _fail_if_called  # type: ignore[method-assign]
 
         await _run_one_manager(
@@ -159,6 +226,7 @@ class TestRunOneManager:
             ingest_service=ingest,  # type: ignore[arg-type]
             credential_resolver=resolver,  # type: ignore[arg-type]
             timeout_seconds=5.0,
+            settings=_central_settings(),
         )
         assert calls == ["ingest"]
         assert provider_health_checks == []

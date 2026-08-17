@@ -63,52 +63,58 @@ collectors:
   # Verify with `--dry-run` before letting a CronJob run with it.
   namePattern: "^ocp"
 
-  # Cisco UCS Manager — the only collector implemented so far (see
-  # tools/run_collector.py's _PROVIDER_FACTORIES).
-  ucsManager:
-    enabled: false # opt-in: needs ip/username/password below to do anything
-    ip: ""
-    username: ""
-    password: ""
-    schedule: "*/30 * * * *"
-    backoffLimit: 1
-    activeDeadlineSeconds: 900
-    resources:
-      requests:
-        cpu: 100m
-        memory: 256Mi
-      limits:
-        memory: 512Mi
-
-  # Cisco UCS Central — one login covering every registered UCS Manager
-  # domain. Enable this instead of ucsManager when the fleet spans more
-  # than one domain, since a ucsManager endpoint reaches exactly one.
+  # Cisco UCS Manager — a login, and deliberately no endpoint.
   #
-  # Central serves a *replica* of each domain's inventory. Watch the
-  # first run's `ucs_central.domain_summary` lines: if a domain reports
-  # servers but `servers_with_profile=0`, Central is not replicating that
-  # domain's local service profiles and those servers arrive unnamed —
-  # collect that domain through its own UCS Manager instead. See
-  # docs/adr/0014.
+  # There is no UCS Manager CronJob. The ucsCentral collector below is
+  # the only Cisco collector, and it logs into every registered domain's
+  # UCS Manager with this one account; the addresses come from Central
+  # (`ComputeSystem.address`), so an `ip` here would be a value nothing
+  # reads. This account must therefore authenticate against every domain.
+  ucsManager:
+    username: ""
+    password: ""
+
+  # Cisco UCS Central — the only Cisco collector.
+  #
+  # It asks Central for the registered domains and their addresses
+  # (`computeSystem`) and for the service-profile names and each one's
+  # domain (`lsServer`) — two queries regardless of fleet size — then
+  # reads each domain's inventory live from that domain's own UCS
+  # Manager, over the data path validated against a live UCS Platform
+  # Emulator in docs/adr/0009. Nothing depends on Central's replica
+  # holding the deep per-server objects, or on how recently it synced.
+  #
+  # Domains whose known profile names contain no `namePattern` match are
+  # skipped; a domain Central lists no profiles for is always collected
+  # rather than skipped, so an incomplete replica cannot silently prune
+  # the fleet. See docs/adr/0014.
   ucsCentral:
-    enabled: false # opt-in: needs ip/username/password below to do anything
+    # opt-in: also needs ucsManager.username/password above, since every
+    # domain is read through a UCS Manager login.
+    enabled: false
     ip: ""
     username: ""
     password: ""
-    # Hourly rather than the ucsManager default of every 30 minutes:
-    # Central's data is already a replica refreshed on its own schedule,
-    # so polling it faster than it syncs only adds load.
+
+    # How many domains to collect concurrently. Each domain costs a login
+    # plus ~9 queries no matter how many servers it holds, and domains
+    # are independent, so this bounds wall-clock time without bounding
+    # what gets collected.
+    domainConcurrency: 4
+    # Hourly. One run covers the whole fleet, opening a session against
+    # every collected domain, so it is the more expensive job on both
+    # sides of the wire.
     schedule: "0 * * * *"
     backoffLimit: 1
-    # Longer than a single domain's 900s — one run covers every domain.
+    # Generous: one run covers every domain, several at a time.
     activeDeadlineSeconds: 1800
     resources:
       requests:
         cpu: 100m
         memory: 256Mi
       limits:
-        # Higher ceiling than ucsManager's 512Mi: one run holds the
-        # inventory of every domain in memory at once, not one domain's.
+        # One run holds several domains' collected servers in memory at
+        # once, not one domain's.
         memory: 1Gi
 
   # HPE OneView. No collector yet.

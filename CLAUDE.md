@@ -125,12 +125,20 @@ each manager *type* gets its own Kubernetes `CronJob` running
 
 1. Resolves that type's endpoint + login from settings via
    `app.infrastructure.credentials.env.EnvConnectionResolver`
-   (`INVENTORY_UCS_MANAGER_IP`/`_USERNAME`/`_PASSWORD`, same shape for
-   `ONEVIEW`, `OME`, `UCS_CENTRAL`, `INTERSIGHT`). **One endpoint and one
-   login per manager type — that is the whole connection config.** There
-   is no `Manager` document to create and no credentials directory to
-   mount; both were removed. A half-configured vendor raises
+   (`INVENTORY_UCS_CENTRAL_IP`/`_USERNAME`/`_PASSWORD`, same shape for
+   `ONEVIEW`, `OME`, `INTERSIGHT`). **One endpoint and one login per
+   manager type — that is the whole connection config.** There is no
+   `Manager` document to create and no credentials directory to mount;
+   both were removed. A half-configured vendor raises
    `ManagerNotConfiguredError` naming the missing variables.
+
+   **`UCS_MANAGER` is the one carve-out: a login with no endpoint.**
+   `INVENTORY_UCS_MANAGER_USERNAME`/`_PASSWORD` exist,
+   `INVENTORY_UCS_MANAGER_IP` does not, and there is no UCS Manager
+   collector to run. The UCS Central collector discovers every domain's
+   address from Central at runtime and logs into each one with that
+   account, so an endpoint here would name a single domain that nothing
+   reads. See the Cisco section below.
 2. Talks to the vendor API, normalizes into `ProviderServer`.
 3. Runs that through `app.application.services.ingest.IngestService` —
    the exact same pipeline the fake-data seeder and every other
@@ -150,34 +158,57 @@ vendor manager. MongoDB is the only thing connecting them. See
 validation sections record what a live UCS Platform Emulator proved,
 disproved and could not settle.
 
-**Two collectors exist, both Cisco: UCS Manager and UCS Central.**
-`OPENMANAGE`, `INTERSIGHT` and `ONEVIEW` have configuration slots but no
-implementation — `tools/run_collector.py`'s `_PROVIDER_FACTORIES` raises
-a clear `NotImplementedError` for them, not a silent no-op. Building the
-next one means: implement `ServerInventoryProvider` for it under
-`app.infrastructure.providers.<vendor>`, add it to
-`_PROVIDER_FACTORIES`, and add a CronJob template mirroring
-`deploy/helm/server-inventory/templates/ucs-manager-collector-cronjob.yaml`.
+**One collector exists: `UCS_CENTRAL`, and it covers the whole Cisco
+fleet.** `OPENMANAGE`, `INTERSIGHT` and `ONEVIEW` have configuration
+slots but no implementation — `tools/run_collector.py`'s
+`_PROVIDER_FACTORIES` raises a clear `NotImplementedError` for them, not
+a silent no-op. Building the next one means: implement
+`ServerInventoryProvider` for it under
+`app.infrastructure.providers.<vendor>`, add it to `_PROVIDER_FACTORIES`,
+and add a CronJob template mirroring
+`deploy/helm/server-inventory/templates/ucs-central-collector-cronjob.yaml`.
 
-**Pick one Cisco collector per fleet — they double-count if both run.**
-UCS Manager reaches exactly one domain (one endpoint per `ManagerType`,
-so a multi-domain fleet is unreachable past the first); UCS Central
-covers every registered domain in one login. The same machine collected
-by both arrives twice, with different `manager_id`s and different
-external ids (`sys/...` vs `compute/sys-<domainId>/...`).
-`docs/adr/0014` has the full evidence trail — and its "What is still
-unproven" section is required reading: it is **not yet validated against
-a live UCS Central**. Whether Central replicates domain-*local* service
-profiles (the source of a server's name, hence of site parsing,
-classification, and the `^ocp` match) is the open question. The SDK
-schema says yes — `LsSPMeta.ownership_state` includes `localized`
-alongside `global-controlled`, on a child of `lsServer` — but that is
-model evidence, not a live run. **Run `uv run python -m
-tools.verify_ucs_central` before trusting it**: read-only, writes
-nothing, and prints a GOOD/PARTIAL/BAD verdict plus the `ownership_state`
-breakdown. Update ADR-0014 with the result. At runtime the provider also
-logs `ucs_central.domain_summary` and warns
-`ucs_central.domain_without_profiles`.
+**How it works: Central discovers, UCS Manager collects.** Two queries go
+to Central regardless of fleet size — `computeSystem` for the registered
+domains and their addresses, `lsServer` for profile names and each one's
+domain. Everything else is read live from each domain's own UCS Manager
+through `..providers.ucs_manager` unchanged, up to
+`INVENTORY_UCS_CENTRAL_DOMAIN_CONCURRENCY` domains at once, using
+`INVENTORY_UCS_MANAGER_USERNAME`/`_PASSWORD` as the login for every
+domain. So `UcsManagerProvider` is not dead code — it is the engine, and
+ADR-0009's UCSPE validation is exactly why it was reused rather than
+reimplemented against Central's replica.
+
+Two behaviours worth knowing before you touch it. A domain is skipped
+**only** when Central lists profiles for it and none match
+`INVENTORY_COLLECTOR_NAME_PATTERN` — a domain with no known profiles is
+always collected, so an incomplete replica can never silently prune the
+fleet. And collected servers get their `external_id` rewritten from the
+domain-local `sys/...` (which repeats in every domain) to
+`compute/sys-<domainId>/...`, so it identifies one machine and names its
+domain.
+
+**The cost, accepted knowingly: a domain not registered with Central is
+uncollectable, and Central is a hard single point of failure for all
+Cisco collection.** There is no standalone UCS Manager entry point any
+more — `--manager-type UCS_MANAGER` was removed along with its CronJob
+and `INVENTORY_UCS_MANAGER_IP`. Don't "restore" it as a fix without
+asking; it was deleted deliberately.
+
+`docs/adr/0014` has the full evidence trail, including its 2026-08-17
+update. It is **still not validated against a live UCS Central**. The
+open question — whether Central replicates domain-*local* service
+profiles, the source of a server's name and hence of site parsing,
+classification and the `^ocp` match — now only affects whether pruning
+can skip anything, not whether the collector works. The SDK schema says
+yes (`LsSPMeta.ownership_state` includes `localized` alongside
+`global-controlled`, on a child of `lsServer`), and the sibling project
+team-redbull/ServerScanner relies on it in production, but neither is a
+live run here. **Run `uv run python -m tools.verify_ucs_central` before
+trusting it**: read-only, writes nothing, and prints a GOOD/PARTIAL/BAD
+verdict plus the `ownership_state` breakdown. Update ADR-0014 with the
+result. At runtime the provider also logs `ucs_central.domain_summary`
+and warns `ucs_central.domain_without_profiles`.
 
 **Shared Cisco logic lives in `app.infrastructure.providers.ucs_common`**
 (`is_equipped`, `group_by_owning_server_dn`, `bmc_interface`,
@@ -298,7 +329,8 @@ cd frontend && npm run lint && npm run typecheck && npm run test -- --run && npm
 npm run test:e2e                                    # needs backend + frontend dev server running
 ```
 
-For a real UCS Manager collector test without production hardware:
+For a real test of the UCS Manager data path (which the Cisco collector
+drives per domain) without production hardware:
 Cisco's UCS Platform Emulator (UCSPE) is a free, downloadable VM (Cisco.com
 login only, no support contract) that runs the actual UCS Manager binary
 against simulated hardware and answers real XML API calls — see

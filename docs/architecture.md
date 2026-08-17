@@ -418,18 +418,21 @@ integration that isn't `FakeProvider`. See
 - A connection-resolution seam, `app.domain.ports.credentials.
   CredentialResolver`, and its one implementation,
   `EnvConnectionResolver` — one endpoint plus login per `ManagerType`,
-  read from settings (`INVENTORY_UCS_MANAGER_IP`/`_USERNAME`/`_PASSWORD`,
-  and the same shape for OneView, OME, UCS Central and Intersight). That
+  read from settings (`INVENTORY_UCS_CENTRAL_IP`/`_USERNAME`/`_PASSWORD`,
+  and the same shape for OneView, OME and Intersight). That
   is the whole of a collector's connection config: no `Manager` document
   to create first, no credentials volume to mount. Resolution is keyed on
   the manager *type*, not a per-manager reference, because this platform
   runs one endpoint per vendor — UCS Manager's multi-domain story is the
-  UCS Central parent enumerating its domains at collection time.
+  UCS Central collector enumerating its domains at collection time, which
+  is also why `UCS_MANAGER` carries a login but no endpoint
+  (`INVENTORY_UCS_MANAGER_USERNAME`/`_PASSWORD` only; see
+  `docs/adr/0014`'s 2026-08-17 update).
   A half-configured vendor raises `ManagerNotConfiguredError` naming the
   missing variables rather than attempting a login that fails as "bad
   credentials", and `ManagerConnection.__repr__` redacts the password so
   it cannot leak through a traceback.
-- `tools/run_collector.py --manager-type UCS_MANAGER` — the CLI a
+- `tools/run_collector.py --manager-type UCS_CENTRAL` — the CLI a
   Kubernetes `CronJob` invokes: resolves that type's connection, runs it
   through the same `IngestService` pipeline the fake-data seed script
   uses (classify, health-evaluate, audit, upsert — one write per server),
