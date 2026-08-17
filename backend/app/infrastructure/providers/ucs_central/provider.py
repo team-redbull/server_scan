@@ -1,72 +1,11 @@
-"""`ServerInventoryProvider` for Cisco UCS Central — every registered UCS
-Manager domain in one collector run.
+"""`ServerInventoryProvider` for Cisco UCS Central — the only Cisco entry
+point.
 
-This is the **only** Cisco entry point. A UCS Manager connection reaches
-exactly one domain, and one endpoint per `ManagerType` is all the
-configuration model expresses, so a fleet spread over several domains was
-unreachable past the first — which is why `UCS_MANAGER` has no configured
-endpoint of its own any more (`app.infrastructure.credentials.env`) and no
-entry in `tools.run_collector._PROVIDER_FACTORIES`. `..ucs_manager` is not
-gone: it is the engine this collector drives once per domain, kept because
-its data path is the one validated against real hardware (ADR-0009), not
-because it is still separately runnable.
+Central is asked which domains are registered and which service-profile
+names live in each; every field of every `ProviderServer` then comes from
+that domain's own UCS Manager via `..ucs_manager.provider.UcsManagerProvider`.
 
-## Central is a directory here, not an inventory source
-
-Central is asked exactly two questions:
-
-  1. `computeSystem` — which domains are registered, at what address, and
-     what Central believes each one holds.
-  2. `lsServer` — which service-profile names live in which domain, used
-     *only* to skip domains that certainly hold nothing of ours.
-
-Everything that ends up in a `ProviderServer` then comes from that
-domain's own UCS Manager, through `..ucs_manager.provider.
-UcsManagerProvider` unchanged.
-
-That split is deliberate. Central serves a *replica* of each domain's
-inventory, and reading servers out of the replica was the obvious design —
-nine domain-wide queries, one login, cheapest possible run. What it cannot
-offer is confidence: ADR-0014 could establish only that `ucscsdk` *models*
-`processorUnit`, `storageLocalDisk`, `adaptorHostEthIf` and the rest, not
-that a given Central deployment populates them, and its central open
-question — whether Central replicates domain-*local* service profiles, the
-source of a UCS server's name — was never settled by a live run. Driving
-each domain's own UCS Manager instead means every field arrives over the
-one Cisco data path validated end to end against a live UCS Platform
-Emulator (ADR-0009), where five real defects surfaced that no amount of
-schema reading had exposed. Live, not replicated, so per-domain
-replication lag stops mattering to the data as well.
-
-## Why one login reaches every domain
-
-Central hands out each registered domain's address (`ComputeSystem.
-address`; Cisco's own `ucscsdk/utils/ucscdomain.py` filters on exactly
-that property in `get_domain()`), and a single UCS Manager service account
-is valid across the domains of one fleet — which is why there is no
-`INVENTORY_UCS_MANAGER_IP` at all and
-`app.infrastructure.credentials.env.resolve_login` exists to ask for a
-login without an endpoint. The Central -> `lsServer`/`ComputeSystem` ->
-per-domain UCS Manager hop is the same shape `app.domain.models.manager`
-already documents as the one real hierarchy Cisco UCS has.
-
-## Cost
-
-Two Central queries, then per collected domain one login plus the ~9
-domain-wide queries `UcsManagerProvider` issues. That per-domain cost is
-flat in server count — a domain holding 500 servers costs the same as one
-holding 10 — so the only levers are *how many domains* get contacted,
-which is what the `lsServer` pruning below is for, and how many at once,
-which is what `concurrency` is for.
-
-Notably this is *not* the shape a naive port of the same idea takes: the
-obvious implementation resolves each matching profile's `pn_dn` with a
-`query_dn` and then walks `query_children` for board, CPUs, controllers
-and disks — five-plus round trips *per server*, on top of the per-domain
-login. The domain-wide-query-plus-client-side-join that
-`UcsManagerProvider` already implements collapses that into a constant
-number of requests per domain, and `..ucs_common.group_by_owning_server_dn`
-is what makes the join exact.
+See docs/cisco-collectors.md, "UCS Central domain discovery and pruning".
 """
 
 from __future__ import annotations
@@ -92,24 +31,24 @@ logger = structlog.get_logger(__name__)
 
 _PROVIDER_TYPE = ManagerType.UCS_CENTRAL.value
 
-# UCS Manager roots its whole managed-object tree at `sys`; UCS Central
-# roots each registered domain's copy at `compute/sys-<domainId>`. See
-# `ucscsdk`'s own `docs/ucscsdk_ug.rst`, which spells out
-# `compute/sys-1009/chassis-1`.
 _UCSM_ROOT = "sys/"
 _CENTRAL_ROOT = "compute/sys-{domain_id}/"
 
 
 def domain_id_from_dn(dn: str) -> str | None:
-    """The registered domain a `compute/sys-<domainId>/...` DN belongs to.
+    """
+    Extract the registered domain from a UCS Central distinguished name.
 
-    Returns `None` for anything not under a `computeSystem`, which is how
-    global objects (an org's service profiles, for one) are told apart
-    from per-domain inventory.
+    See docs/cisco-collectors.md, "UCS Central domain discovery and pruning".
 
-    Used by `tools.verify_ucs_central`, which queries Central's replica
-    directly to answer whether it holds domain-local service profiles —
-    the question this collector routes around rather than settles.
+    Args:
+        dn (str): A UCS Central DN, e.g.
+            `"compute/sys-1009/chassis-1/blade-1"`.
+
+    Returns:
+        str | None: The domain id, or None for anything not under a
+            `computeSystem` — which is how global objects such as an org's
+            service profiles are told apart from per-domain inventory.
     """
     parts = str(dn).split("/")
     if len(parts) < 2 or not parts[1].startswith("sys-"):
@@ -119,7 +58,14 @@ def domain_id_from_dn(dn: str) -> str | None:
 
 @dataclass(frozen=True, slots=True)
 class DomainTarget:
-    """One registered UCS Manager domain, as Central describes it."""
+    """
+    One registered UCS Manager domain, as UCS Central describes it.
+
+    Attributes:
+        domain_id (str): Central's `ComputeSystem.id` for the domain.
+        name (str): The domain's registered name.
+        endpoint (str): Address to open a UCS Manager session against.
+    """
 
     domain_id: str
     name: str
@@ -127,22 +73,18 @@ class DomainTarget:
 
 
 def central_external_id(external_id: str, *, domain_id: str) -> str:
-    """Re-root a UCS Manager DN into the UCS Central DN for the same object.
+    """
+    Re-root a UCS Manager DN into the UCS Central DN for the same object.
 
-    **UCS Manager DNs are domain-local and therefore collide.** Every
-    domain in the fleet has a `sys/chassis-1/blade-1`. Servers collected
-    here all carry `manager_id = mgr_ucs_central` (one `Manager` document
-    per type — `tools.run_collector.manager_for`), so their external ids
-    land in one `Server.external_ids[mgr_ucs_central]` namespace where an
-    un-rooted DN identifies several machines at once. Identity resolution
-    happens on vendor+serial (`app.application.services.ingest`), so this
-    would not merge two servers — it would just make the recorded external
-    id useless for saying which one, and `domain_id_from_dn` above could
-    no longer recover the owning domain.
+    See docs/cisco-collectors.md, "UCS Central domain discovery and pruning".
 
-    Anything not under `sys/` is returned unchanged: org-rooted DNs
-    (`org-root/ls-...`, which is what `profile_template_external_id`
-    carries) are global in Central and already correct.
+    Args:
+        external_id (str): The DN as UCS Manager reported it.
+        domain_id (str): The owning domain's Central id.
+
+    Returns:
+        str: The domain-qualified DN, or `external_id` unchanged if it is
+            not rooted at `sys/`.
     """
     if not external_id.startswith(_UCSM_ROOT):
         return external_id
@@ -150,19 +92,18 @@ def central_external_id(external_id: str, *, domain_id: str) -> str:
 
 
 def _profiles_by_key(ls_servers: Iterable[Any]) -> dict[str, list[str]]:
-    """Service-profile names grouped by the domain Central says they are in.
+    """
+    Group service-profile names by the domain UCS Central says they are in.
 
-    `LsServer.domain` is the link: the installed `ucscsdk` carries
-    `domain`, `domain_dn`, `domain_group` and `domain_group_dn` on
-    `LsServer`, and `domain` is the one that names the UCS Manager a
-    profile lives on — which is also the value the user's existing UCS
-    operator opens its second session against, as
-    `app.domain.models.manager`'s docstring records.
+    See docs/cisco-collectors.md, "Service profiles and server names".
 
-    Templates are dropped: `lsServer` carries both real profiles and the
-    templates they derive from, told apart only by `type` (there is no
-    separate template class in either SDK — see `..ucs_common`), and a
-    template's name is not a server's name.
+    Args:
+        ls_servers (Iterable[Any]): The full result of one `lsServer` query
+            against Central, carrying both profiles and templates.
+
+    Returns:
+        dict[str, list[str]]: Profile names keyed by `LsServer.domain`.
+            Templates and profiles with no domain are excluded.
     """
     grouped: dict[str, list[str]] = {}
     for mo in ls_servers:
@@ -170,8 +111,6 @@ def _profiles_by_key(ls_servers: Iterable[Any]) -> dict[str, list[str]]:
             continue
         key = str(getattr(mo, "domain", "") or "").strip()
         if not key:
-            # An unassociated or domain-less profile says nothing about
-            # which domains are worth contacting.
             continue
         name = str(getattr(mo, "name", "") or "")
         if name:
@@ -185,23 +124,26 @@ def domains_to_collect(
     *,
     name_pattern: str,
 ) -> tuple[list[DomainTarget], list[DomainTarget]]:
-    """Split Central's registered domains into `(to_collect, skipped)`.
+    """
+    Split UCS Central's registered domains into those worth contacting and
+    those that can be skipped.
 
-    Skipping is a **pure optimisation and nothing else**. Which servers
-    actually get ingested is decided in exactly one place —
-    `tools.run_collector._NameFilteredProvider`, which every vendor's
-    collector goes through — and this function must never be stricter than
-    it is, which is why both use `re.search` (so `^ocp` means "starts
-    with" because the operator wrote the anchor, not because the code
-    added one).
+    Skipping means "do not open a session", never a deletion, and is a pure
+    optimisation: `tools.run_collector._NameFilteredProvider` remains the
+    only thing that decides which servers are ingested.
 
-    The rule that matters: **a domain whose profiles Central does not
-    report is collected, never skipped.** ADR-0014's open question is
-    precisely whether Central replicates domain-local service profiles;
-    pruning on missing evidence would silently drop exactly the domains
-    that question is about, and the symptom would be a mysteriously small
-    inventory rather than an error. Absence of evidence gets a round trip,
-    not a guess.
+    See docs/cisco-collectors.md, "UCS Central domain discovery and pruning".
+
+    Args:
+        domains (Iterable[Any]): `computeSystem` managed objects from
+            Central.
+        ls_servers (Iterable[Any]): `lsServer` managed objects from Central.
+        name_pattern (str): Regex applied with `re.search`; empty collects
+            every domain.
+
+    Returns:
+        tuple[list[DomainTarget], list[DomainTarget]]: The domains to
+            collect, and the domains skipped.
     """
     profiles = _profiles_by_key(ls_servers)
     pattern = re.compile(name_pattern) if name_pattern else None
@@ -217,8 +159,6 @@ def domains_to_collect(
             endpoint=endpoint,
         )
         if not endpoint:
-            # Nothing to connect to. Skipped rather than attempted, so the
-            # log says "no address" instead of an opaque DNS failure.
             logger.warning(
                 "ucs_central.domain_without_address",
                 domain_id=target.domain_id,
@@ -227,9 +167,6 @@ def domains_to_collect(
             skipped.append(target)
             continue
 
-        # Central may key a profile's `domain` by the domain's name or its
-        # address depending on how it was registered, and `id` is the last
-        # resort; try all three rather than assume one.
         known = profiles.get(name) or profiles.get(endpoint) or profiles.get(target.domain_id) or []
         if pattern is not None and known and not any(pattern.search(n) for n in known):
             skipped.append(target)
@@ -240,6 +177,14 @@ def domains_to_collect(
 
 
 class UcsCentralProvider:
+    """
+    Collect every registered UCS Manager domain in one run, using UCS
+    Central as a directory and each domain's own UCS Manager as the source
+    of inventory.
+
+    See docs/cisco-collectors.md, "UCS Central domain discovery and pruning".
+    """
+
     provider_type = _PROVIDER_TYPE
 
     def __init__(
@@ -254,6 +199,29 @@ class UcsCentralProvider:
         client_factory: Callable[[], Any] | None = None,
         domain_provider_factory: Callable[[DomainTarget], Any] | None = None,
     ) -> None:
+        """
+        Build a collector for one UCS Central instance.
+
+        Args:
+            manager (Manager): The `Manager` document this run collects for;
+                its endpoint addresses UCS Central.
+            credentials (ManagerConnection): UCS Central endpoint and login.
+            timeout_seconds (float): Deadline applied to each SDK call.
+            domain_login (tuple[str, str]): UCS Manager username and
+                password, valid on every registered domain.
+            name_pattern (str): Regex used to skip domains holding no
+                matching service profile. Empty collects every domain.
+            concurrency (int): Maximum domains contacted at once; values
+                below 1 are raised to 1.
+            client_factory (Callable[[], Any] | None): Test seam returning a
+                UCS Central client. Defaults to a real one.
+            domain_provider_factory (Callable[[DomainTarget], Any] | None):
+                Test seam returning a per-domain provider. Defaults to a
+                real `UcsManagerProvider`.
+
+        Raises:
+            ValueError: If `manager` has no endpoint configured.
+        """
         if not manager.endpoint:
             raise ValueError(f"Manager {manager.id!r} has no endpoint configured.")
         self._endpoint: str = manager.endpoint
@@ -262,18 +230,20 @@ class UcsCentralProvider:
         self._timeout_seconds = timeout_seconds
         self._domain_login = domain_login
         self._name_pattern = name_pattern
-        # A domain is one blocking SDK call parked in a worker thread, so
-        # this bounds threads as much as it bounds sockets.
         self._concurrency = max(1, concurrency)
-        # Both widened to the injection point's own type: the defaults are
-        # concrete, but a test substitutes a stand-in and the attribute has
-        # to accept either.
         self._client_factory: Callable[[], Any] = client_factory or self._new_client
         self._domain_provider_factory: Callable[[DomainTarget], Any] = (
             domain_provider_factory or self._new_domain_provider
         )
 
     def _new_client(self) -> UcsCentralClient:
+        """
+        Build a UCS Central client from this collector's configuration.
+
+        Returns:
+            UcsCentralClient: An unauthenticated client for the configured
+                endpoint.
+        """
         return UcsCentralClient(
             endpoint=self._endpoint,
             username=self._credentials.username,
@@ -282,14 +252,23 @@ class UcsCentralProvider:
         )
 
     def _new_domain_provider(self, target: DomainTarget) -> UcsManagerProvider:
+        """
+        Build a UCS Manager collector for one registered domain.
+
+        Reuses this collector's `Manager` with only the endpoint swapped, so
+        every server keeps the single `mgr_ucs_central` manager id.
+
+        See docs/cisco-collectors.md, "UCS Central domain discovery and
+        pruning".
+
+        Args:
+            target (DomainTarget): The domain to collect from.
+
+        Returns:
+            UcsManagerProvider: A collector bound to that domain's address.
+        """
         username, password = self._domain_login
         return UcsManagerProvider(
-            # The *same* manager id, with only the endpoint swapped: every
-            # server collected this way belongs to the one `mgr_ucs_central`
-            # document `tools.run_collector.manager_for` writes, and the
-            # owning domain stays recoverable from `external_id`. Building a
-            # `Manager` per domain instead would break that tool's
-            # one-document-per-type contract for no gain.
             manager=self._manager.model_copy(update={"endpoint": target.endpoint}),
             credentials=ManagerConnection(
                 endpoint=target.endpoint, username=username, password=password
@@ -298,8 +277,14 @@ class UcsCentralProvider:
         )
 
     async def health_check(self) -> None:
-        # Central only. A per-domain login here would multiply the fleet's
-        # session count for information the run itself is about to get.
+        """
+        Verify UCS Central accepts this collector's login.
+
+        Touches Central only; per-domain logins happen during collection.
+
+        Raises:
+            UcsCentralConnectionError: If the login fails.
+        """
         client = self._client_factory()
         try:
             await client.login()
@@ -307,10 +292,19 @@ class UcsCentralProvider:
             await client.logout()
 
     async def _plan(self) -> tuple[list[DomainTarget], dict[str, Any]]:
-        """The two Central queries, the domain list they produce, and the
-        `computeSystem` MOs themselves — `_log_domains` reports what
-        Central *believes* each domain holds against what that domain's
-        own UCS Manager actually returned.
+        """
+        Run the two UCS Central queries and decide which domains to contact.
+
+        See docs/cisco-collectors.md, "UCS Central domain discovery and
+        pruning".
+
+        Returns:
+            tuple[list[DomainTarget], dict[str, Any]]: The domains to
+                collect, and every registered `computeSystem` MO keyed by
+                domain id for later reporting.
+
+        Raises:
+            UcsCentralConnectionError: If either Central query fails.
         """
         client = self._client_factory()
         try:
@@ -355,9 +349,6 @@ class UcsCentralProvider:
                 ),
             )
 
-        # A `domain` key on some profile that names no registered domain is
-        # inventory we were told about but cannot reach — the one case the
-        # loop above cannot surface, since it iterates registered domains.
         known_keys = {t.name for t in (*to_collect, *skipped)}
         known_keys |= {t.endpoint for t in (*to_collect, *skipped)}
         known_keys |= {t.domain_id for t in (*to_collect, *skipped)}
@@ -378,21 +369,25 @@ class UcsCentralProvider:
     async def _collect_domain(
         self, target: DomainTarget, sem: asyncio.Semaphore
     ) -> list[ProviderServer]:
-        """One domain's whole inventory, or `[]` if that domain failed.
+        """
+        Collect one domain's whole inventory from its own UCS Manager.
 
-        Failure is contained here on purpose, mirroring
-        `tools.run_collector._run_one_manager`: an unreachable or slow
-        domain must not cost the fleet its entire run.
+        Failure is contained here so an unreachable or slow domain never
+        costs the fleet its run.
+
+        Args:
+            target (DomainTarget): The domain to collect from.
+            sem (asyncio.Semaphore): Limits how many domains run at once.
+
+        Returns:
+            list[ProviderServer]: Every server in the domain, with
+                domain-qualified external ids, or an empty list if the
+                domain failed.
         """
         async with sem:
             provider = self._domain_provider_factory(target)
             collected: list[ProviderServer] = []
             try:
-                # Buffered rather than streamed through a queue. One
-                # domain's servers is a small object list next to the
-                # managed objects `UcsManagerProvider` already holds for
-                # that same domain while it joins them, so a fan-in queue
-                # would add machinery to save nothing.
                 async with contextlib.aclosing(provider.list_servers()) as servers:
                     async for provider_server in servers:
                         collected.append(
@@ -422,11 +417,19 @@ class UcsCentralProvider:
             return collected
 
     async def list_servers(self) -> AsyncIterator[ProviderServer]:
-        """Must be iterated to exhaustion (or closed via
-        `contextlib.aclosing`) — abandoning this generator part-way leaves
-        the per-domain sessions to be cleaned up at GC time, and both
-        Central and UCS Manager enforce a per-user session cap.
-        `IngestService.ingest` drains it fully.
+        """
+        Collect every domain worth contacting and yield their servers.
+
+        Must be iterated to exhaustion, or closed via `contextlib.aclosing`.
+
+        See docs/cisco-collectors.md, "SDK behaviour, sessions and timeouts".
+
+        Yields:
+            ProviderServer: One server, with a domain-qualified external id.
+
+        Raises:
+            UcsCentralConnectionError: If UCS Central itself is unreachable.
+                A single failing domain is logged and skipped instead.
         """
         targets, domain_mo_by_id = await self._plan()
         sem = asyncio.Semaphore(self._concurrency)
@@ -447,26 +450,19 @@ class UcsCentralProvider:
     def _log_domains(
         self, domain_mo_by_id: dict[str, Any], *, collected_by_id: dict[str, int]
     ) -> None:
-        """Per-domain coverage, emitted every run.
+        """
+        Emit per-domain coverage, comparing what UCS Central believes each
+        domain holds against what that domain's UCS Manager returned.
 
-        This is the check on Central's *domain list* — the one thing this
-        collector still takes from the replica and cannot verify any other
-        way. `total_physical_cnt` is what Central believes a domain holds;
-        `collected_servers` is what that domain's own UCS Manager actually
-        returned. Three failures show up in the gap between them, none of
-        which is visible from the total ingested count:
+        See docs/cisco-collectors.md, "UCS Central domain discovery and
+        pruning".
 
-        1. A domain Central lists but whose UCS Manager we could not
-           collect from at all (`collected_servers=0` against a non-zero
-           reported count) — an unreachable address, a login that is not
-           valid on that domain, or a `domain_skipped` decision that
-           pruned too hard.
-        2. A domain whose registration Central has but whose inventory it
-           never synced — `inventory_status` says so directly.
-        3. Central's own view going stale: `last_refreshed_ts` is when
-           Central last pulled from that domain, which is only ever a
-           statement about the domain *list* here, never about the server
-           data itself, since that comes straight from the domain.
+        Args:
+            domain_mo_by_id (dict[str, Any]): Registered `computeSystem` MOs
+                keyed by domain id.
+            collected_by_id (dict[str, int]): Servers collected per domain.
+                A domain absent from this mapping was never contacted, and
+                is reported as None rather than 0.
         """
         for domain_id, mo in domain_mo_by_id.items():
             reported = getattr(mo, "total_physical_cnt", None)
@@ -479,9 +475,6 @@ class UcsCentralProvider:
                 inventory_status=getattr(mo, "inventory_status", None),
                 last_refreshed=getattr(mo, "last_refreshed_ts", None),
                 reported_servers=reported,
-                # `None` rather than 0 for a domain that was never
-                # contacted, so "we asked and got nothing" and "we did not
-                # ask" cannot be confused.
                 collected_servers=collected,
             )
             if collected == 0 and str(reported or "0") not in ("0", ""):

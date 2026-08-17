@@ -1,43 +1,6 @@
 """Async wrapper over `ucsmsdk`'s synchronous `UcsHandle`.
 
-`ucsmsdk` (Cisco's official UCS Manager Python SDK, github.com/CiscoUcs/
-ucsmsdk, `pip install ucsmsdk`) has no async support at all — `login`/
-`logout`/`query_classid` are blocking HTTP calls over the UCS Manager XML
-API. Every one of them is dispatched through `asyncio.to_thread` here so a
-collector run never blocks the event loop the rest of this backend depends
-on — the same "never block the loop" discipline
-`app.infrastructure.mongodb`/`app.infrastructure.redis` already follow via
-their own native async drivers, just substituted with a thread offload
-since no async UCS SDK exists to reach for instead.
-
-Confirmed directly against the installed `ucsmsdk==0.9.27` package source
-(not just documentation):
-
-  - `UcsHandle(ip, username, password, port=None, secure=None, proxy=None,
-    timeout=None)`. `timeout` is urllib's, so it bounds each individual
-    socket operation (connect, and each blocking read) — it is *not* a
-    total-request or total-run deadline.
-  - `endpoint` must be a bare hostname or IP. `UcsSession.__create_uri`
-    builds `"%s://%s:%s" % (protocol, ip, port)` with `ip` interpolated
-    raw, so a scheme or an embedded port produces a mangled URL
-    ("https://https://host:443"). `_validate_endpoint` below rejects both
-    up front rather than letting it fail as an opaque connection error.
-  - `query_classid` returns a plain list (never `None`), `[]` when empty.
-  - Exceptions come from two disjoint trees, both rooted at `Exception`:
-    `UcsError` (with `UcsException`, `UcsValidationException`) and
-    `UcsWrapperException` (with `UcsLoginError`, `UcsConnectionError`,
-    `UcsOperationError`). Catching the two roots covers all six.
-  - `login()` raises on bad credentials — it never returns a falsy value —
-    so an authentication failure can't silently proceed as if connected.
-  - `logout()` before a successful login is a no-op (`_logout` returns
-    early when the session cookie is `None`), so calling it from a
-    `finally` after a failed login costs nothing and sends no request.
-
-Network-level failures are *not* part of either SDK exception tree:
-`ucsdriver.post` re-raises urllib's errors untouched, and `URLError`/
-`socket.timeout` are `OSError` subclasses. Every call below therefore
-catches `OSError` alongside the SDK trees, so callers only ever see one
-`UcsManagerConnectionError` regardless of which layer failed.
+See docs/cisco-collectors.md, "SDK behaviour, sessions and timeouts".
 """
 
 from __future__ import annotations
@@ -55,20 +18,31 @@ logger = structlog.get_logger(__name__)
 
 
 class UcsManagerConnectionError(Exception):
-    """Any failure talking to a UCS Manager domain: auth rejected, XML
-    API error response, or a network-level failure reaching `endpoint`
-    at all. Deliberately not an `app.errors.AppError` — see
-    `app.domain.ports.credentials.CredentialNotFoundError`'s docstring
-    for why collector-side errors don't go through the API's RFC 9457
-    error model.
+    """
+    Any failure talking to a UCS Manager domain.
+
+    Covers rejected credentials, an XML API error response, and a
+    network-level failure reaching the endpoint at all.
+
+    See docs/cisco-collectors.md, "SDK behaviour, sessions and timeouts".
     """
 
 
 def _validate_endpoint(endpoint: str) -> str:
-    """`UcsHandle` wants a bare host or IP — see the module docstring on
-    `__create_uri`. `Manager.endpoint` is a free-form `str`, so catch a
-    scheme or an embedded port here with an actionable message instead of
-    letting it surface as an unexplained connection failure.
+    """
+    Check that an endpoint is the bare host or IP `UcsHandle` expects.
+
+    Args:
+        endpoint (str): Hostname or IP address, without scheme or port.
+
+    Returns:
+        str: The endpoint, stripped of surrounding whitespace.
+
+    Raises:
+        ValueError: If the endpoint is empty, carries a URL scheme, or
+            includes a port.
+
+    See docs/cisco-collectors.md, "SDK behaviour, sessions and timeouts".
     """
     candidate = endpoint.strip()
     if not candidate:
@@ -88,29 +62,44 @@ def _validate_endpoint(endpoint: str) -> str:
 
 
 class UcsManagerClient:
-    """One instance per manager domain per collector run. Not pooled or
-    reused across managers: `UcsHandle` isn't documented as safe for
-    concurrent use from multiple tasks, and `asyncio.to_thread`'s
-    one-call-at-a-time dispatch from a single client instance keeps every
-    call to this handle sequential, matching that assumption.
+    """
+    One UCS Manager session, for one domain, for one collector run.
+
+    Not pooled or reused across domains.
+
+    See docs/cisco-collectors.md, "SDK behaviour, sessions and timeouts".
     """
 
     def __init__(
         self, *, endpoint: str, username: str, password: str, timeout_seconds: float
     ) -> None:
+        """
+        Build a client bound to one UCS Manager domain.
+
+        Args:
+            endpoint (str): Bare hostname or IP of the domain.
+            username (str): Login user.
+            password (str): Login password.
+            timeout_seconds (float): Per-socket-operation timeout, not a
+                total-request or total-run deadline.
+
+        Raises:
+            ValueError: If `endpoint` is not a bare hostname or IP.
+        """
         self._handle = UcsHandle(
             _validate_endpoint(endpoint), username, password, timeout=timeout_seconds
         )
-        # `ucsmsdk`'s own request/response XML dump, for seeing exactly
-        # what came off the wire. Read from the environment rather than
-        # threaded through every constructor, because it is a debugging
-        # switch, not a property of a manager — `tools/run_collector.py
-        # --debug-xml` sets it. Never on by default: the dump includes
-        # full inventory payloads and would bury a real collector run.
         if os.environ.get("INVENTORY_UCS_DUMP_XML") == "1":
             self._handle.set_dump_xml()
 
     async def login(self) -> None:
+        """
+        Open a session against the domain.
+
+        Raises:
+            UcsManagerConnectionError: If the credentials are rejected, the
+                XML API returns an error, or the host is unreachable.
+        """
         try:
             await asyncio.to_thread(self._handle.login)
         except (UcsError, UcsWrapperException) as exc:
@@ -121,24 +110,34 @@ class UcsManagerClient:
             ) from exc
 
     async def logout(self) -> None:
-        # Best-effort: a failed logout (e.g. the connection already
-        # dropped) must never mask whatever error the caller is already
-        # handling — this is always called from a `finally` block.
+        """
+        Close the session, best-effort.
+
+        Never raises. Calling it before a successful login is a no-op that
+        sends no request.
+
+        See docs/cisco-collectors.md, "SDK behaviour, sessions and timeouts".
+        """
         try:
             await asyncio.to_thread(self._handle.logout)
         except Exception as exc:
             logger.warning("ucs_manager.logout_failed", endpoint=self._handle.ip, error=str(exc))
 
     async def query_classid(self, class_id: str) -> list[Any]:
-        """`configResolveClass` for every instance of `class_id` in the
-        whole UCS domain.
+        """
+        Resolve every instance of one MO class in the whole domain.
 
-        This is the only query shape the collector uses. Descendant
-        objects (a server's management interface, its adapter host
-        Ethernet interfaces) are fetched domain-wide too and joined
-        client-side by DN prefix — see `provider.py`'s module docstring
-        for why a per-server `configResolveChildren` is not merely slower
-        but wrong for those classes.
+        Args:
+            class_id (str): MO class name, e.g. "computeBlade".
+
+        Returns:
+            list[Any]: The matching `ucsmsdk` MOs, empty when none match.
+
+        Raises:
+            UcsManagerConnectionError: On an XML API error or a network
+                failure.
+
+        See docs/cisco-collectors.md, "Shared object model and DN joins".
         """
         try:
             result = await asyncio.to_thread(self._handle.query_classid, class_id)

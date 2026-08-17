@@ -1,42 +1,6 @@
-"""`ServerInventoryProvider` implementation for a single Cisco UCS Manager
-domain — the real-collector counterpart to
-`app.infrastructure.providers.fake.provider.FakeProvider`, satisfying the
-exact same `app.domain.ports.provider.ServerInventoryProvider` Protocol so
-`app.application.services.ingest.IngestService` doesn't need to know or
-care whether it's ingesting fake or real data.
+"""`ServerInventoryProvider` for a single Cisco UCS Manager domain.
 
-One instance is scoped to one UCS Manager domain (one `Manager` document,
-`type=UCS_MANAGER`) — `tools.run_collector` constructs one provider per
-manager and runs each through its own `IngestService.ingest()` call, so a
-failure or slow domain never blocks the others.
-
-Every lookup here is a *domain-wide* `query_classid` joined client-side by
-distinguished name, never a per-server `query_children`. That's a
-correctness requirement before it's a performance one: `mgmtIf` and
-`adaptorHostEthIf` are both **grandchildren** of a compute unit, not
-children of one, so a `configResolveChildren` scoped to a blade's DN and
-filtered to either class matches nothing at all. Confirmed against the
-installed `ucsmsdk==0.9.27` MO metadata:
-
-    adaptorHostEthIf  parents=['adaptorUnit']                       rn=host-eth-[id]
-    adaptorUnit       parents=['computeBlade','computeRackUnit',...] rn=adaptor-[id]
-    mgmtIf            parents=['adaptorHostEthIf','mgmtController']  rn=if-[id]
-    mgmtController    parents=[...,'computeBlade','computeRackUnit'] rn=mgmt
-
-so the real DNs are `sys/chassis-1/blade-1/adaptor-1/host-eth-1` and
-`sys/chassis-1/blade-1/mgmt/if-1` — two levels down. `hierarchy=True` does
-not widen the class filter's depth; it only asks the server to attach each
-*matched* object's subtree, which `ucsmsdk.ucscoreutils.
-extract_molist_from_method_response` then flattens with no class filter at
-all (so a match would return foreign MO classes mixed into the list).
-Cisco's own SDK agrees: its blade -> mgmtIf lookup in `ucsmsdk/utils/
-ucskvmlaunch.py` uses `configScope`, not `configResolveChildren`, and
-`ucsmsdk/utils/inventory.py` collects adapters with a domain-wide
-`query_classid`.
-
-Joining on a DN prefix is exact rather than heuristic: `ucsmo.py` builds
-every MO's `dn` as `parent_dn + "/" + rn`, so a descendant's DN always
-starts with its owning server's DN followed by a separator.
+See docs/cisco-collectors.md, "Shared object model and DN joins".
 """
 
 from __future__ import annotations
@@ -64,25 +28,49 @@ from app.infrastructure.providers.ucs_manager.mapping import compute_unit_to_pro
 
 
 class UcsManagerProvider:
+    """
+    Collects one UCS Manager domain's inventory.
+
+    One instance is scoped to one domain. The UCS Central collector builds
+    one per registered domain and runs each independently, so a slow or
+    unreachable domain never blocks the others.
+
+    See docs/cisco-collectors.md, "Shared object model and DN joins".
+    """
+
     provider_type = ManagerType.UCS_MANAGER.value
 
     def __init__(
         self, *, manager: Manager, credentials: ManagerConnection, timeout_seconds: float
     ) -> None:
+        """
+        Bind a provider to one UCS Manager domain.
+
+        Args:
+            manager (Manager): The manager this run reports under. Its `id`
+                becomes each server's `manager_id`, its `endpoint` is the
+                domain to connect to.
+            credentials (ManagerConnection): Login for the domain.
+            timeout_seconds (float): Per-socket-operation timeout.
+
+        Raises:
+            ValueError: If `manager` has no endpoint configured.
+        """
         if not manager.endpoint:
             raise ValueError(f"Manager {manager.id!r} has no endpoint configured.")
-        # Narrowed to `str` here (once, where the check actually lives) so
-        # `_new_client` doesn't need to re-prove `endpoint` is non-`None`
-        # to the type checker on every call.
         self._endpoint: str = manager.endpoint
         self._manager = manager
         self._timeout_seconds = timeout_seconds
         self._credentials = credentials
 
     def _new_client(self) -> UcsManagerClient:
-        # A fresh `UcsManagerClient` (and so a fresh login session) per
-        # call — see `UcsManagerClient`'s docstring on why sessions aren't
-        # shared/reused across calls.
+        """
+        Build a client, and so a login session, for this domain.
+
+        Returns:
+            UcsManagerClient: A fresh client. Sessions are never shared or
+                reused across calls.
+        """
         return UcsManagerClient(
             endpoint=self._endpoint,
             username=self._credentials.username,
@@ -91,6 +79,12 @@ class UcsManagerProvider:
         )
 
     async def health_check(self) -> None:
+        """
+        Verify the domain is reachable and the credentials are accepted.
+
+        Raises:
+            UcsManagerConnectionError: If login fails for any reason.
+        """
         client = self._new_client()
         try:
             await client.login()
@@ -98,17 +92,25 @@ class UcsManagerProvider:
             await client.logout()
 
     async def list_servers(self) -> AsyncIterator[ProviderServer]:
-        """Must be iterated to exhaustion (or explicitly closed via
-        `contextlib.aclosing`) — abandoning this generator part-way leaves
-        the `finally` below to run at GC time, and UCS Manager enforces a
-        per-user session cap. `IngestService.ingest` drains it fully.
+        """
+        Yield every physically-present server in the domain.
+
+        Must be iterated to exhaustion, or closed via
+        `contextlib.aclosing`: abandoning it part-way defers the session
+        teardown to GC time, and UCS Manager enforces a per-user session
+        cap. `IngestService.ingest` drains it fully.
+
+        Yields:
+            ProviderServer: One equipped compute unit, already normalized.
+
+        Raises:
+            UcsManagerConnectionError: On login failure or any query
+                failure.
+
+        See docs/cisco-collectors.md, "Shared object model and DN joins"
+        and "Adapter interfaces, MACs and fabric attachments".
         """
         client = self._new_client()
-        # `login()` belongs *inside* the try: `ucssession._login` sets the
-        # session cookie and only then calls `_update_version()` /
-        # `_update_domain_name_and_ip()`, either of which can raise with
-        # the session already established server-side. Logging in outside
-        # the try would leak that session until UCS Manager times it out.
         try:
             await client.login()
 
@@ -116,34 +118,8 @@ class UcsManagerProvider:
             rack_units = await client.query_classid("computeRackUnit")
             ls_servers = await client.query_classid("lsServer")
             mgmt_ifs = await client.query_classid("mgmtIf")
-            # Both adapter interface classes, grouped separately per
-            # server (not unioned) — `mapping.compute_unit_to_provider_
-            # server` treats them as different things, not duplicates.
-            # `adaptorExtEthIf` is the physical adapter port (present on
-            # every discovered server, burned-in MAC, cabled to a fabric
-            # interconnect) and `adaptorHostEthIf` is the logical vNIC
-            # that only exists once a service profile is associated — the
-            # OS's own NICs (`eno1`/`eno2`) bind to the vNIC's MAC, not
-            # the physical port's, since a Cisco VIC presents virtual
-            # interfaces to the OS rather than exposing the uplink port
-            # directly. `nic_macs` prefers host-eth for that reason,
-            # falling back to ext-eth only when no vNIC exists yet.
-            # Fabric attachments still use both together: verified
-            # against UCSPE 4.2, of 14 servers 12 had only ext-eth ports
-            # and 2 had only host-eth, so querying either class alone left
-            # most of the fleet with no fabric attachments at all.
             ext_eth_ifs_all = await client.query_classid("adaptorExtEthIf")
             host_eth_ifs_all = await client.query_classid("adaptorHostEthIf")
-            # `processorUnit` (child of `computeBoard`) and
-            # `storageLocalDisk` (child of `storageController`, itself a
-            # child of `computeBoard` *or* `equipmentChassis`) are both
-            # grandchildren-or-deeper of a compute unit, exactly like
-            # `mgmtIf`/`adaptorHostEthIf` above — so they get the same
-            # domain-wide query + DN-prefix join rather than a per-server
-            # lookup. A disk parented under `equipmentChassis` (shared
-            # chassis storage, not owned by one server) never matches any
-            # server DN and is dropped by the join for free, the same way
-            # a chassis-owned `mgmtIf` already is.
             cpu_units_all = await client.query_classid("processorUnit")
             disk_units_all = await client.query_classid("storageLocalDisk")
 

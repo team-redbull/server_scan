@@ -79,6 +79,52 @@ is a real mistake, not a style preference.
    (add `cd frontend && npm run lint && npm run typecheck && npm run build`
    for any frontend change). If `ruff format --check` fails, run
    `uv run ruff format .` and re-verify — don't hand-fix formatting.
+8. **Explanation lives in docs, not in the code. Every function gets a
+   Google-style docstring.** Added 2026-08-18, and it *reverses* how this
+   repo was written up to that date: earlier sessions justified every
+   non-obvious choice in inline `#` comments, which grew into walls of
+   prose between statements that the user reported as actively hard to
+   read. Convention 1 is unchanged — decisions still have to be
+   researched and justified — but the justification belongs in
+   `docs/` (an ADR for a decision, `docs/cisco-collectors.md` for
+   verified implementation facts), with the code carrying at most a
+   one-line pointer to it.
+
+   The required docstring shape, on every function, method and class:
+
+   ```python
+   def get_user(user_id):
+       """
+       Get a user by ID.
+
+       Args:
+           user_id (str): The ID of the user.
+
+       Returns:
+           User: The matching user object.
+       """
+   ```
+
+   Use `Args:` / `Returns:` / `Raises:` / `Yields:` as they apply
+   (an async generator documents `Yields:`, not `Returns:`), give each
+   argument its type in parentheses, and skip `self`. A function with no
+   arguments and no return value still gets the summary line.
+
+   Inline `#` comments survive only to pin one line's non-obvious
+   behaviour where a docstring would be the wrong place — a couple per
+   file, not a running commentary. A `# ponytail:` marker is exempt: it
+   is tracked debt, not explanation, and `/ponytail-debt` harvests it.
+
+   **Never delete a hard-won fact to satisfy this rule.** Facts like
+   "UCSPE 4.2 reports `access='unspecified'` on a blade's own `mgmtIf`"
+   cost a live-hardware run to learn, and dropping one silently
+   re-opens a fixed bug. Move it to `docs/` with its provenance intact —
+   a fact without its source becomes folklore nobody dares change.
+
+   Applied so far to `app.infrastructure.providers.ucs_common`,
+   `.ucs_manager` and `.ucs_central`. The rest of the codebase still
+   reads in the older style; convert a file when you are already
+   changing it, not as a sweep of its own.
 
 ## Current status
 

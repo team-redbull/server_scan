@@ -1,74 +1,10 @@
-"""Pure `ucsmsdk` managed-object -> `ProviderServer` mapping. No I/O here —
-`provider.py` does every XML API call and hands this module plain
-`ucsmsdk` MO objects (or `None`/empty collections when a lookup found
-nothing) to convert.
+"""Pure `ucsmsdk` managed-object -> `ProviderServer` mapping.
 
-Field-by-field confidence, tracked explicitly because this was built
-without a live UCS Manager domain to test against (see the session's
-UCS-collector design discussion) — every attribute name below was
-confirmed against the *installed* `ucsmsdk==0.9.27` package's generated
-MO source (`ucsmsdk/mometa/**/*.py`'s `prop_meta` dicts), not just
-documentation, but a few field *semantics* (units, exact object nesting)
-were not independently verifiable without a real domain:
+No I/O: `provider.py` makes every XML API call and hands this module plain
+MOs to convert. Shared unchanged with the UCS Central collector.
 
-CONFIRMED (attribute exists, meaning matches Cisco's docs/property help):
-  computeBlade / computeRackUnit: serial, model, vendor, num_of_cpus,
-  num_of_cores, num_of_threads, total_memory, available_memory, presence,
-  oper_state, uuid, original_uuid, assigned_to_dn, dn, name, server_id,
-  chassis_id/slot_id (blade only).
-  lsServer (service profile *and* template — one class, distinguished by
-  `type`): src_templ_name, oper_src_templ_name, type, name, dn.
-  mgmtIf: access ("out-of-band" is the value to filter on), ext_ip, mac.
-  adaptorHostEthIf: switch_id, mac, admin_state, oper_state, id/name.
-  processorUnit (child of computeBoard, itself a child of a compute
-  unit — reached the same grandchildren-join way as mgmtIf): model,
-  cores, presence. `ComputeBoard`/`ProcessorUnit`/`StorageController`/
-  `StorageLocalDisk` all exist as real classes in *both* `ucsmsdk` and
-  `ucscsdk`, with property-identical `prop_meta` — confirmed directly
-  against the installed packages, not documentation (the same bar
-  `docs/adr/0009`/`docs/adr/0014` hold every other field in this module
-  to). `presence` is the same shared enum family `ucs_common.is_equipped`
-  already reads off a compute unit.
-  storageLocalDisk (child of storageController, itself a child of
-  computeBoard *or* equipmentChassis — the latter is chassis-shared
-  storage with no owning server, which `ucs_common.
-  group_by_owning_server_dn`'s ancestor walk drops for free, the same way
-  it already drops a chassis-owned `mgmtIf`): model, serial, size,
-  device_type, disk_state, presence. `device_type`'s enum
-  (`HDD`/`SSD`/`NVME`/`unspecified`) maps directly onto the platform's
-  own `MediaType`.
-
-ASSUMED, NOT INDEPENDENTLY VERIFIED — flagged inline where used:
-  - `total_memory`/`available_memory`'s unit. UCS Manager's own GUI
-    labels this column "Total Memory (MB)", which is the basis for the
-    MB->bytes conversion below. This one genuinely cannot be settled from
-    the SDK: `prop_meta["total_memory"]` is a bare `uint` with no unit
-    annotation, doc string or range — the package is code-generated from
-    the MIT schema and carries no unit metadata for any property. Verify
-    against UCSPE or real hardware.
-  - `storageLocalDisk.size`'s unit is the same kind of gap, and is
-    assumed to be MB for the same reason (UCS Manager's own convention of
-    reporting capacity fields in MB) — weak but independent corroboration:
-    a separate, unrelated Cisco-collector implementation (a sibling
-    project's `ServerScanner`) made the identical MB assumption for this
-    exact field. Still unverified until a real disk of known size is read
-    back. `size == "not-applicable"` (a documented sentinel,
-    `StorageLocalDiskConsts.SIZE_NOT_APPLICABLE`) is treated as unknown
-    capacity, not zero.
-  - Per-CPU model string and storage-drive detail were a v1 scope cut
-    (no MO had been confirmed yet); both are now mapped — see
-    `_cpu_model`/`_storage_drives` — but neither has been exercised
-    against a live domain yet, unlike the fields above them.
-
-`nic_macs` reports `adaptorHostEthIf` (vNIC) MACs when present, falling
-back to `adaptorExtEthIf` (physical port) MACs only for a server with no
-vNIC — see `_nic_macs`. This was confirmed against a live UCS Central run
-(2026-08-17): a fully-associated server reported one physical and one
-logical MAC *per adapter port*, both real Cisco OUIs, and only the vNIC's
-MAC matched what the OS itself reported on `eno1`/`eno2` — a Cisco VIC
-presents virtual interfaces to the OS rather than exposing its physical
-uplink port directly, so the physical port's own MAC is never visible
-inside the OS at all.
+See docs/cisco-collectors.md, "CPU, memory and storage" for the unit
+assumptions this module rests on.
 """
 
 from __future__ import annotations
@@ -88,68 +24,85 @@ def _profile_template_fields(
     *,
     template_dn_by_name: dict[str, str],
 ) -> tuple[str | None, str | None]:
-    """`(name, external_id)` for `ProviderServer.profile_template_*`, or
-    `(None, None)` if the server has no assigned service profile (a
-    discovered-but-unassociated blade, for instance) or its profile isn't
-    itself derived from a template (a one-off, non-template profile).
+    """
+    Resolve the service-profile template a profile was derived from.
+
+    Args:
+        profile (Any | None): The server's `lsServer` service profile, or
+            `None` if it has none.
+        template_dn_by_name (dict[str, str]): Template name -> DN. Lossy
+            across orgs by construction, so it is only a fallback.
+
+    Returns:
+        tuple[str | None, str | None]: `(name, external_id)` for
+            `ProviderServer.profile_template_*`, or `(None, None)` when the
+            server has no profile or its profile came from no template.
+
+    See docs/cisco-collectors.md, "Service profiles and server names".
     """
     if profile is None:
         return None, None
     template_name = getattr(profile, "src_templ_name", None) or None
     if not template_name:
         return None, None
-    # The template's own `dn` (its full distinguished name, including org
-    # path — e.g. "org-root/ls-template-mytemplate") is a real, stable,
-    # unique identifier, unlike the bare name alone (which is only unique
-    # *within* one org — two orgs can each own a "worker-template").
-    #
-    # `oper_src_templ_name` is UCS Manager's own resolved absolute DN for
-    # the source template (the `oper*` convention across `lsServer`'s
-    # policy-name properties), so it is preferred: it is collision-proof
-    # across orgs, where the by-name lookup is lossy by construction.
-    # Falls back to the by-name lookup, then to the bare name, for a
-    # profile whose template was since deleted or renamed.
     oper_dn = getattr(profile, "oper_src_templ_name", None) or None
     external_id = oper_dn or template_dn_by_name.get(template_name, template_name)
     return template_name, external_id
 
 
 def _server_name(server_mo: Any, profile: Any | None) -> str:
-    """The name an operator would use for this machine.
+    """
+    The name an operator would use for this machine.
 
-    The associated service profile's name comes first, because that is
-    what a UCS server is actually called: `computeBlade.name` is an
-    optional user label that is *empty in practice* — verified against
-    UCSPE 4.2, where a blade with a service profile bound to it still
-    reported `name=""`. Falling back to the DN alone (as this did
-    originally) would name every server `sys/chassis-1/blade-3`, which is
-    a location, not an identity, and carries none of the information the
-    rest of the platform reads out of a hostname: the site token
-    (`app.domain.value_objects.site`) and the installation-type
-    convention the classification rules match on. A UCS-sourced fleet
-    would have been permanently unsited and unclassified.
+    Args:
+        server_mo (Any): The `computeBlade` or `computeRackUnit` MO.
+        profile (Any | None): Its associated `lsServer`, or `None`.
 
-    The DN remains the last resort, and stays the `external_id`
-    regardless — identity and display name are different jobs.
+    Returns:
+        str: The service profile's name, else the MO's own name, else its
+            DN as a last resort.
+
+    See docs/cisco-collectors.md, "Service profiles and server names".
     """
     profile_name = getattr(profile, "name", None) if profile is not None else None
     return profile_name or getattr(server_mo, "name", None) or str(server_mo.dn)
 
 
 def _bmc_address(mgmt_if: Any | None) -> str | None:
+    """
+    The CIMC's address as a BMC URI.
+
+    Args:
+        mgmt_if (Any | None): The server's own `mgmtIf`, or `None`.
+
+    Returns:
+        str | None: An `ipmi://host:623` URI in the form
+            `app.domain.value_objects.bmc_address.parse_bmc_address`
+            recognizes for Cisco, or `None` when there is no interface or
+            its `ext_ip` is an unset sentinel.
+
+    See docs/cisco-collectors.md, "BMC and management interface selection".
+    """
     if mgmt_if is None:
         return None
     ext_ip = getattr(mgmt_if, "ext_ip", None)
     if not ext_ip or ext_ip in ("0.0.0.0", "none"):  # noqa: S104 - unset-IP sentinels, not a bind
         return None
-    # Matches the `ipmi://` form `app.domain.value_objects.bmc_address.
-    # parse_bmc_address` already recognizes for Cisco (see the fake
-    # generator's `_bmc_address`) — a UCS-managed CIMC's out-of-band
-    # interface is reachable the same way a standalone one would be.
     return f"ipmi://{ext_ip}:623"
 
 
 def _extract_macs(adapter_ifs: list[Any]) -> tuple[str, ...]:
+    """
+    Pull real MACs off a list of adapter interfaces.
+
+    Args:
+        adapter_ifs (list[Any]): `adaptorHostEthIf` or `adaptorExtEthIf`
+            MOs.
+
+    Returns:
+        tuple[str, ...]: Their MACs in order, skipping UCS's
+            "not applicable" and "derived" placeholders.
+    """
     macs: list[str] = []
     for mo in adapter_ifs:
         mac = getattr(mo, "mac", None)
@@ -159,37 +112,26 @@ def _extract_macs(adapter_ifs: list[Any]) -> tuple[str, ...]:
 
 
 def _nic_macs(*, host_eth_ifs: list[Any], ext_eth_ifs: list[Any]) -> tuple[str, ...]:
-    """The MACs an operating system on this server would actually report
-    on its own NICs (`eno1`, `eno2`, ...).
+    """
+    The MACs an OS on this server would report on its own NICs.
 
-    That is the logical vNIC (`adaptorHostEthIf`)'s MAC, not the adapter's
-    physical port (`adaptorExtEthIf`): a Cisco VIC presents virtual
-    interfaces to the OS rather than exposing its physical uplink port
-    directly, so the vNIC's pool-assigned MAC is what the OS binds to,
-    while the physical port's burned-in MAC faces the fabric interconnect
-    and is never seen inside the OS. Falls back to the physical MAC only
-    when no vNIC exists yet — an unassociated server, or an
-    older-generation adapter with no vNIC abstraction — so a physically
-    cabled server doesn't report zero NICs just because it isn't
-    associated to a service profile.
+    Args:
+        host_eth_ifs (list[Any]): `adaptorHostEthIf` (logical vNIC) MOs.
+        ext_eth_ifs (list[Any]): `adaptorExtEthIf` (physical port) MOs.
+
+    Returns:
+        tuple[str, ...]: vNIC MACs, falling back to physical-port MACs only
+            when the server has no vNIC at all.
+
+    See docs/cisco-collectors.md, "Adapter interfaces, MACs and fabric
+    attachments".
     """
     host_macs = _extract_macs(host_eth_ifs)
     return host_macs if host_macs else _extract_macs(ext_eth_ifs)
 
 
-# UCS reports interface state in its own vocabulary; the platform's
-# `ConnectivityAttachment.oper_state` is documented as UP | DOWN | UNKNOWN
-# and `compute_connectivity_facts` counts those exact strings. Passing the
-# raw UCS value straight through left every fabric path counted as neither
-# up nor down — verified against UCSPE 4.2, where a server with four
-# attachments reported `fabric_paths_up: 0, fabric_paths_down: 0` — which
-# silently disabled the connectivity health signal for every UCS server.
-#
-# `admin-down` maps to DISABLED rather than DOWN on purpose: it means the
-# port was administratively disabled (the normal state of an adapter port
-# on a server with no service profile associated), not that a cable or
-# link failed. `compute_connectivity_facts` counts neither, so an
-# unassociated server does not masquerade as a connectivity fault.
+# See docs/cisco-collectors.md, "Adapter interfaces, MACs and fabric
+# attachments".
 _OPER_STATE_MAP = {
     "operable": "UP",
     "up": "UP",
@@ -207,16 +149,50 @@ _ADMIN_STATE_MAP = {"enabled": "ENABLED", "disabled": "DISABLED"}
 
 
 def _oper_state(mo: Any) -> str:
+    """
+    Map UCS's operational-state vocabulary onto the platform's.
+
+    Args:
+        mo (Any): Any MO carrying an `oper_state` property.
+
+    Returns:
+        str: UP, DOWN, DISABLED, or UNKNOWN for an unrecognized value.
+    """
     return _OPER_STATE_MAP.get(str(getattr(mo, "oper_state", "") or "").lower(), "UNKNOWN")
 
 
 def _admin_state(mo: Any) -> str:
+    """
+    Map UCS's administrative-state vocabulary onto the platform's.
+
+    Args:
+        mo (Any): Any MO carrying an `admin_state` property.
+
+    Returns:
+        str: ENABLED, DISABLED, or UNKNOWN for an unrecognized value.
+    """
     return _ADMIN_STATE_MAP.get(str(getattr(mo, "admin_state", "") or "").lower(), "UNKNOWN")
 
 
 def _attachments(
     adapter_ifs: Iterable[Any], *, provider_type: str
 ) -> tuple[ProviderAttachment, ...]:
+    """
+    Build fabric-interconnect attachments from adapter interfaces.
+
+    Args:
+        adapter_ifs (Iterable[Any]): `adaptorExtEthIf` and/or
+            `adaptorHostEthIf` MOs.
+        provider_type (str): Which collector observed the attachment, not
+            which product owns the fabric.
+
+    Returns:
+        tuple[ProviderAttachment, ...]: One attachment per interface with a
+            real `switch_id`; interfaces reporting none are skipped.
+
+    See docs/cisco-collectors.md, "Adapter interfaces, MACs and fabric
+    attachments".
+    """
     attachments: list[ProviderAttachment] = []
     for mo in adapter_ifs:
         switch_id = getattr(mo, "switch_id", None)
@@ -225,24 +201,14 @@ def _attachments(
         attachments.append(
             ProviderAttachment(
                 type="FABRIC_INTERCONNECT",
-                # Which collector observed this attachment, not which
-                # product owns the fabric — a UCS Central run reports
-                # UCS_CENTRAL for hardware that is still fronted by a
-                # domain's own fabric interconnects.
                 provider=provider_type,
                 fabric=switch_id,
-                # Not populated: resolving the fabric interconnect's own
-                # name/model/serial needs a `networkElement` lookup this
-                # collector does not make.
                 fabric_name=None,
                 fabric_id=None,
                 fabric_model=None,
                 fabric_serial=None,
                 server_interface=getattr(mo, "name", None) or getattr(mo, "id", None),
                 server_port=None,
-                # Physical ports (`adaptorExtEthIf`) carry `peer_dn` — the
-                # fabric-side port this adapter port is cabled to. Logical
-                # vNICs (`adaptorHostEthIf`) have no such peer.
                 fabric_port=getattr(mo, "peer_dn", None) or None,
                 admin_state=_admin_state(mo),
                 oper_state=_oper_state(mo),
@@ -253,14 +219,18 @@ def _attachments(
 
 
 def _cpu_model(cpu_units: list[Any]) -> str | None:
-    """The processor model string, from the first equipped `processorUnit`.
+    """
+    The processor model string for the server.
 
-    UCS reports one `processorUnit` per socket; a real multi-socket server
-    is expected to be symmetric (identical CPUs in every socket), so the
-    first equipped one represents the server rather than being an
-    arbitrary pick. An empty socket on a partially-populated board reports
-    `presence="empty"` and is skipped by `is_equipped`, same as an
-    unequipped compute unit itself.
+    Args:
+        cpu_units (list[Any]): `processorUnit` MOs owned by one server, one
+            per socket.
+
+    Returns:
+        str | None: The first equipped socket's model, or `None` when no
+            socket is equipped or none reports a model.
+
+    See docs/cisco-collectors.md, "CPU, memory and storage".
     """
     for mo in cpu_units:
         if is_equipped(mo):
@@ -272,11 +242,8 @@ def _cpu_model(cpu_units: list[Any]) -> str | None:
 
 _MEDIA_TYPE_MAP = {"hdd": "HDD", "ssd": "SSD", "nvme": "NVME"}
 
-# `StorageLocalDiskConsts.DISK_STATE_*` — the states worth distinguishing
-# for a health rollup, mapped onto the platform's `HealthSeverity` values
-# the same way `_oper_state`/`_admin_state` map UCS's own connectivity
-# vocabulary above. Anything not listed here (including UCS's own
-# `unknown`/`na`) falls through to UNKNOWN rather than being guessed at.
+# `StorageLocalDiskConsts.DISK_STATE_*` mapped onto `HealthSeverity`.
+# See docs/cisco-collectors.md, "CPU, memory and storage".
 _DISK_HEALTH_MAP = {
     "good": "HEALTHY",
     "online": "HEALTHY",
@@ -297,14 +264,45 @@ _DISK_HEALTH_MAP = {
 
 
 def _media_type(mo: Any) -> str:
+    """
+    Map a disk's `device_type` onto the platform's `MediaType`.
+
+    Args:
+        mo (Any): A `storageLocalDisk` MO.
+
+    Returns:
+        str: HDD, SSD, NVME, or UNKNOWN.
+    """
     return _MEDIA_TYPE_MAP.get(str(getattr(mo, "device_type", "") or "").lower(), "UNKNOWN")
 
 
 def _disk_health(mo: Any) -> str:
+    """
+    Map a disk's `disk_state` onto the platform's `HealthSeverity`.
+
+    Args:
+        mo (Any): A `storageLocalDisk` MO.
+
+    Returns:
+        str: HEALTHY, WARNING, CRITICAL, or UNKNOWN for any state not
+            worth distinguishing.
+    """
     return _DISK_HEALTH_MAP.get(str(getattr(mo, "disk_state", "") or "").lower(), "UNKNOWN")
 
 
 def _disk_capacity_bytes(mo: Any) -> int | None:
+    """
+    One disk's capacity in bytes.
+
+    Args:
+        mo (Any): A `storageLocalDisk` MO whose `size` is assumed to be MB.
+
+    Returns:
+        int | None: The capacity, or `None` when `size` is absent, the
+            `not-applicable` sentinel, or unparseable.
+
+    See docs/cisco-collectors.md, "CPU, memory and storage".
+    """
     raw_size = getattr(mo, "size", None)
     if raw_size is None or str(raw_size).lower() == _NOT_APPLICABLE:
         return None
@@ -313,11 +311,20 @@ def _disk_capacity_bytes(mo: Any) -> int | None:
 
 
 def _storage_drives(disk_units: list[Any]) -> tuple[tuple[dict[str, object], ...], int]:
-    """`(drives, total_bytes)` from every equipped `storageLocalDisk` under
-    one server. A disk whose capacity couldn't be read contributes a drive
-    entry (model/serial/health are still worth reporting) with
-    `capacity_bytes=None`, and contributes nothing to the total rather than
-    silently counting as zero bytes.
+    """
+    Summarize one server's local disks.
+
+    Args:
+        disk_units (list[Any]): `storageLocalDisk` MOs owned by one server.
+
+    Returns:
+        tuple[tuple[dict[str, object], ...], int]: `(drives, total_bytes)`
+            over every equipped disk. A disk whose capacity could not be
+            read still contributes a drive entry, with
+            `capacity_bytes=None`, and adds nothing to the total rather
+            than counting as zero.
+
+    See docs/cisco-collectors.md, "CPU, memory and storage".
     """
     drives: list[dict[str, object]] = []
     total_bytes = 0
@@ -352,14 +359,28 @@ def compute_unit_to_provider_server(
     disk_units: list[Any],
     provider_type: str = "UCS_MANAGER",
 ) -> ProviderServer:
-    """Convert one `computeBlade` or `computeRackUnit` MO — the two
-    classes carry the same relevant property set (see module docstring),
-    so one function handles both rather than duplicating the mapping.
+    """
+    Convert one compute unit and its descendants into a `ProviderServer`.
 
-    Also serves the UCS Central collector unchanged: `ucscsdk` exposes
-    every attribute read here under the same name as `ucsmsdk` (see
-    `app.infrastructure.providers.ucs_common`), so only `provider_type`
-    differs between the two callers.
+    Handles `computeBlade` and `computeRackUnit` alike, and serves both
+    Cisco collectors unchanged — only `provider_type` differs between them.
+
+    Args:
+        server_mo (Any): The `computeBlade` or `computeRackUnit` MO.
+        manager_id (str): The manager this server is reported under.
+        profile_by_dn (dict[str, Any]): Service profile DN -> `lsServer`.
+        template_dn_by_name (dict[str, str]): Template name -> DN.
+        mgmt_if (Any | None): The server's own `mgmtIf`, or `None`.
+        ext_eth_ifs (list[Any]): Its `adaptorExtEthIf` MOs.
+        host_eth_ifs (list[Any]): Its `adaptorHostEthIf` MOs.
+        cpu_units (list[Any]): Its `processorUnit` MOs.
+        disk_units (list[Any]): Its `storageLocalDisk` MOs.
+        provider_type (str): Which collector observed this server.
+
+    Returns:
+        ProviderServer: The vendor-neutral DTO the ingest pipeline consumes.
+
+    See docs/cisco-collectors.md, "Shared object model and DN joins".
     """
     profile = profile_by_dn.get(getattr(server_mo, "assigned_to_dn", None) or "")
     template_name, template_external_id = _profile_template_fields(
@@ -395,12 +416,18 @@ def compute_unit_to_provider_server(
 
 
 def _as_int(value: object) -> int:
-    """UCS XML attributes are always strings on the wire; `ucsmsdk`
-    leaves numeric-looking ones as `str` rather than coercing them, so
-    every numeric field here goes through this rather than assuming an
-    `int` was handed back. Missing/non-numeric -> 0, never a raised
-    exception — a single unparseable count shouldn't fail the whole
-    server.
+    """
+    Coerce a UCS numeric attribute to `int`.
+
+    UCS XML attributes arrive as strings and `ucsmsdk` does not coerce
+    them, so every numeric field goes through this.
+
+    Args:
+        value (object): The raw attribute value, possibly `None`.
+
+    Returns:
+        int: The parsed value, or 0 when missing or non-numeric. Never
+            raises — one unparseable count must not fail a whole server.
     """
     if value is None:
         return 0
