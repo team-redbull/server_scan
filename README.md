@@ -213,6 +213,8 @@ tools/           operational CLIs: fake-data seeder, index/load verification,
                  the real-collector runner (tools/run_collector.py)
 scripts/         dev environment helpers
 deploy/          Helm chart (API, and per-vendor collector CronJobs)
-docs/            architecture notes, ADRs, and cisco-collectors.md (the
+docs/            architecture notes, ADRs, cisco-collectors.md (the
                  verified implementation facts the Cisco collectors rest on)
+                 and test-ucs-collector.md (runbook for proving the
+                 collector against real hardware)
 ```
