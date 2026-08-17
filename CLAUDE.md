@@ -67,6 +67,18 @@ is a real mistake, not a style preference.
    explicitly asks for it — they've confirmed this deferral more than
    once, most recently mid-collector-work ("lets leave the auth for now
    what else is there to make this production and really run?").
+7. **Every time you add or edit a file, run the full local check before
+   calling the work done — not just a lint pass.** CI gates on `ruff
+   check .` *and* `ruff format --check .` *and* `mypy` as three separate
+   steps (`.github/workflows/ci.yml`'s `lint` job); running only `ruff
+   check` and skipping `ruff format --check` has already shipped a commit
+   that failed CI on formatting alone even though lint and types were
+   both clean. Run the real gate locally, on every touched file, before
+   considering a change finished:
+   `uv run ruff check . && uv run ruff format --check . && uv run mypy backend/app tools`
+   (add `cd frontend && npm run lint && npm run typecheck && npm run build`
+   for any frontend change). If `ruff format --check` fails, run
+   `uv run ruff format .` and re-verify — don't hand-fix formatting.
 
 ## Current status
 
