@@ -242,19 +242,23 @@ and `INVENTORY_UCS_MANAGER_IP`. Don't "restore" it as a fix without
 asking; it was deleted deliberately.
 
 `docs/adr/0014` has the full evidence trail, including its 2026-08-17
-update. It is **still not validated against a live UCS Central**. The
-open question — whether Central replicates domain-*local* service
-profiles, the source of a server's name and hence of site parsing,
-classification and the `^ocp` match — now only affects whether pruning
-can skip anything, not whether the collector works. The SDK schema says
-yes (`LsSPMeta.ownership_state` includes `localized` alongside
-`global-controlled`, on a child of `lsServer`), and the sibling project
-team-redbull/ServerScanner relies on it in production, but neither is a
-live run here. **Run `uv run python -m tools.verify_ucs_central` before
-trusting it**: read-only, writes nothing, and prints a GOOD/PARTIAL/BAD
-verdict plus the `ownership_state` breakdown. Update ADR-0014 with the
-result. At runtime the provider also logs `ucs_central.domain_summary`
-and warns `ucs_central.domain_without_profiles`.
+and 2026-08-18 updates. **It is now validated against a live UCS
+Central** — 152 registered domains, ~3346 equipped servers, real
+`verify_ucs_central` and `run_collector --dry-run` runs. The open
+question of whether Central replicates domain-*local* service
+profiles — the source of a server's name and hence of site parsing,
+classification and the `^ocp` match — is answered for that fleet: it
+uses **zero** local profiles; every one is `global-controlled` (owned by
+Central itself), which makes Central's `lsServer` copy authoritative by
+construction there and settles pruning as safe for it. The SDK schema
+still supports `localized` profiles (`LsSPMeta.ownership_state`), and a
+fleet that actually uses them remains untested here — run
+`uv run python -m tools.verify_ucs_central` against any new deployment
+before trusting it there too: read-only, writes nothing, prints a
+GOOD/PARTIAL/BAD verdict plus the `ownership_state` breakdown. Update
+ADR-0014 with the result. At runtime the provider also logs
+`ucs_central.domain_summary` and warns
+`ucs_central.domain_without_profiles`.
 
 **Shared Cisco logic lives in `app.infrastructure.providers.ucs_common`**
 (`is_equipped`, `group_by_owning_server_dn`, `bmc_interface`,

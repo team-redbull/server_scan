@@ -4,9 +4,10 @@ Date: 2026-08-15
 
 ## Status
 
-Accepted. **Not yet validated against a live UCS Central** — see
-"What is still unproven", which is the section to read before trusting
-this in production.
+Accepted. **Validated against a live UCS Central** (2026-08-18, 152
+domains) — see the dated update at the end of this file. The remaining
+open items are narrower than "does this work at all"; read that update
+before trusting this in production.
 
 ## Context
 
@@ -295,11 +296,13 @@ domain with.
    definitions prove the model *can express* those objects, not that a
    given Central populates them. Nothing needs that to be true now.
 
-The cost, stated plainly: one login plus ~9 queries per collected domain
-instead of 9 queries in total, and a UCS Manager account that works on
-every domain. For the ~8-domain fleet this was built for that is a minute
-or two of wall-clock, bounded further by collecting several domains
-concurrently.
+The cost, stated plainly: one login plus 10 queries per collected domain
+(pinned by `test_scales_query_count_independently_of_fleet_size`) instead
+of 9 queries in total, and a UCS Manager account that works on every
+domain. For the ~8-domain fleet this was built for that is a minute or
+two of wall-clock, bounded further by collecting several domains
+concurrently. Validated at 152 domains on 2026-08-18 — see the dated
+update below for what that run actually cost and found.
 
 ### What was deliberately not copied
 
@@ -363,12 +366,81 @@ and about documents ingested before this change still matching.)
 
 ### Still unproven
 
-- Whether Central's `lsServer` lists domain-local profiles — unchanged,
-  but demoted from "decides whether this works" to "decides whether
-  pruning can skip anything", with the guard above making the unknown
-  case safe. `tools/verify_ucs_central.py` still answers it directly.
+- ~~Whether Central's `lsServer` lists domain-local profiles~~ —
+  answered for the validating fleet by the 2026-08-18 update below:
+  **zero** `localized` profiles exist there, every one is
+  `global-controlled`. The schema still supports `localized` (unchanged
+  from "The schema says yes" above) and pruning's unknown-case-is-safe
+  guard still matters for a fleet that does use domain-local profiles —
+  this fleet simply isn't one. `tools/verify_ucs_central.py` remains the
+  way to answer it for any other deployment.
 - That one UCS Manager credential pair authenticates against every
-  registered domain. True for the sibling project's fleet; a property of
-  how the domains are configured, not something Cisco guarantees.
+  registered domain. True for the sibling project's fleet, and now also
+  confirmed for the 2026-08-18 validation run below (zero login
+  failures across 100 collected domains); still a property of how a
+  given fleet's domains are configured, not something Cisco guarantees.
 - The `total_memory` MB assumption inherited from ADR-0009.
+
+## Update (2026-08-18): validated against a live UCS Central
+
+`tools/verify_ucs_central.py` and `tools/run_collector.py --dry-run`
+were both run against the operator's real UCS Central, 152 registered
+domains, ~3346 equipped servers.
+
+**`verify_ucs_central` result:**
+
+```
+1. Registered domains: all 152 report inventory_status=ok, and
+   REPORTED == SEEN for every one — no stale replicas.
+2. lsServer objects returned: 4129 (3613 profiles, 516 templates)
+   lsSPMeta objects returned : 4129
+   ownership_state breakdown:
+     global-controlled       4123  <-- owned by UCS Central (a GLOBAL profile)
+     delete-pending              6
+   (no "localized" entries at all)
+3. servers with a resolved service-profile name: 3265 / 3346
+   VERDICT: PARTIAL — 3265 of 3346 servers resolved a name.
+```
+
+**This settles the schema question for this fleet, in the direction the
+schema evidence left open rather than the one "The schema says yes"
+expected:** every service profile Central holds is `global-controlled`.
+This operator's fleet is provisioned entirely through Central-owned
+global profiles — no domain-local ones exist to replicate at all. That
+is not a contradiction of the SDK schema evidence (Central's MIT model
+still *supports* `localized`), it is empirical confirmation that this
+particular deployment doesn't exercise it. Practically, it is a *good*
+outcome for the pruning design: since every profile is Central's own
+data rather than a replica of something domain-local, Central's copy of
+`lsServer` is authoritative by construction here, and
+`domains_to_collect`'s pruning decision carries no replica-lag risk for
+this fleet.
+
+**The `PARTIAL` verdict (81 unresolved servers, 2.4%) does not indicate
+a Central-replication gap**, for the same reason: with zero local
+profiles in play, there is no local-profile-Central-can't-see
+explanation available. The far more likely cause is physically-equipped
+compute units with no service profile assigned at all — spare or
+not-yet-provisioned hardware, which is normal fleet composition at this
+scale. `verify_ucs_central` only checks whether *Central's own replica*
+resolves a name; the real collector resolves names live against each
+domain's own UCS Manager (`ucs_manager/provider.py`), independent of
+Central's copy, so an unassociated server would show up nameless there
+too — this is not an artifact this collector's design introduces.
+
+**The `--dry-run` result confirmed the live path works**: successful
+MongoDB connectivity check, successful login to every domain attempted,
+raw `ProviderServer` fields populated as expected (CPU sockets/cores/
+threads/model, memory, per-drive storage with model/serial/media
+type/health, NIC MACs correctly preferring the vNIC over the physical
+port, fabric attachments). One real defect surfaced by this run and
+fixed separately: `mgmtIf.ext_ip` came back an unset sentinel for a
+server whose CIMC address was in fact assigned via the service profile's
+management IP address policy, recorded on `vnicIpV4PooledAddr` rather
+than the physical `mgmtIf` — see `docs/cisco-collectors.md`, "BMC and
+management interface selection", for the full finding.
+`INVENTORY_UCS_CENTRAL_DOMAIN_CONCURRENCY=4` (the default) collected 100
+of 152 domains with zero failed domains; 52 were pruned by
+`INVENTORY_COLLECTOR_NAME_PATTERN`, which is pruning working as
+designed, not a fault.
 
