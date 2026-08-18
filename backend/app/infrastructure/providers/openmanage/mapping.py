@@ -9,12 +9,26 @@ provenance and the unit assumptions this module rests on.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from app.domain.ports.provider import ProviderNic, ProviderServer
 
 _BYTES_PER_MB = 1024 * 1024
 _VENDOR = "dell"
+
+# Binary size units, for the `serverArrayDisks` `Size` field, which OME has
+# reported both as a plain byte count and as a "<number> <unit>" string.
+# See docs/dell-collectors.md, "Capacity units".
+_UNIT_BYTES = {
+    "B": 1,
+    "KB": 1024,
+    "MB": 1024**2,
+    "GB": 1024**3,
+    "TB": 1024**4,
+    "PB": 1024**5,
+}
+_SIZE_RE = re.compile(r"^([\d.]+)\s*([A-Za-z]+)?$")
 
 
 def _as_int(value: object) -> int:
@@ -196,6 +210,56 @@ def nic_macs_from_nics(nics: tuple[ProviderNic, ...]) -> tuple[str, ...]:
     return tuple(dict.fromkeys(nic.mac for nic in nics if nic.mac))
 
 
+# OME `serverProcessors` field names seen carrying a socket's logical
+# processor (thread) count. They vary by OME/iDRAC version, so the first
+# populated one wins. See docs/dell-collectors.md, "CPU summary".
+_THREAD_COUNT_KEYS = (
+    "NumberOfLogicalProcessors",
+    "LogicalProcessorCount",
+    "NumberOfThreads",
+    "ThreadCount",
+)
+_HYPERTHREADING_KEYS = ("HyperThreadingEnabled", "HyperThreadingCapable")
+
+
+def _logical_processors(processor: dict[str, Any]) -> int:
+    """
+    A socket's thread count from whichever field OME populated.
+
+    Args:
+        processor (dict[str, Any]): One `serverProcessors` entry.
+
+    Returns:
+        int: The first populated thread-count field, or `0` if none is
+            present.
+    """
+    for key in _THREAD_COUNT_KEYS:
+        value = _as_int(processor.get(key))
+        if value:
+            return value
+    return 0
+
+
+def _hyperthreading_on(processor: dict[str, Any]) -> bool:
+    """
+    Whether a socket reports hyperthreading, used to derive threads when OME
+    gives no explicit logical-processor count.
+
+    Args:
+        processor (dict[str, Any]): One `serverProcessors` entry.
+
+    Returns:
+        bool: `True` if any known HT flag is truthy.
+    """
+    for key in _HYPERTHREADING_KEYS:
+        value = processor.get(key)
+        if isinstance(value, bool) and value:
+            return True
+        if isinstance(value, str) and value.strip().lower() in ("true", "enabled", "yes", "1"):
+            return True
+    return False
+
+
 def cpu_from_processors(processors: list[dict[str, Any]]) -> tuple[int, int, int, str | None]:
     """
     Summarize a device's CPUs from its `serverProcessors` inventory.
@@ -208,10 +272,15 @@ def cpu_from_processors(processors: list[dict[str, Any]]) -> tuple[int, int, int
         tuple[int, int, int, str | None]: `(sockets, cores, threads, model)`.
             `sockets` is the entry count; `cores`/`threads` sum across
             sockets; `model` is the first entry's fullest available name.
+            When OME reports no per-socket thread count but flags
+            hyperthreading, threads falls back to `2 * cores` — see
+            docs/dell-collectors.md, "CPU summary".
     """
     sockets = len(processors)
     cores = sum(_as_int(p.get("NumberOfCores")) for p in processors)
-    threads = sum(_as_int(p.get("NumberOfLogicalProcessors")) for p in processors)
+    threads = sum(_logical_processors(p) for p in processors)
+    if threads == 0 and cores > 0 and any(_hyperthreading_on(p) for p in processors):
+        threads = cores * 2
     model: str | None = None
     for p in processors:
         model = (
@@ -287,33 +356,65 @@ def _drive_health(device: dict[str, Any]) -> str:
     return _STATUS_TEXT_MAP.get(text, "UNKNOWN")
 
 
+def _disk_capacity_bytes(value: object) -> int | None:
+    """
+    Parse a `serverArrayDisks` `Size` into bytes.
+
+    OME reports this either as a plain byte count or as a "<number> <unit>"
+    string (e.g. `"960.0 GB"`); both are handled. See
+    docs/dell-collectors.md, "Capacity units".
+
+    Args:
+        value (object): The raw `Size` field.
+
+    Returns:
+        int | None: Capacity in bytes, or `None` when absent or unparseable.
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return int(value) or None
+    match = _SIZE_RE.match(str(value).strip())
+    if not match:
+        return None
+    number, unit = match.group(1), (match.group(2) or "B").upper()
+    try:
+        return int(float(number) * _UNIT_BYTES.get(unit, 1)) or None
+    except ValueError:
+        return None
+
+
 def storage_from_devices(
     devices: list[dict[str, Any]],
 ) -> tuple[tuple[dict[str, object], ...], int]:
     """
-    Summarize a device's physical disks from its `serverStorage` inventory.
+    Summarize a device's physical disks from its `serverArrayDisks`
+    inventory.
 
     Args:
-        devices (list[dict[str, Any]]): The `serverStorage` `InventoryInfo`
-            entries.
+        devices (list[dict[str, Any]]): The `serverArrayDisks`
+            `InventoryInfo` entries.
 
     Returns:
         tuple[tuple[dict[str, object], ...], int]: `(drives, total_bytes)`.
             A disk whose `Size` cannot be read still contributes a drive
             entry with `capacity_bytes=None` and adds nothing to the total.
-            `Size` is read as MB — see docs/dell-collectors.md, "Capacity
-            units".
     """
     drives: list[dict[str, object]] = []
     total_bytes = 0
     for device in devices:
-        size_mb = _as_int(device.get("Size"))
-        capacity_bytes = size_mb * _BYTES_PER_MB if size_mb else None
+        capacity_bytes = _disk_capacity_bytes(device.get("Size"))
         total_bytes += capacity_bytes or 0
         drives.append(
             {
-                "id": str(device.get("Id") or device.get("DeviceId") or device.get("Name") or ""),
-                "model": _opt_str(device.get("ModelNumber") or device.get("Name")),
+                "id": str(
+                    device.get("Id")
+                    or device.get("DiskNumber")
+                    or device.get("Slot")
+                    or device.get("Name")
+                    or ""
+                ),
+                "model": _opt_str(device.get("ModelNumber") or device.get("Model")),
                 "serial": _opt_str(device.get("SerialNumber")),
                 "media_type": _media_type(device),
                 "capacity_bytes": capacity_bytes,

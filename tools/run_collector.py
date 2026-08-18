@@ -390,11 +390,9 @@ async def _dry_run_one_manager(
             f"\n     storage     : {_format_capacity(ps.storage_total_bytes)} total across"
             f" {len(ps.storage_drives)} drive(s)"
             f"\n     bmc         : {(bmc.host if bmc else None) or '—'}"
-            f"\n     profile     : {ps.profile_dn or '—'}"
             f"\n     profile tmpl: {ps.profile_template_name or '—'}"
             f" [{ps.profile_template_external_id or '—'}]"
             f"\n     nics        : {len(ps.nics) if ps.nics else len(ps.nic_macs)}"
-            f"\n     attachments : {len(ps.attachments)}"
         )
         for nic in ps.nics:
             speed = f"  {nic.speed_mbps}mbps" if nic.speed_mbps else ""
@@ -404,12 +402,6 @@ async def _dry_run_one_manager(
         if not ps.nics:
             for mac in ps.nic_macs:
                 print(f"        nic —  mac={mac}  (link state not reported)")
-        for a in ps.attachments:
-            print(
-                f"        fabric {a.fabric}  if={a.server_interface}"
-                f"  admin={a.admin_state} oper={a.oper_state}"
-                f"  peer={a.fabric_port or '—'}"
-            )
         for drive in ps.storage_drives:
             capacity_bytes = drive.get("capacity_bytes")
             size = (

@@ -40,9 +40,14 @@ collector uses four endpoints, all validated in the production scanner:
 - `GET /DeviceService/Devices(<id>)/InventoryDetails('<section>')` — one
   hardware section for one device, returned in an `InventoryInfo` array.
   The collector reads `serverProcessors`, `serverMemoryDevices`,
-  `serverStorage` and `serverNetworkInterfaces`. OME populates these from
+  `serverArrayDisks` and `serverNetworkInterfaces`. OME populates these from
   the server's iDRAC, so "collect from OpenManage and iDRAC" is one REST
   surface, not two connections.
+
+  **Physical disks are `serverArrayDisks`, not `serverStorage`.** A live
+  appliance returns HTTP 400 for `serverStorage` — it is not a valid
+  `InventoryType`. This was an assumption carried over from the production
+  scanner that proved wrong here (2026-08-18, live OME run).
 
 Collections are paged: each response carries a `value` array and, when
 more remain, an `@odata.nextLink` (an absolute `/api/...` path). The
@@ -136,31 +141,42 @@ mark the primary NIC, this is the rule it followed in production.
 
 ## Capacity units
 
-The production scanner treated OME's memory-module `Size` and physical-disk
-`Size` as **megabytes** (it divided by 1024 to report GiB). This module
-follows that: `memory_total_bytes` and each drive's `capacity_bytes` are
-`Size * 1024 * 1024`. **This is an assumption, not a verified fact** — the
-analogue of the UCS `total_memory` MB assumption that
-`docs/adr/0009` flags as unsettled. Confirm it against a real appliance
-(a known-32 GiB DIMM should report `Size == 32768`) and correct here if OME
-actually reports bytes.
+**Memory** (`serverMemoryDevices` `Size`) is read as **megabytes**, carried
+over from the production scanner: `memory_total_bytes = sum(Size) * 1024^2`.
+Still an assumption (the analogue of the UCS `total_memory` MB assumption
+`docs/adr/0009` flags) — confirm a known-32 GiB DIMM reports `Size == 32768`.
+
+**Disks** (`serverArrayDisks` `Size`) are parsed by `_disk_capacity_bytes`,
+which accepts *either* a plain byte count *or* a `"<number> <unit>"` string
+(e.g. `"960.0 GB"`), because OME has been seen to report both. A numeric
+value is taken as **bytes** — note this differs from the memory field's MB.
+Verify against a real appliance and simplify once its form is known.
 
 ## CPU summary
 
 From `serverProcessors` `InventoryInfo`: `sockets` is the entry count,
-`cores` and `threads` sum `NumberOfCores` / `NumberOfLogicalProcessors`
-across entries, and the model is the first entry's `ModelName`, falling
-back to `BrandName` then `Family`. The scanner stored only a single
-processor's core count; summing across sockets is the correction made
-here, defensible as the total-core semantics `ProviderServer.cpu_cores`
-expects.
+`cores` sums `NumberOfCores`, and the model is the first entry's
+`ModelName`, falling back to `BrandName` then `Family`.
+
+**Threads** proved to be the fragile field on live hardware: the expected
+`NumberOfLogicalProcessors` was absent and the sum came out `0`.
+`_logical_processors` now tries several field names
+(`NumberOfLogicalProcessors`, `LogicalProcessorCount`, `NumberOfThreads`,
+`ThreadCount`); if none is present and hyperthreading is flagged
+(`HyperThreadingEnabled`/`HyperThreadingCapable`), threads falls back to
+`2 * cores`. **Both the field list and the HT fallback are unconfirmed** —
+paste one raw `serverProcessors` entry to pin the real field, and note that
+`HyperThreadingCapable` means *supported*, not *enabled*, so the `2 * cores`
+fallback can over-report on a machine with HT physically off.
 
 ## Drive health
 
-`serverStorage` entries report status either as a numeric OME rollup code
+`serverArrayDisks` entries report status either as a numeric OME rollup code
 (`Status`: 1000 normal, 2000 unknown, 3000 warning, 4000 critical) or a
 string (`PrimaryStatus`/`Status`). `mapping._drive_health` handles both and
-maps onto the platform's `HealthSeverity`. The scanner did not collect
-drive health at all, so this mapping is **inferred from OME's documented
-rollup codes, not observed** — verify against a real appliance, especially
-whether `Status` arrives as an int or a string.
+maps onto the platform's `HealthSeverity`; `_media_type` maps `MediaType`
+(string) onto `MediaType`. Both are **inferred, not observed** — verify
+against a real appliance, especially whether `Status`/`MediaType` arrive as
+ints or strings on `serverArrayDisks` (the disk fields — `Size`,
+`ModelNumber`, `SerialNumber`, `DiskNumber`/`Slot` — should also be
+confirmed there).

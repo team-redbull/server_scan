@@ -38,10 +38,14 @@ logger = structlog.get_logger(__name__)
 
 _PROVIDER_TYPE = ManagerType.OPENMANAGE.value
 
+# OME `InventoryType` names. Physical disks are `serverArrayDisks`, not
+# `serverStorage` (which is not a valid type and returns HTTP 400) — a fact
+# confirmed against a live appliance. See docs/dell-collectors.md,
+# "OME REST surface".
 _INVENTORY_SECTIONS = (
     "serverProcessors",
     "serverMemoryDevices",
-    "serverStorage",
+    "serverArrayDisks",
     "serverNetworkInterfaces",
 )
 
@@ -261,7 +265,7 @@ class OpenManageProvider:
             device=device,
             processors=sections["serverProcessors"],
             memory_modules=sections["serverMemoryDevices"],
-            storage=sections["serverStorage"],
+            storage=sections["serverArrayDisks"],
             network_interfaces=sections["serverNetworkInterfaces"],
             manager_id=self._manager.id,
         )
