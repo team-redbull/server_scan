@@ -305,11 +305,11 @@ def _format_capacity(capacity_bytes: int) -> str:
         capacity_bytes (int): The capacity to render, in bytes.
 
     Returns:
-        str: e.g. `"512.0 GiB"` below 1024 GiB, `"9.60 TiB"` at or above it.
+        str: e.g. `"512.0 GiB"` below 1024 GiB, `"9.6 TiB"` at or above it.
     """
     gib = capacity_bytes / 1024**3
     if gib >= 1024:
-        return f"{gib / 1024:.2f} TiB"
+        return f"{gib / 1024:.1f} TiB"
     return f"{gib:.1f} GiB"
 
 
@@ -364,6 +364,7 @@ async def _dry_run_one_manager(
             f"\n     storage     : {_format_capacity(ps.storage_total_bytes)} total across"
             f" {len(ps.storage_drives)} drive(s)"
             f"\n     bmc         : {ps.bmc_address_raw or '—'} (mac {ps.bmc_mac or '—'})"
+            f"\n     profile     : {ps.profile_dn or '—'}"
             f"\n     profile tmpl: {ps.profile_template_name or '—'}"
             f" [{ps.profile_template_external_id or '—'}]"
             f"\n     nic macs    : {', '.join(ps.nic_macs) if ps.nic_macs else '—'}"
