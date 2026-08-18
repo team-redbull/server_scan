@@ -123,11 +123,31 @@ collectors:
     username: ""
     password: ""
 
-  # Dell OpenManage Enterprise. No collector yet.
+  # Dell OpenManage Enterprise. One appliance manages the whole Dell
+  # estate: the collector enumerates every server profile and managed
+  # device with two bulk REST calls, then inventories the servers whose
+  # name matches `namePattern` over per-device calls (CPU, memory,
+  # storage, NICs — sourced by OME from each server's iDRAC).
   ome:
+    enabled: false
     ip: ""
     username: ""
     password: ""
+
+    # How many servers to inventory at once against the single appliance.
+    # Bounds the per-device fan-out; the two bulk enumeration calls run
+    # once regardless.
+    inventoryConcurrency: 8
+    # Hourly, matching the Cisco collector's cadence.
+    schedule: "0 * * * *"
+    backoffLimit: 1
+    activeDeadlineSeconds: 1800
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        memory: 1Gi
 
   # Cisco Intersight. No collector yet, and note these three fields mean
   # something different here: Intersight signs each request with an API

@@ -42,7 +42,7 @@ from pymongo.errors import DuplicateKeyError
 
 from app.application.services.audit_service import SYSTEM_INGEST_ACTOR, AuditService
 from app.application.services.pipeline import classification_from_result, health_from_state
-from app.domain.enums import MediaType, Vendor
+from app.domain.enums import LinkState, MediaType, Vendor
 from app.domain.models.audit_event import EventType
 from app.domain.models.connectivity import (
     Connectivity,
@@ -51,7 +51,7 @@ from app.domain.models.connectivity import (
 )
 from app.domain.models.hardware import Cpu, Hardware, Memory, Power, Storage, StorageDrive
 from app.domain.models.manager import Manager
-from app.domain.models.network import BmcInfo, NetworkInfo
+from app.domain.models.network import BmcInfo, NetworkInfo, NetworkInterface
 from app.domain.models.server import Identity, ProfileTemplate, Server
 from app.domain.models.site import Site
 from app.domain.ports.provider import ProviderServer, ServerInventoryProvider
@@ -106,6 +106,23 @@ def _opt_int(value: object) -> int | None:
     if isinstance(value, int):
         return value
     return int(str(value))
+
+
+def _link_state(value: str) -> LinkState:
+    """Map a provider's link-state string onto `LinkState`.
+
+    Args:
+        value (str): A `ProviderNic.link_state` value, expected to be one of
+            `LinkState`'s members ("UP"/"DOWN"/"DISABLED"/"UNKNOWN").
+
+    Returns:
+        LinkState: The matching member, or `LinkState.UNKNOWN` for anything
+            a provider reports outside that set.
+    """
+    try:
+        return LinkState(value)
+    except ValueError:
+        return LinkState.UNKNOWN
 
 
 def _drive_from_dict(data: dict[str, object]) -> StorageDrive:
@@ -354,11 +371,20 @@ class IngestService:
                 path=bmc_parsed.path if bmc_parsed else None,
                 mac=bmc_mac,
             ),
-            # ProviderServer carries a flat MAC list, not per-interface
-            # name/speed/link-state — nothing to populate `interfaces`
-            # from yet. A real collector's richer per-NIC data will need
-            # `ProviderServer` extended before this can be filled in.
-            interfaces=[],
+            # `nic_macs` is the flat MAC set correlation keys on; `nics` is
+            # the richer per-interface view a provider fills in when it has
+            # one (e.g. OpenManage's `serverNetworkInterfaces`). A provider
+            # that reports only MACs leaves `nics` empty and `interfaces`
+            # stays empty, exactly as before.
+            interfaces=[
+                NetworkInterface(
+                    name=nic.name,
+                    mac=normalize_mac(nic.mac),
+                    speed_mbps=nic.speed_mbps,
+                    link_state=_link_state(nic.link_state),
+                )
+                for nic in ps.nics
+            ],
         )
 
         attachments = [

@@ -43,6 +43,25 @@ class ProviderAttachment:
 
 
 @dataclass(frozen=True, slots=True)
+class ProviderNic:
+    """Provider-neutral DTO for one host network interface.
+
+    Distinct from `ProviderAttachment`: an attachment is a link to a fabric
+    the server hangs off (a UCS fabric interconnect), whereas this is a NIC
+    on the server itself as an OS would see it. `link_state` is a plain
+    string in the closed set `LinkState` uses ("UP"/"DOWN"/"DISABLED"/
+    "UNKNOWN"), kept as a string here for the same reason `ProviderAttachment`
+    keeps `oper_state` a string — the provider boundary stays free of domain
+    enums, and ingest maps it onto `app.domain.enums.LinkState`.
+    """
+
+    name: str
+    mac: str | None
+    speed_mbps: int | None
+    link_state: str
+
+
+@dataclass(frozen=True, slots=True)
 class ProviderServer:
     """Provider-neutral DTO for one server as reported by a collector
     (real or fake). All identity/MAC/BMC-address values are already
@@ -62,6 +81,13 @@ class ProviderServer:
 
     bmc_address_raw: str | None = None
     bmc_mac: str | None = None
+
+    # Per-NIC detail (name, MAC, speed, link up/down). `nic_macs` above is
+    # the flat MAC set identity correlation keys on and stays the minimum a
+    # provider must supply; `nics` is the richer per-interface view a
+    # provider fills in when it has one, and is what populates
+    # `NetworkInfo.interfaces`. Empty when a provider reports only MACs.
+    nics: tuple[ProviderNic, ...] = ()
 
     # No `site_id`: a provider does not get to declare a server's site.
     # It is derived from the server's own name at ingest

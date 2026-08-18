@@ -43,6 +43,7 @@ from app.domain.ports.credentials import (
 from app.domain.ports.provider import ProviderServer, ServerInventoryProvider
 from app.domain.services.health.metrics import build_default_registry
 from app.domain.services.regex_engine import RegexModuleEngine
+from app.domain.value_objects.bmc_address import parse_bmc_address
 from app.domain.value_objects.site import parse_site_code
 from app.infrastructure.credentials import EnvConnectionResolver
 from app.infrastructure.credentials.env import resolve_login
@@ -57,9 +58,32 @@ from app.infrastructure.mongodb.indexes import ensure_indexes
 from app.infrastructure.mongodb.manager_repository import MongoManagerRepository
 from app.infrastructure.mongodb.server_repository import MongoServerRepository
 from app.infrastructure.mongodb.site_repository import MongoSiteRepository
+from app.infrastructure.providers.openmanage.provider import OpenManageProvider
 from app.infrastructure.providers.ucs_central.provider import UcsCentralProvider
 
 logger = structlog.get_logger(__name__)
+
+
+def _openmanage_provider(
+    *,
+    manager: Manager,
+    credentials: ManagerConnection,
+    timeout_seconds: float,
+    settings: Settings,
+) -> ServerInventoryProvider:
+    """One OpenManage Enterprise appliance, enumerating and inventorying the
+    whole Dell fleet — see `_PROVIDER_FACTORIES`' comment below.
+    """
+    return OpenManageProvider(
+        manager=manager,
+        credentials=credentials,
+        timeout_seconds=timeout_seconds,
+        # Reused only to skip the expensive per-device inventory for
+        # profiles that certainly hold nothing of ours; the authoritative
+        # name filter is still `_NameFilteredProvider`.
+        name_pattern=settings.collector_name_pattern,
+        concurrency=settings.ome_inventory_concurrency,
+    )
 
 
 def _ucs_central_provider(
@@ -91,9 +115,9 @@ def _ucs_central_provider(
 
 
 # One entry per manager type this tool can be pointed at. A missing entry
-# is a real gap (OpenManage, Intersight, OneView), not an oversight:
-# `_build_provider` raises a clear "not implemented yet" for any
-# `manager.type` without one, rather than silently skipping that manager.
+# is a real gap (Intersight, OneView), not an oversight: `_build_provider`
+# raises a clear "not implemented yet" for any `manager.type` without one,
+# rather than silently skipping that manager.
 #
 # Cisco has exactly one entry point, and it is UCS_CENTRAL:
 #
@@ -118,6 +142,7 @@ def _ucs_central_provider(
 # future provider must match.
 _PROVIDER_FACTORIES: dict[ManagerType, Callable[..., ServerInventoryProvider]] = {
     ManagerType.UCS_CENTRAL: _ucs_central_provider,
+    ManagerType.OPENMANAGE: _openmanage_provider,
 }
 
 
@@ -352,24 +377,33 @@ async def _dry_run_one_manager(
             break
         count += 1
         site = parse_site_code(ps.name)
+        bmc = parse_bmc_address(ps.bmc_address_raw)
         print(
             f"\n[{count}] {ps.name}"
-            f"\n     external_id : {ps.external_id}"
+            f"\n     serial      : {ps.serial or '—'}"
             f"\n     site (from name): {site.value if site else '— none in name'}"
-            f"\n     vendor/model: {ps.vendor} / {ps.model}"
-            f"\n     serial/uuid : {ps.serial} / {ps.system_uuid}"
+            f"\n     vendor      : {ps.vendor}"
+            f"\n     model       : {ps.model or '—'}"
             f"\n     cpu         : {ps.cpu_sockets} sockets, {ps.cpu_cores} cores,"
             f" {ps.cpu_threads} threads ({ps.cpu_model or 'model unknown'})"
             f"\n     memory      : {ps.memory_total_bytes / 1024**3:.1f} GiB"
             f"\n     storage     : {_format_capacity(ps.storage_total_bytes)} total across"
             f" {len(ps.storage_drives)} drive(s)"
-            f"\n     bmc         : {ps.bmc_address_raw or '—'} (mac {ps.bmc_mac or '—'})"
+            f"\n     bmc         : {(bmc.host if bmc else None) or '—'}"
             f"\n     profile     : {ps.profile_dn or '—'}"
             f"\n     profile tmpl: {ps.profile_template_name or '—'}"
             f" [{ps.profile_template_external_id or '—'}]"
-            f"\n     nic macs    : {', '.join(ps.nic_macs) if ps.nic_macs else '—'}"
+            f"\n     nics        : {len(ps.nics) if ps.nics else len(ps.nic_macs)}"
             f"\n     attachments : {len(ps.attachments)}"
         )
+        for nic in ps.nics:
+            speed = f"  {nic.speed_mbps}mbps" if nic.speed_mbps else ""
+            print(f"        nic {nic.name}  mac={nic.mac or '—'}  {nic.link_state}{speed}")
+        # Providers that report only a flat MAC list (no per-NIC link
+        # state) still get their MACs shown, just without an up/down.
+        if not ps.nics:
+            for mac in ps.nic_macs:
+                print(f"        nic —  mac={mac}  (link state not reported)")
         for a in ps.attachments:
             print(
                 f"        fabric {a.fabric}  if={a.server_interface}"

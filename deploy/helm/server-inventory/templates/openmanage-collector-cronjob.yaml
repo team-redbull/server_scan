@@ -1,0 +1,77 @@
+{{- /*
+The Dell collector: one CronJob against one OpenManage Enterprise
+appliance, which manages the whole Dell estate.
+
+The pod talks only to OME. Two bulk REST calls enumerate every server
+profile and managed device; the servers whose name matches `namePattern`
+are then inventoried over per-device calls that OME serves from each
+server's iDRAC. `envFrom` pulls the shared vendor Secret for the
+appliance login (INVENTORY_OME_IP/_USERNAME/_PASSWORD).
+
+See docs/dell-collectors.md.
+*/ -}}
+{{- if .Values.collectors.ome.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ .Release.Name }}-collector-openmanage
+  labels:
+    app.kubernetes.io/name: {{ .Release.Name }}-collector-openmanage
+    app.kubernetes.io/component: collector
+    app.kubernetes.io/part-of: server-inventory
+spec:
+  schedule: {{ .Values.collectors.ome.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 5
+  jobTemplate:
+    spec:
+      backoffLimit: {{ .Values.collectors.ome.backoffLimit }}
+      activeDeadlineSeconds: {{ .Values.collectors.ome.activeDeadlineSeconds }}
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: collector
+              image: "{{ .Values.backend.image.repository }}:{{ .Values.backend.image.tag }}"
+              imagePullPolicy: {{ .Values.backend.image.pullPolicy }}
+              command: ["python3", "-m", "tools.run_collector", "--manager-type", "OPENMANAGE"]
+              env:
+                - name: INVENTORY_ENVIRONMENT
+                  value: production
+                # Which servers this collector may ingest at all, matched
+                # against the server's name. Collector-scoped, so it lives
+                # here rather than in the API ConfigMap this also mounts.
+                - name: INVENTORY_COLLECTOR_NAME_PATTERN
+                  value: {{ .Values.collectors.namePattern | quote }}
+                # How many servers to inventory at once. Collector-scoped
+                # like the pattern above.
+                - name: INVENTORY_OME_INVENTORY_CONCURRENCY
+                  value: {{ .Values.collectors.ome.inventoryConcurrency | quote }}
+                - name: INVENTORY_MONGO_URI
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.db.secretName }}
+                      key: mongo-uri
+                - name: INVENTORY_REDIS_URI
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.db.secretName }}
+                      key: redis-uri
+              envFrom:
+                - configMapRef:
+                    name: {{ .Release.Name }}-api-config
+                # Endpoint + login for every vendor, as INVENTORY_* env
+                # vars. `envFrom` a Secret rather than inline `env` so the
+                # passwords aren't readable in the pod spec.
+                - secretRef:
+                    name: {{ .Values.collectors.existingSecret | default (printf "%s-collector-credentials" .Release.Name) }}
+              resources:
+                {{- toYaml .Values.collectors.ome.resources | nindent 16 }}
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: ["ALL"]
+                readOnlyRootFilesystem: true
+                runAsNonRoot: true
+{{- end }}

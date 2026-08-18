@@ -148,6 +148,14 @@ class Settings(BaseSettings):
     # blocking SDK call parked in a worker thread.
     ucs_central_domain_concurrency: int = 4
 
+    # How many Dell servers the OpenManage collector inventories at once.
+    # One OME appliance answers the whole estate, so this bounds the
+    # per-device inventory fan-out (each matched server costs one HTTP call
+    # per hardware section) without bounding correctness — the two bulk
+    # enumeration calls run once regardless. Kept modest to stay a polite
+    # client of a single appliance.
+    ome_inventory_concurrency: int = 8
+
     # Which servers a collector is allowed to ingest at all, as a regex
     # matched against the server's name (`re.search`, so "starts with" is
     # spelled `^ocp`). A vendor manager holds the whole datacenter, not
