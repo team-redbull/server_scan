@@ -273,12 +273,13 @@ class TestListServers:
         assert server.nic_macs == ("00:aa:bb:cc:dd:ee",)
         assert [a.fabric for a in server.attachments] == ["A"]
 
-    async def test_management_ip_pool_address_is_joined_and_preferred(self) -> None:
+    async def test_management_ip_pool_address_under_the_profile_dn_is_preferred(self) -> None:
         """Real hardware, unlike UCSPE, can have `mgmtIf.ext_ip` unset while
         the service profile's management IP address policy already
-        assigned a real address via `vnicIpV4PooledAddr` — a sibling of
-        `mgmt/if-1` under the same `mgmtController`. See
-        `ucs_common.management_ip_address`.
+        assigned a real address — recorded as a direct child of the
+        *service profile's own DN* (`org-root/ls-worker-01/ipv4-pooled-addr`
+        in `_domain()`'s fixture), confirmed to be the one UCS Manager
+        actually populates. See `ucs_common.management_ip_by_parent_dn`.
         """
         domain = _domain()
         domain["mgmtIf"] = [
@@ -290,7 +291,7 @@ class TestListServers:
             )
         ]
         domain["vnicIpV4PooledAddr"] = [
-            SimpleNamespace(dn="sys/chassis-1/blade-1/mgmt/ipv4-pooled-addr", addr="10.9.8.7")
+            SimpleNamespace(dn="org-root/ls-worker-01/ipv4-pooled-addr", addr="10.9.8.7")
         ]
         client = FakeUcsClient(responses=domain)
         [server] = await _collect(_provider(client))
@@ -299,6 +300,34 @@ class TestListServers:
         # The MAC still comes off the physical mgmtIf regardless of which
         # source supplied the address.
         assert server.bmc_mac == "00:11:22:33:44:55"
+
+    async def test_management_ip_pool_address_falls_back_to_the_mgmt_controller_dn(self) -> None:
+        """Schema-valid per `ucsmsdk`'s `mo_meta.parents`, but not
+        confirmed populated on real hardware — kept as a fallback, tried
+        only once the profile-scoped DN misses.
+        """
+        domain = _domain()
+        domain["mgmtIf"] = [
+            SimpleNamespace(
+                dn="sys/chassis-1/blade-1/mgmt/if-1",
+                access="out-of-band",
+                ext_ip="0.0.0.0",  # noqa: S104 - unset-IP sentinel, not a bind
+                mac="00:11:22:33:44:55",
+            )
+        ]
+        domain["vnicIpV4PooledAddr"] = [
+            SimpleNamespace(dn="sys/chassis-1/blade-1/mgmt/ipv4-pooled-addr", addr="10.5.5.5")
+        ]
+        client = FakeUcsClient(responses=domain)
+        [server] = await _collect(_provider(client))
+
+        assert server.bmc_address_raw == "ipmi://10.5.5.5:623"
+
+    async def test_profile_dn_is_reported_on_the_provider_server(self) -> None:
+        client = FakeUcsClient(responses=_domain())
+        [server] = await _collect(_provider(client))
+
+        assert server.profile_dn == "org-root/ls-worker-01"
 
     async def test_never_queries_a_nonexistent_template_class(self) -> None:
         """There is no `lsServiceProfileTemplate` class in UCS Manager's

@@ -90,7 +90,7 @@ class TestComputeUnitToProviderServer:
             profile_by_dn={profile.dn: profile},
             template_dn_by_name={template.name: template.dn},
             mgmt_if=mgmt_if,
-            mgmt_ip_addr=None,
+            mgmt_ip_by_parent_dn={},
             ext_eth_ifs=[adapter_if],
             host_eth_ifs=[],
             cpu_units=[],
@@ -125,7 +125,7 @@ class TestComputeUnitToProviderServer:
             profile_by_dn={},
             template_dn_by_name={},
             mgmt_if=None,
-            mgmt_ip_addr=None,
+            mgmt_ip_by_parent_dn={},
             ext_eth_ifs=[],
             host_eth_ifs=[],
             cpu_units=[],
@@ -143,7 +143,7 @@ class TestComputeUnitToProviderServer:
             profile_by_dn={profile.dn: profile},
             template_dn_by_name={},
             mgmt_if=None,
-            mgmt_ip_addr=None,
+            mgmt_ip_by_parent_dn={},
             ext_eth_ifs=[],
             host_eth_ifs=[],
             cpu_units=[],
@@ -161,7 +161,7 @@ class TestComputeUnitToProviderServer:
             profile_by_dn={profile.dn: profile},
             template_dn_by_name={},  # no lsServiceProfileTemplate matched
             mgmt_if=None,
-            mgmt_ip_addr=None,
+            mgmt_ip_by_parent_dn={},
             ext_eth_ifs=[],
             host_eth_ifs=[],
             cpu_units=[],
@@ -177,7 +177,7 @@ class TestComputeUnitToProviderServer:
             profile_by_dn={},
             template_dn_by_name={},
             mgmt_if=None,
-            mgmt_ip_addr=None,
+            mgmt_ip_by_parent_dn={},
             ext_eth_ifs=[],
             host_eth_ifs=[],
             cpu_units=[],
@@ -194,7 +194,7 @@ class TestComputeUnitToProviderServer:
             profile_by_dn={},
             template_dn_by_name={},
             mgmt_if=_mgmt_if(ext_ip=unset_ip),
-            mgmt_ip_addr=None,
+            mgmt_ip_by_parent_dn={},
             ext_eth_ifs=[],
             host_eth_ifs=[],
             cpu_units=[],
@@ -205,22 +205,44 @@ class TestComputeUnitToProviderServer:
     def test_management_ip_pool_address_is_preferred_over_mgmt_if_ext_ip(self) -> None:
         """On real hardware `mgmtIf.ext_ip` was seen unset while the
         service profile's management IP address policy had already
-        assigned a real address via `vnicIpV4PooledAddr` — see
-        `ucs_common.management_ip_address`.
+        assigned a real address — recorded as a direct child of the
+        *profile's own DN*, not the physical `mgmtController`, confirmed
+        against real UCS Manager hardware. See
+        `ucs_common.management_ip_by_parent_dn`.
         """
+        profile = _profile()
         result = compute_unit_to_provider_server(
             _blade(),
             manager_id="mgr_1",
-            profile_by_dn={},
+            profile_by_dn={profile.dn: profile},
             template_dn_by_name={},
             mgmt_if=_mgmt_if(ext_ip="0.0.0.0"),  # noqa: S104 - sentinel, not a bind
-            mgmt_ip_addr=_mgmt_ip_addr(addr="10.9.8.7"),
+            mgmt_ip_by_parent_dn={profile.dn: _mgmt_ip_addr(addr="10.9.8.7")},
             ext_eth_ifs=[],
             host_eth_ifs=[],
             cpu_units=[],
             disk_units=[],
         )
         assert result.bmc_address_raw == "ipmi://10.9.8.7:623"
+
+    def test_management_ip_falls_back_to_the_physical_mgmt_controller_dn(self) -> None:
+        """Schema-valid per `ucsmsdk`'s `mo_meta.parents`, but not
+        confirmed populated on real hardware — kept as a fallback for a
+        deployment that does use it.
+        """
+        result = compute_unit_to_provider_server(
+            _blade(assigned_to_dn=""),
+            manager_id="mgr_1",
+            profile_by_dn={},
+            template_dn_by_name={},
+            mgmt_if=None,
+            mgmt_ip_by_parent_dn={"sys/chassis-1/blade-3/mgmt": _mgmt_ip_addr(addr="10.5.5.5")},
+            ext_eth_ifs=[],
+            host_eth_ifs=[],
+            cpu_units=[],
+            disk_units=[],
+        )
+        assert result.bmc_address_raw == "ipmi://10.5.5.5:623"
 
     def test_mgmt_if_ext_ip_is_the_fallback_with_no_pooled_address(self) -> None:
         result = compute_unit_to_provider_server(
@@ -229,13 +251,44 @@ class TestComputeUnitToProviderServer:
             profile_by_dn={},
             template_dn_by_name={},
             mgmt_if=_mgmt_if(ext_ip="10.1.2.3"),
-            mgmt_ip_addr=None,
+            mgmt_ip_by_parent_dn={},
             ext_eth_ifs=[],
             host_eth_ifs=[],
             cpu_units=[],
             disk_units=[],
         )
         assert result.bmc_address_raw == "ipmi://10.1.2.3:623"
+
+    def test_profile_dn_is_populated_from_the_assigned_service_profile(self) -> None:
+        profile = _profile()
+        result = compute_unit_to_provider_server(
+            _blade(),
+            manager_id="mgr_1",
+            profile_by_dn={profile.dn: profile},
+            template_dn_by_name={},
+            mgmt_if=None,
+            mgmt_ip_by_parent_dn={},
+            ext_eth_ifs=[],
+            host_eth_ifs=[],
+            cpu_units=[],
+            disk_units=[],
+        )
+        assert result.profile_dn == "org-root/ls-worker-01"
+
+    def test_profile_dn_is_none_with_no_assigned_profile(self) -> None:
+        result = compute_unit_to_provider_server(
+            _blade(assigned_to_dn=""),
+            manager_id="mgr_1",
+            profile_by_dn={},
+            template_dn_by_name={},
+            mgmt_if=None,
+            mgmt_ip_by_parent_dn={},
+            ext_eth_ifs=[],
+            host_eth_ifs=[],
+            cpu_units=[],
+            disk_units=[],
+        )
+        assert result.profile_dn is None
 
     def test_adapter_with_no_switch_id_is_not_an_attachment(self) -> None:
         result = compute_unit_to_provider_server(
@@ -244,7 +297,7 @@ class TestComputeUnitToProviderServer:
             profile_by_dn={},
             template_dn_by_name={},
             mgmt_if=None,
-            mgmt_ip_addr=None,
+            mgmt_ip_by_parent_dn={},
             ext_eth_ifs=[_adapter_if(switch_id="NONE")],
             host_eth_ifs=[],
             cpu_units=[],
@@ -262,7 +315,7 @@ class TestComputeUnitToProviderServer:
             profile_by_dn={},
             template_dn_by_name={},
             mgmt_if=None,
-            mgmt_ip_addr=None,
+            mgmt_ip_by_parent_dn={},
             ext_eth_ifs=[
                 _adapter_if(name="eth0", mac="AA:00:00:00:00:00", switch_id="A"),
                 _adapter_if(name="eth1", mac="AA:00:00:00:00:01", switch_id="B"),
@@ -284,7 +337,7 @@ class TestComputeUnitToProviderServer:
             profile_by_dn={},
             template_dn_by_name={},
             mgmt_if=None,
-            mgmt_ip_addr=None,
+            mgmt_ip_by_parent_dn={},
             ext_eth_ifs=[_adapter_if(mac="6C:B2:AE:00:00:01", switch_id="A")],
             host_eth_ifs=[_adapter_if(mac="00:25:B5:00:00:01", switch_id="A")],
             cpu_units=[],
@@ -303,7 +356,7 @@ class TestComputeUnitToProviderServer:
             profile_by_dn={},
             template_dn_by_name={},
             mgmt_if=None,
-            mgmt_ip_addr=None,
+            mgmt_ip_by_parent_dn={},
             ext_eth_ifs=[_adapter_if(mac="6C:B2:AE:00:00:01", switch_id="A")],
             host_eth_ifs=[],
             cpu_units=[],
@@ -322,7 +375,7 @@ class TestComputeUnitToProviderServer:
             profile_by_dn={},
             template_dn_by_name={},
             mgmt_if=None,
-            mgmt_ip_addr=None,
+            mgmt_ip_by_parent_dn={},
             ext_eth_ifs=[_adapter_if(name="eth0", switch_id="A")],
             host_eth_ifs=[_adapter_if(name="vnic0", switch_id="B")],
             cpu_units=[],
@@ -340,7 +393,7 @@ class TestComputeUnitToProviderServer:
             profile_by_dn={},
             template_dn_by_name={},
             mgmt_if=None,
-            mgmt_ip_addr=None,
+            mgmt_ip_by_parent_dn={},
             ext_eth_ifs=[],
             host_eth_ifs=[],
             cpu_units=[],
@@ -373,7 +426,7 @@ class TestComputeUnitToProviderServer:
             profile_by_dn={},
             template_dn_by_name={},
             mgmt_if=None,
-            mgmt_ip_addr=None,
+            mgmt_ip_by_parent_dn={},
             ext_eth_ifs=[],
             host_eth_ifs=[],
             cpu_units=[],
@@ -416,7 +469,7 @@ class TestCpuAndStorage:
             profile_by_dn={},
             template_dn_by_name={},
             mgmt_if=None,
-            mgmt_ip_addr=None,
+            mgmt_ip_by_parent_dn={},
             ext_eth_ifs=[],
             host_eth_ifs=[],
             cpu_units=[
@@ -434,7 +487,7 @@ class TestCpuAndStorage:
             profile_by_dn={},
             template_dn_by_name={},
             mgmt_if=None,
-            mgmt_ip_addr=None,
+            mgmt_ip_by_parent_dn={},
             ext_eth_ifs=[],
             host_eth_ifs=[],
             cpu_units=[_processor_unit(presence="empty")],
@@ -449,7 +502,7 @@ class TestCpuAndStorage:
             profile_by_dn={},
             template_dn_by_name={},
             mgmt_if=None,
-            mgmt_ip_addr=None,
+            mgmt_ip_by_parent_dn={},
             ext_eth_ifs=[],
             host_eth_ifs=[],
             cpu_units=[],
@@ -474,7 +527,7 @@ class TestCpuAndStorage:
             profile_by_dn={},
             template_dn_by_name={},
             mgmt_if=None,
-            mgmt_ip_addr=None,
+            mgmt_ip_by_parent_dn={},
             ext_eth_ifs=[],
             host_eth_ifs=[],
             cpu_units=[],
@@ -490,7 +543,7 @@ class TestCpuAndStorage:
             profile_by_dn={},
             template_dn_by_name={},
             mgmt_if=None,
-            mgmt_ip_addr=None,
+            mgmt_ip_by_parent_dn={},
             ext_eth_ifs=[],
             host_eth_ifs=[],
             cpu_units=[],
@@ -518,7 +571,7 @@ class TestCpuAndStorage:
             profile_by_dn={},
             template_dn_by_name={},
             mgmt_if=None,
-            mgmt_ip_addr=None,
+            mgmt_ip_by_parent_dn={},
             ext_eth_ifs=[],
             host_eth_ifs=[],
             cpu_units=[],
@@ -533,7 +586,7 @@ class TestCpuAndStorage:
             profile_by_dn={},
             template_dn_by_name={},
             mgmt_if=None,
-            mgmt_ip_addr=None,
+            mgmt_ip_by_parent_dn={},
             ext_eth_ifs=[],
             host_eth_ifs=[],
             cpu_units=[],

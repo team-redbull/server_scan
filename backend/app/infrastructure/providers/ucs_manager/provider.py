@@ -21,7 +21,7 @@ from app.infrastructure.providers.ucs_common import (
     is_equipped as _is_equipped,
 )
 from app.infrastructure.providers.ucs_common import (
-    management_ip_address as _management_ip_address,
+    management_ip_by_parent_dn as _management_ip_by_parent_dn,
 )
 from app.infrastructure.providers.ucs_common import (
     partition_profiles as _partition_profiles,
@@ -133,9 +133,7 @@ class UcsManagerProvider:
             servers = [mo for mo in (*blades, *rack_units) if _is_equipped(mo)]
             server_dns = [mo.dn for mo in servers]
             mgmt_ifs_by_server = _group_by_owning_server_dn(mgmt_ifs, server_dns=server_dns)
-            mgmt_ip_addrs_by_server = _group_by_owning_server_dn(
-                (*mgmt_ip_pooled, *mgmt_ip_static), server_dns=server_dns
-            )
+            mgmt_ip_by_parent_dn = _management_ip_by_parent_dn((*mgmt_ip_pooled, *mgmt_ip_static))
             ext_eth_ifs_by_server = _group_by_owning_server_dn(
                 ext_eth_ifs_all, server_dns=server_dns
             )
@@ -147,16 +145,13 @@ class UcsManagerProvider:
 
             for server_mo in servers:
                 mgmt_if = _bmc_interface(mgmt_ifs_by_server[server_mo.dn], server_dn=server_mo.dn)
-                mgmt_ip_addr = _management_ip_address(
-                    mgmt_ip_addrs_by_server[server_mo.dn], server_dn=server_mo.dn
-                )
                 yield compute_unit_to_provider_server(
                     server_mo,
                     manager_id=self._manager.id,
                     profile_by_dn=profile_by_dn,
                     template_dn_by_name=template_dn_by_name,
                     mgmt_if=mgmt_if,
-                    mgmt_ip_addr=mgmt_ip_addr,
+                    mgmt_ip_by_parent_dn=mgmt_ip_by_parent_dn,
                     ext_eth_ifs=ext_eth_ifs_by_server[server_mo.dn],
                     host_eth_ifs=host_eth_ifs_by_server[server_mo.dn],
                     cpu_units=cpu_units_by_server[server_mo.dn],

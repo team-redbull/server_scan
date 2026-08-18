@@ -68,6 +68,37 @@ def _server_name(server_mo: Any, profile: Any | None) -> str:
     return profile_name or getattr(server_mo, "name", None) or str(server_mo.dn)
 
 
+def _management_ip_addr(
+    *, profile: Any | None, server_mo: Any, mgmt_ip_by_parent_dn: dict[str, Any]
+) -> Any | None:
+    """
+    Resolve a server's `vnicIpV4PooledAddr`/`vnicIpV4StaticAddr`, trying
+    both DNs that MO can legitimately hang directly off of.
+
+    The service profile's own DN is tried first — confirmed against real
+    UCS Manager hardware to be the one actually populated — and the
+    compute unit's `mgmtController` DN second, which is schema-valid per
+    `ucsmsdk`'s `mo_meta.parents` but was empty on the hardware this was
+    verified against. See docs/cisco-collectors.md, "BMC and management
+    interface selection".
+
+    Args:
+        profile (Any | None): The server's `lsServer` service profile, or
+            `None`.
+        server_mo (Any): The `computeBlade` or `computeRackUnit` MO.
+        mgmt_ip_by_parent_dn (dict[str, Any]): From
+            `ucs_common.management_ip_by_parent_dn`.
+
+    Returns:
+        Any | None: The resolved MO, or `None` if neither DN has one.
+    """
+    if profile is not None:
+        by_profile = mgmt_ip_by_parent_dn.get(profile.dn)
+        if by_profile is not None:
+            return by_profile
+    return mgmt_ip_by_parent_dn.get(f"{server_mo.dn}/mgmt")
+
+
 def _bmc_address(mgmt_if: Any | None, mgmt_ip_addr: Any | None) -> str | None:
     """
     The CIMC's out-of-band address as a BMC URI.
@@ -76,7 +107,7 @@ def _bmc_address(mgmt_if: Any | None, mgmt_ip_addr: Any | None) -> str | None:
         mgmt_if (Any | None): The server's own `mgmtIf`, or `None`.
         mgmt_ip_addr (Any | None): Its resolved
             `vnicIpV4PooledAddr`/`vnicIpV4StaticAddr`, from
-            `ucs_common.management_ip_address`, or `None`.
+            `_management_ip_addr`, or `None`.
 
     Returns:
         str | None: An `ipmi://host:623` URI in the form
@@ -356,7 +387,7 @@ def compute_unit_to_provider_server(
     profile_by_dn: dict[str, Any],
     template_dn_by_name: dict[str, str],
     mgmt_if: Any | None,
-    mgmt_ip_addr: Any | None,
+    mgmt_ip_by_parent_dn: dict[str, Any],
     ext_eth_ifs: list[Any],
     host_eth_ifs: list[Any],
     cpu_units: list[Any],
@@ -375,9 +406,9 @@ def compute_unit_to_provider_server(
         profile_by_dn (dict[str, Any]): Service profile DN -> `lsServer`.
         template_dn_by_name (dict[str, str]): Template name -> DN.
         mgmt_if (Any | None): The server's own `mgmtIf`, or `None`.
-        mgmt_ip_addr (Any | None): Its resolved
-            `vnicIpV4PooledAddr`/`vnicIpV4StaticAddr`, from
-            `ucs_common.management_ip_address`, or `None`.
+        mgmt_ip_by_parent_dn (dict[str, Any]): Every domain
+            `vnicIpV4PooledAddr`/`vnicIpV4StaticAddr` with a real address,
+            from `ucs_common.management_ip_by_parent_dn`.
         ext_eth_ifs (list[Any]): Its `adaptorExtEthIf` MOs.
         host_eth_ifs (list[Any]): Its `adaptorHostEthIf` MOs.
         cpu_units (list[Any]): Its `processorUnit` MOs.
@@ -392,6 +423,9 @@ def compute_unit_to_provider_server(
     profile = profile_by_dn.get(getattr(server_mo, "assigned_to_dn", None) or "")
     template_name, template_external_id = _profile_template_fields(
         profile, template_dn_by_name=template_dn_by_name
+    )
+    mgmt_ip_addr = _management_ip_addr(
+        profile=profile, server_mo=server_mo, mgmt_ip_by_parent_dn=mgmt_ip_by_parent_dn
     )
 
     total_memory_mb = _as_int(getattr(server_mo, "total_memory", None))
@@ -408,6 +442,7 @@ def compute_unit_to_provider_server(
         bmc_address_raw=_bmc_address(mgmt_if, mgmt_ip_addr),
         bmc_mac=getattr(mgmt_if, "mac", None) if mgmt_if is not None else None,
         manager_id=manager_id,
+        profile_dn=profile.dn if profile is not None else None,
         profile_template_name=template_name,
         profile_template_external_id=template_external_id,
         cpu_sockets=_as_int(getattr(server_mo, "num_of_cpus", None)),

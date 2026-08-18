@@ -70,6 +70,14 @@ class ProviderServer:
     # collects with nothing downstream able to tell.
     manager_id: str | None = None
 
+    # The service/deployment profile's own identity — UCS Manager's DN,
+    # which doubles as its org path (e.g. `org-root/org-five/ls-worker-01`).
+    # Distinct from `profile_template_*` below: this is the one instance
+    # bound to this server, not the reusable template it was created from.
+    # Not currently persisted past the dry-run print — see
+    # docs/cisco-collectors.md if a vendor other than Cisco populates this.
+    profile_dn: str | None = None
+
     # The reusable profile/deployment template this server's configuration
     # came from — UCS Manager's Service Profile Template, Intersight's
     # Server Profile Template, OneView's Server Profile Template, or an

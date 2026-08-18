@@ -173,34 +173,47 @@ is reachable the same way a standalone one is. `0.0.0.0` and `none` are
 unset sentinels and yield `None`, not an address, from either source
 below.
 
-**The address itself has two possible sources, and `mgmtIf.ext_ip` is
-not reliably the populated one.** Discovered against real hardware
-(2026-08-18), not UCSPE — the emulator never got a service profile past
-`config-failure`, so it never exercised this path at all. A fully
-associated profile assigns the CIMC's out-of-band address through the
-service profile's management IP address policy, which UCS Manager
-records as a `vnicIpV4PooledAddr` (pool-assigned) or `vnicIpV4StaticAddr`
-(static) MO — confirmed from the installed `ucsmsdk`'s `mo_meta.parents`
-for both classes, which list `mgmtController` alongside `lsServer`. That
-places it as a *sibling* of the physical `mgmtIf` under the same
-`{server_dn}/mgmt` controller (`.../mgmt/ipv4-pooled-addr`), so
-`ucs_common.management_ip_address` selects it the same way
-`bmc_interface` selects `mgmtIf` — by DN prefix, not by querying through
-the service profile. On the domain observed, `mgmtIf.ext_ip` came back
-an unset sentinel while the pooled address carried the real one;
-`_bmc_address` therefore tries `mgmt_ip_addr.addr` first and falls back
-to `mgmt_if.ext_ip` only when that MO is absent or also unset. The
-`bmc_mac` field is unaffected — it still comes from `mgmtIf.mac`, which
-was populated in the same run; only the *address* half of the pair was
-missing.
+**The address itself has three possible sources, tried in this order,
+and `mgmtIf.ext_ip` is the least reliable one.** Discovered against real
+hardware in two passes (2026-08-18), not UCSPE — the emulator never got
+a service profile past `config-failure`, so it never exercised any of
+this. A fully associated profile assigns the CIMC's out-of-band address
+through the service profile's management IP address policy, which UCS
+Manager records as a `vnicIpV4PooledAddr` (pool-assigned) or
+`vnicIpV4StaticAddr` (static) MO. Both classes list two different valid
+parents in the installed `ucsmsdk`'s `mo_meta.parents`: the service
+profile's own `lsServer` DN, and the physical compute unit's
+`mgmtController` (a sibling of `mgmtIf`, at `{server_dn}/mgmt`).
 
-The sibling project team-redbull/ServerScanner reaches the same address
-by a different route worth recording: it queries `VnicIpV4PooledAddr`
-as a child of the service profile's own DN (`lsServer`) rather than the
-physical compute unit's `mgmtController`. Both are valid parents per the
-SDK's `mo_meta` — this codebase chose the compute-unit route so the
-lookup stays inside the same per-domain grandchild-join pass as
-`mgmtIf`, rather than adding a second join keyed by service profile.
+The **first pass** assumed the compute-unit location, by analogy with
+`bmc_interface`'s DN-prefix selection of `mgmtIf` — reasonable from the
+schema alone, but empirically wrong: on the domain that surfaced this,
+querying `vnicIpV4PooledAddr`/`vnicIpV4StaticAddr` domain-wide and
+joining by compute-unit DN prefix found nothing, and the BMC address
+still came back missing after that fix shipped. The **second pass**
+found the actually-populated location: a **direct child of the service
+profile's own DN** (`{profile_dn}/ipv4-pooled-addr`), matching what the
+sibling project team-redbull/ServerScanner does in production — its
+`CiscoStrategy` queries `VnicIpV4PooledAddr` as a child of the service
+profile MO it already has in hand, never of the physical compute unit.
+
+`ucs_common.management_ip_by_parent_dn` indexes every
+`vnicIpV4PooledAddr`/`vnicIpV4StaticAddr` carrying a real address by its
+immediate parent DN, keeping both a profile-scoped and a
+compute-unit-scoped entry possible in the same dict — one domain-wide
+pass covers both without a second per-server query. Per server,
+`mapping._management_ip_addr` looks up the assigned profile's DN first
+and the compute unit's `{server_dn}/mgmt` DN second, so a deployment
+that does populate the compute-unit-scoped MO (schema-valid, just not
+observed) is still covered as a fallback rather than silently dropped.
+`_bmc_address` then tries that resolved MO's `addr` first and falls back
+to `mgmt_if.ext_ip` only when neither DN resolved one. On the domain
+observed, `mgmtIf.ext_ip` came back an unset sentinel while the
+profile-scoped pooled address carried the real one; `bmc_mac` was
+unaffected throughout — it always came from `mgmtIf.mac`, populated in
+every run. Only the *address* half of the pair was ever missing, and
+only because it was being looked for in the wrong of two schema-valid
+places.
 
 ## Service profiles and server names
 
@@ -216,6 +229,21 @@ installation-type convention the classification rules match on. A
 UCS-sourced fleet would be permanently unsited and unclassified. The DN
 remains the last-resort name, and stays the `external_id` regardless —
 identity and display name are different jobs.
+
+### The profile's own DN doubles as its org path
+
+`ProviderServer.profile_dn` carries the assigned `lsServer`'s own DN
+verbatim (e.g. `org-root/org-five/ls-worker-01`), populated in
+`compute_unit_to_provider_server` alongside the template fields. UCS
+Manager organizations nest as DN segments, so this single string is both
+"which service profile" and "which org tree it lives in" — there is no
+separate org field to carry. It is distinct from `profile_template_*`:
+that pair names the reusable template a profile was created from, this
+names the one profile instance bound to this specific server. Currently
+surfaced only in `tools/run_collector.py`'s `--dry-run` print, not
+threaded into `IngestService`/`Server` — adding persistence is a
+separate decision (`Server` model, MongoDB, API, UI) that hasn't been
+asked for yet.
 
 ### Profiles and templates share one class
 
