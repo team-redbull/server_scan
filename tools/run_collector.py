@@ -296,6 +296,23 @@ async def _build_provider(
     )
 
 
+def _format_capacity(capacity_bytes: int) -> str:
+    """
+    Render a byte count as GiB, or TiB once it is large enough that GiB
+    stops being readable at a glance.
+
+    Args:
+        capacity_bytes (int): The capacity to render, in bytes.
+
+    Returns:
+        str: e.g. `"512.0 GiB"` below 1024 GiB, `"9.60 TiB"` at or above it.
+    """
+    gib = capacity_bytes / 1024**3
+    if gib >= 1024:
+        return f"{gib / 1024:.2f} TiB"
+    return f"{gib:.1f} GiB"
+
+
 async def _dry_run_one_manager(
     manager: Manager,
     *,
@@ -344,7 +361,7 @@ async def _dry_run_one_manager(
             f"\n     cpu         : {ps.cpu_sockets} sockets, {ps.cpu_cores} cores,"
             f" {ps.cpu_threads} threads ({ps.cpu_model or 'model unknown'})"
             f"\n     memory      : {ps.memory_total_bytes / 1024**3:.1f} GiB"
-            f"\n     storage     : {ps.storage_total_bytes / 1024**3:.1f} GiB total across"
+            f"\n     storage     : {_format_capacity(ps.storage_total_bytes)} total across"
             f" {len(ps.storage_drives)} drive(s)"
             f"\n     bmc         : {ps.bmc_address_raw or '—'} (mac {ps.bmc_mac or '—'})"
             f"\n     profile tmpl: {ps.profile_template_name or '—'}"
@@ -361,7 +378,7 @@ async def _dry_run_one_manager(
         for drive in ps.storage_drives:
             capacity_bytes = drive.get("capacity_bytes")
             size = (
-                f"{capacity_bytes / 1024**3:.1f} GiB"
+                _format_capacity(capacity_bytes)
                 if isinstance(capacity_bytes, int)
                 else "size unknown"
             )
