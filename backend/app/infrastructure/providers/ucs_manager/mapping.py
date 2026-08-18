@@ -68,27 +68,30 @@ def _server_name(server_mo: Any, profile: Any | None) -> str:
     return profile_name or getattr(server_mo, "name", None) or str(server_mo.dn)
 
 
-def _bmc_address(mgmt_if: Any | None) -> str | None:
+def _bmc_address(mgmt_if: Any | None, mgmt_ip_addr: Any | None) -> str | None:
     """
-    The CIMC's address as a BMC URI.
+    The CIMC's out-of-band address as a BMC URI.
 
     Args:
         mgmt_if (Any | None): The server's own `mgmtIf`, or `None`.
+        mgmt_ip_addr (Any | None): Its resolved
+            `vnicIpV4PooledAddr`/`vnicIpV4StaticAddr`, from
+            `ucs_common.management_ip_address`, or `None`.
 
     Returns:
         str | None: An `ipmi://host:623` URI in the form
             `app.domain.value_objects.bmc_address.parse_bmc_address`
-            recognizes for Cisco, or `None` when there is no interface or
-            its `ext_ip` is an unset sentinel.
+            recognizes for Cisco, or `None` when neither source has an
+            address.
 
     See docs/cisco-collectors.md, "BMC and management interface selection".
     """
-    if mgmt_if is None:
+    addr = getattr(mgmt_ip_addr, "addr", None) if mgmt_ip_addr is not None else None
+    if not addr and mgmt_if is not None:
+        addr = getattr(mgmt_if, "ext_ip", None)
+    if not addr or addr in ("0.0.0.0", "none"):  # noqa: S104 - unset-IP sentinels, not a bind
         return None
-    ext_ip = getattr(mgmt_if, "ext_ip", None)
-    if not ext_ip or ext_ip in ("0.0.0.0", "none"):  # noqa: S104 - unset-IP sentinels, not a bind
-        return None
-    return f"ipmi://{ext_ip}:623"
+    return f"ipmi://{addr}:623"
 
 
 def _extract_macs(adapter_ifs: list[Any]) -> tuple[str, ...]:
@@ -353,6 +356,7 @@ def compute_unit_to_provider_server(
     profile_by_dn: dict[str, Any],
     template_dn_by_name: dict[str, str],
     mgmt_if: Any | None,
+    mgmt_ip_addr: Any | None,
     ext_eth_ifs: list[Any],
     host_eth_ifs: list[Any],
     cpu_units: list[Any],
@@ -371,6 +375,9 @@ def compute_unit_to_provider_server(
         profile_by_dn (dict[str, Any]): Service profile DN -> `lsServer`.
         template_dn_by_name (dict[str, str]): Template name -> DN.
         mgmt_if (Any | None): The server's own `mgmtIf`, or `None`.
+        mgmt_ip_addr (Any | None): Its resolved
+            `vnicIpV4PooledAddr`/`vnicIpV4StaticAddr`, from
+            `ucs_common.management_ip_address`, or `None`.
         ext_eth_ifs (list[Any]): Its `adaptorExtEthIf` MOs.
         host_eth_ifs (list[Any]): Its `adaptorHostEthIf` MOs.
         cpu_units (list[Any]): Its `processorUnit` MOs.
@@ -398,7 +405,7 @@ def compute_unit_to_provider_server(
         serial=getattr(server_mo, "serial", None) or None,
         system_uuid=getattr(server_mo, "uuid", None) or None,
         nic_macs=_nic_macs(host_eth_ifs=host_eth_ifs, ext_eth_ifs=ext_eth_ifs),
-        bmc_address_raw=_bmc_address(mgmt_if),
+        bmc_address_raw=_bmc_address(mgmt_if, mgmt_ip_addr),
         bmc_mac=getattr(mgmt_if, "mac", None) if mgmt_if is not None else None,
         manager_id=manager_id,
         profile_template_name=template_name,

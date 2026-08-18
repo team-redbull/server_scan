@@ -273,6 +273,33 @@ class TestListServers:
         assert server.nic_macs == ("00:aa:bb:cc:dd:ee",)
         assert [a.fabric for a in server.attachments] == ["A"]
 
+    async def test_management_ip_pool_address_is_joined_and_preferred(self) -> None:
+        """Real hardware, unlike UCSPE, can have `mgmtIf.ext_ip` unset while
+        the service profile's management IP address policy already
+        assigned a real address via `vnicIpV4PooledAddr` — a sibling of
+        `mgmt/if-1` under the same `mgmtController`. See
+        `ucs_common.management_ip_address`.
+        """
+        domain = _domain()
+        domain["mgmtIf"] = [
+            SimpleNamespace(
+                dn="sys/chassis-1/blade-1/mgmt/if-1",
+                access="out-of-band",
+                ext_ip="0.0.0.0",  # noqa: S104 - unset-IP sentinel, not a bind
+                mac="00:11:22:33:44:55",
+            )
+        ]
+        domain["vnicIpV4PooledAddr"] = [
+            SimpleNamespace(dn="sys/chassis-1/blade-1/mgmt/ipv4-pooled-addr", addr="10.9.8.7")
+        ]
+        client = FakeUcsClient(responses=domain)
+        [server] = await _collect(_provider(client))
+
+        assert server.bmc_address_raw == "ipmi://10.9.8.7:623"
+        # The MAC still comes off the physical mgmtIf regardless of which
+        # source supplied the address.
+        assert server.bmc_mac == "00:11:22:33:44:55"
+
     async def test_never_queries_a_nonexistent_template_class(self) -> None:
         """There is no `lsServiceProfileTemplate` class in UCS Manager's
         model — querying it makes the whole run fail. Templates come from
@@ -334,7 +361,7 @@ class TestListServers:
         servers = await _collect(_provider(client))
 
         assert len(servers) == 50
-        assert len([c for c in client.calls if c.startswith("query_classid:")]) == 8
+        assert len([c for c in client.calls if c.startswith("query_classid:")]) == 10
 
     async def test_skips_non_equipped_servers(self) -> None:
         domain = _domain()

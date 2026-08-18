@@ -166,12 +166,41 @@ when present, for domains that do set it.
 Everything else is accepted, including the `unspecified` a real blade
 reports.
 
-**Address form.** `_bmc_address` emits an `ipmi://{ext_ip}:623` URI,
+**Address form.** `_bmc_address` emits an `ipmi://{host}:623` URI,
 matching the form `app.domain.value_objects.bmc_address.parse_bmc_address`
 already recognizes for Cisco — a UCS-managed CIMC's out-of-band interface
-is reachable the same way a standalone one is. `ext_ip` values of
-`0.0.0.0` and `none` are unset sentinels and yield `None`, not an
-address.
+is reachable the same way a standalone one is. `0.0.0.0` and `none` are
+unset sentinels and yield `None`, not an address, from either source
+below.
+
+**The address itself has two possible sources, and `mgmtIf.ext_ip` is
+not reliably the populated one.** Discovered against real hardware
+(2026-08-18), not UCSPE — the emulator never got a service profile past
+`config-failure`, so it never exercised this path at all. A fully
+associated profile assigns the CIMC's out-of-band address through the
+service profile's management IP address policy, which UCS Manager
+records as a `vnicIpV4PooledAddr` (pool-assigned) or `vnicIpV4StaticAddr`
+(static) MO — confirmed from the installed `ucsmsdk`'s `mo_meta.parents`
+for both classes, which list `mgmtController` alongside `lsServer`. That
+places it as a *sibling* of the physical `mgmtIf` under the same
+`{server_dn}/mgmt` controller (`.../mgmt/ipv4-pooled-addr`), so
+`ucs_common.management_ip_address` selects it the same way
+`bmc_interface` selects `mgmtIf` — by DN prefix, not by querying through
+the service profile. On the domain observed, `mgmtIf.ext_ip` came back
+an unset sentinel while the pooled address carried the real one;
+`_bmc_address` therefore tries `mgmt_ip_addr.addr` first and falls back
+to `mgmt_if.ext_ip` only when that MO is absent or also unset. The
+`bmc_mac` field is unaffected — it still comes from `mgmtIf.mac`, which
+was populated in the same run; only the *address* half of the pair was
+missing.
+
+The sibling project team-redbull/ServerScanner reaches the same address
+by a different route worth recording: it queries `VnicIpV4PooledAddr`
+as a child of the service profile's own DN (`lsServer`) rather than the
+physical compute unit's `mgmtController`. Both are valid parents per the
+SDK's `mo_meta` — this codebase chose the compute-unit route so the
+lookup stays inside the same per-domain grandchild-join pass as
+`mgmtIf`, rather than adding a second join keyed by service profile.
 
 ## Service profiles and server names
 
@@ -564,8 +593,9 @@ are global in Central and already correct.
 
 ### Cost, and the shape this deliberately is not
 
-Two Central queries, then per collected domain one login plus the ~9
-domain-wide queries `UcsManagerProvider` issues. **That per-domain cost
+Two Central queries, then per collected domain one login plus the 10
+domain-wide queries `UcsManagerProvider` issues (pinned by
+`test_scales_query_count_independently_of_fleet_size`). **That per-domain cost
 is flat in server count** — a domain holding 500 servers costs the same
 as one holding 10 — so the only levers are how many domains get
 contacted (pruning) and how many at once (`concurrency`, from

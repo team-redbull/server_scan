@@ -104,6 +104,42 @@ def bmc_interface(mgmt_ifs: list[Any], *, server_dn: str) -> Any | None:
     )
 
 
+def management_ip_address(ip_addrs: list[Any], *, server_dn: str) -> Any | None:
+    """
+    Pick a server's assigned CIMC out-of-band management IP out of every
+    `vnicIpV4PooledAddr`/`vnicIpV4StaticAddr` found beneath its DN.
+
+    Both classes hang off the same `mgmtController` node as `mgmtIf`
+    (`{server_dn}/mgmt/ipv4-pooled-addr` or `.../ipv4-static-addr`), one
+    populated when the management IP address policy draws from a pool, the
+    other when it is set statically — confirmed against the installed
+    `ucsmsdk`'s `mo_meta.parents` for both classes. This is a distinct
+    source from `mgmtIf.ext_ip`: on real hardware `ext_ip` was seen unset
+    while the pool/static assignment carried the real address, the
+    reverse of ADR-0009's UCS Platform Emulator finding (where the
+    emulator never got far enough to assign either). See
+    docs/cisco-collectors.md, "BMC and management interface selection".
+
+    Args:
+        ip_addrs (list[Any]): Every `vnicIpV4PooledAddr`/`vnicIpV4StaticAddr`
+            found beneath `server_dn`, typically one bucket from
+            `group_by_owning_server_dn`.
+        server_dn (str): The owning compute unit's distinguished name.
+
+    Returns:
+        Any | None: The first MO carrying a real `addr`, or None if none
+            of them do.
+    """
+    own_controller_prefix = f"{server_dn}/mgmt/"
+    for mo in ip_addrs:
+        if not str(getattr(mo, "dn", "")).startswith(own_controller_prefix):
+            continue
+        addr = getattr(mo, "addr", None)
+        if addr and addr not in ("0.0.0.0", "none"):  # noqa: S104 - unset-IP sentinel
+            return mo
+    return None
+
+
 def partition_profiles(ls_servers: Iterable[Any]) -> tuple[dict[str, Any], dict[str, str]]:
     """
     Split one `lsServer` query into real service profiles and the templates
