@@ -298,6 +298,20 @@ ext-eth, 2 had only host-eth, none had both**. Querying either class
 alone leaves most of the fleet with no network data at all. Both are
 collected, and fabric attachments use both together.
 
+**On real, fully-associated hardware both classes are present at once**
+for the same physical port, unlike UCSPE — a physical uplink and the
+vNIC UCS Manager virtualizes on top of it can both report the same
+`fabric`, so `len(ProviderServer.attachments)` overcounts physical
+uplinks if the two aren't told apart. `ProviderAttachment.interface_kind`
+is `"PHYSICAL"` for an `adaptorExtEthIf` attachment, `"VNIC"` for an
+`adaptorHostEthIf` one — the two are always built as separate
+`_attachments()` calls and concatenated, never merged into one pass, so
+this label is exact rather than inferred. **To answer "what is this
+server physically cabled to," read the `PHYSICAL` rows**; the `VNIC`
+rows describe the OS-facing logical carve-out pinned to one fabric side,
+which matters for troubleshooting guest networking but not for verifying
+the wire.
+
 ### Which MAC the OS actually sees
 
 The two classes are *not* interchangeable for this, and the ADRs do not
@@ -339,10 +353,31 @@ adapter port on a server with no service profile, and
 `compute_connectivity_facts` counts neither, so an unassociated server
 does not masquerade as a fault.
 
-### Deliberately unpopulated fields
+### Fabric Interconnect identity
 
-`fabric_name`, `fabric_id`, `fabric_model` and `fabric_serial` would need
-a `networkElement` lookup this collector does not make.
+`networkElement` is queried domain-wide — exactly two results in
+practice, the redundant FI pair — and joined onto every attachment by
+its bare `id` (`"A"`/`"B"`), the same value `switch_id` already carries.
+It supplies `fabric_model` and `fabric_serial`, the two identifying
+facts UCS Manager's schema actually exposes per Fabric Interconnect.
+
+**`fabric_name` and `fabric_id` remain deliberately unpopulated.**
+`ucsmsdk`'s `NetworkElement` has no distinct configured-hostname
+property — confirmed from the installed package's `prop_meta`, which
+lists `model`/`serial`/`oob_if_ip`/etc. but nothing name-shaped beyond
+the `id` letter already captured as `fabric`. UCS's own architecture is
+why: a domain's two Fabric Interconnects share one cluster identity
+(`topSystem.name`/`topSystem.address`, the management VIP), and each
+physical FI otherwise has only its own out-of-band console IP
+(`NetworkElement.oob_if_ip`, not currently collected) — there is no
+separate per-FI DNS-style hostname in UCS Manager's own data model to
+read. A synthetic label (e.g. `f"{domain_name}-{switch_id}"`) was
+considered and deliberately not written into `fabric_name`: that field
+already flows through `IngestService` into the persisted `Server`
+document and API/UI, so inventing a value UCS Manager never configured
+would read as more authoritative than it is. Revisit if an operator's
+naming convention makes that derivation reliably correct for their
+fleet.
 
 `fabric_port` comes from `peer_dn`, which only physical ports
 (`adaptorExtEthIf`) carry — logical vNICs have no fabric-side peer. An

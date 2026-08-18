@@ -372,9 +372,10 @@ async def _dry_run_one_manager(
         )
         for a in ps.attachments:
             print(
-                f"        fabric {a.fabric}  if={a.server_interface}"
+                f"        [{a.interface_kind:8}] fabric {a.fabric}  if={a.server_interface}"
                 f"  admin={a.admin_state} oper={a.oper_state}"
                 f"  peer={a.fabric_port or '—'}"
+                f"  FI model/serial={a.fabric_model or '—'}/{a.fabric_serial or '—'}"
             )
         for drive in ps.storage_drives:
             capacity_bytes = drive.get("capacity_bytes")

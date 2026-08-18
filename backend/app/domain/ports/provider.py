@@ -41,6 +41,14 @@ class ProviderAttachment:
     oper_state: str
     speed_mbps: int | None
 
+    # "PHYSICAL" for an actual cabled uplink (e.g. Cisco's adaptorExtEthIf),
+    # "VNIC" for an OS-facing virtual NIC carved out of one (adaptorHostEthIf)
+    # — the two can both report the same `fabric`, so a server's physical
+    # port count is not derivable from `len(attachments)` without this.
+    # Defaults to "PHYSICAL" so providers that don't distinguish (the fake
+    # generator) need no change.
+    interface_kind: str = "PHYSICAL"
+
 
 @dataclass(frozen=True, slots=True)
 class ProviderServer:
