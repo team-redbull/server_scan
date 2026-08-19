@@ -146,11 +146,19 @@ over from the production scanner: `memory_total_bytes = sum(Size) * 1024^2`.
 Still an assumption (the analogue of the UCS `total_memory` MB assumption
 `docs/adr/0009` flags) — confirm a known-32 GiB DIMM reports `Size == 32768`.
 
-**Disks** (`serverArrayDisks` `Size`) are parsed by `_disk_capacity_bytes`,
-which accepts *either* a plain byte count *or* a `"<number> <unit>"` string
-(e.g. `"960.0 GB"`), because OME has been seen to report both. A numeric
-value is taken as **bytes** — note this differs from the memory field's MB.
-Verify against a real appliance and simplify once its form is known.
+**Disks** are **decimal** (base-1000): a "480GB" drive is 480e9 bytes.
+`_disk_capacity_bytes` tries several size fields
+(`Size`/`Capacity`/`CapacityBytes`/`SizeInBytes`/`RawSize`/`DiskSize`),
+each parsed as a byte count or a "<number> <unit>" string, and — because a
+live appliance populated **none** of them (every disk came back `0`) —
+falls back to the capacity in the Dell **model string**, which reliably
+ends in it ("... M.2 480GB", "... U.2 1.92TB"). That fallback is what
+actually produces capacity today; the real size field is still unknown, so
+**paste one raw `serverArrayDisks` entry** to replace the model-string
+heuristic with the true field.
+
+The dry-run renders the per-server total in **TB** and each drive in
+**GB**, both decimal (`_format_tb`/`_format_gb`).
 
 ## CPU summary
 
@@ -158,25 +166,25 @@ From `serverProcessors` `InventoryInfo`: `sockets` is the entry count,
 `cores` sums `NumberOfCores`, and the model is the first entry's
 `ModelName`, falling back to `BrandName` then `Family`.
 
-**Threads** proved to be the fragile field on live hardware: the expected
-`NumberOfLogicalProcessors` was absent and the sum came out `0`.
-`_logical_processors` now tries several field names
+**Threads** proved to be the fragile field on live hardware: none of the
+expected fields were present and no HT flag was either, so the sum came out
+`0`. `_logical_processors` tries several field names
 (`NumberOfLogicalProcessors`, `LogicalProcessorCount`, `NumberOfThreads`,
-`ThreadCount`); if none is present and hyperthreading is flagged
-(`HyperThreadingEnabled`/`HyperThreadingCapable`), threads falls back to
-`2 * cores`. **Both the field list and the HT fallback are unconfirmed** —
-paste one raw `serverProcessors` entry to pin the real field, and note that
-`HyperThreadingCapable` means *supported*, not *enabled*, so the `2 * cores`
-fallback can over-report on a machine with HT physically off.
+`ThreadCount`); when none is present, threads falls back **unconditionally**
+to `2 * cores`, since the Dell Xeons in this fleet run hyperthreaded.
+**This is a heuristic, not observed** — it over-reports on any machine with
+HT physically off. Paste one raw `serverProcessors` entry to pin the real
+thread field and drop the fallback.
 
 ## Drive health
 
 `serverArrayDisks` entries report status either as a numeric OME rollup code
 (`Status`: 1000 normal, 2000 unknown, 3000 warning, 4000 critical) or a
-string (`PrimaryStatus`/`Status`). `mapping._drive_health` handles both and
-maps onto the platform's `HealthSeverity`; `_media_type` maps `MediaType`
-(string) onto `MediaType`. Both are **inferred, not observed** — verify
-against a real appliance, especially whether `Status`/`MediaType` arrive as
-ints or strings on `serverArrayDisks` (the disk fields — `Size`,
-`ModelNumber`, `SerialNumber`, `DiskNumber`/`Slot` — should also be
-confirmed there).
+string (`PrimaryStatus`/`Status`). `mapping._drive_health` handles both.
+
+**Media type** was `UNKNOWN` on live hardware — `MediaType` is not the
+plain "SSD"/"HDD" string first assumed. `_media_type` now scans
+`MediaType`, `BusType` and the model string together and classifies NVMe /
+SSD / HDD from any of them (the fleet's drives name themselves "NVMe" in the
+model, so they resolve to `NVME`). Still worth confirming the real
+`MediaType` encoding from a raw entry.

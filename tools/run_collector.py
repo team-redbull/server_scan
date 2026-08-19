@@ -321,21 +321,35 @@ async def _build_provider(
     )
 
 
-def _format_capacity(capacity_bytes: int) -> str:
+def _format_tb(capacity_bytes: int) -> str:
     """
-    Render a byte count as GiB, or TiB once it is large enough that GiB
-    stops being readable at a glance.
+    Render a byte count as decimal TB.
+
+    Decimal (base-1000), matching how storage is marketed and reported, and
+    used for a whole server's storage total.
 
     Args:
         capacity_bytes (int): The capacity to render, in bytes.
 
     Returns:
-        str: e.g. `"512.0 GiB"` below 1024 GiB, `"9.6 TiB"` at or above it.
+        str: e.g. `"10.56 TB"`.
     """
-    gib = capacity_bytes / 1024**3
-    if gib >= 1024:
-        return f"{gib / 1024:.1f} TiB"
-    return f"{gib:.1f} GiB"
+    return f"{capacity_bytes / 1000**4:.2f} TB"
+
+
+def _format_gb(capacity_bytes: int) -> str:
+    """
+    Render a byte count as decimal GB.
+
+    Decimal (base-1000), used for an individual drive.
+
+    Args:
+        capacity_bytes (int): The capacity to render, in bytes.
+
+    Returns:
+        str: e.g. `"480.0 GB"`.
+    """
+    return f"{capacity_bytes / 1000**3:.1f} GB"
 
 
 async def _dry_run_one_manager(
@@ -387,7 +401,7 @@ async def _dry_run_one_manager(
             f"\n     cpu         : {ps.cpu_sockets} sockets, {ps.cpu_cores} cores,"
             f" {ps.cpu_threads} threads ({ps.cpu_model or 'model unknown'})"
             f"\n     memory      : {ps.memory_total_bytes / 1024**3:.1f} GiB"
-            f"\n     storage     : {_format_capacity(ps.storage_total_bytes)} total across"
+            f"\n     storage     : {_format_tb(ps.storage_total_bytes)} total across"
             f" {len(ps.storage_drives)} drive(s)"
             f"\n     bmc         : {(bmc.host if bmc else None) or '—'}"
             f"\n     profile tmpl: {ps.profile_template_name or '—'}"
@@ -404,11 +418,7 @@ async def _dry_run_one_manager(
                 print(f"        nic —  mac={mac}  (link state not reported)")
         for drive in ps.storage_drives:
             capacity_bytes = drive.get("capacity_bytes")
-            size = (
-                _format_capacity(capacity_bytes)
-                if isinstance(capacity_bytes, int)
-                else "size unknown"
-            )
+            size = _format_gb(capacity_bytes) if isinstance(capacity_bytes, int) else "size unknown"
             print(
                 f"        disk {drive.get('id')}  {drive.get('model') or '—'}"
                 f"  serial={drive.get('serial') or '—'}"

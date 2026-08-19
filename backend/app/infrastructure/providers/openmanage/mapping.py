@@ -17,18 +17,26 @@ from app.domain.ports.provider import ProviderNic, ProviderServer
 _BYTES_PER_MB = 1024 * 1024
 _VENDOR = "dell"
 
-# Binary size units, for the `serverArrayDisks` `Size` field, which OME has
-# reported both as a plain byte count and as a "<number> <unit>" string.
+# Decimal size units for disk capacity. Disks are marketed and reported in
+# decimal (a "480GB" drive is 480e9 bytes, not 480*2^30), so a "<number>
+# <unit>" string and a model-string capacity both convert with base-1000.
 # See docs/dell-collectors.md, "Capacity units".
-_UNIT_BYTES = {
+_DECIMAL_UNIT_BYTES = {
     "B": 1,
-    "KB": 1024,
-    "MB": 1024**2,
-    "GB": 1024**3,
-    "TB": 1024**4,
-    "PB": 1024**5,
+    "KB": 1000,
+    "MB": 1000**2,
+    "GB": 1000**3,
+    "TB": 1000**4,
+    "PB": 1000**5,
 }
 _SIZE_RE = re.compile(r"^([\d.]+)\s*([A-Za-z]+)?$")
+
+# OME `serverArrayDisks` field names seen carrying a disk's capacity; the
+# first populated one wins. When none is present, the capacity is recovered
+# from the Dell model string, which reliably ends in it (e.g. "M.2 480GB",
+# "U.2 1.92TB"). See docs/dell-collectors.md, "Capacity units".
+_DISK_SIZE_KEYS = ("Size", "Capacity", "CapacityBytes", "SizeInBytes", "RawSize", "DiskSize")
+_MODEL_SIZE_RE = re.compile(r"(\d+(?:\.\d+)?)\s*(GB|TB)\b", re.IGNORECASE)
 
 
 def _as_int(value: object) -> int:
@@ -219,7 +227,6 @@ _THREAD_COUNT_KEYS = (
     "NumberOfThreads",
     "ThreadCount",
 )
-_HYPERTHREADING_KEYS = ("HyperThreadingEnabled", "HyperThreadingCapable")
 
 
 def _logical_processors(processor: dict[str, Any]) -> int:
@@ -240,26 +247,6 @@ def _logical_processors(processor: dict[str, Any]) -> int:
     return 0
 
 
-def _hyperthreading_on(processor: dict[str, Any]) -> bool:
-    """
-    Whether a socket reports hyperthreading, used to derive threads when OME
-    gives no explicit logical-processor count.
-
-    Args:
-        processor (dict[str, Any]): One `serverProcessors` entry.
-
-    Returns:
-        bool: `True` if any known HT flag is truthy.
-    """
-    for key in _HYPERTHREADING_KEYS:
-        value = processor.get(key)
-        if isinstance(value, bool) and value:
-            return True
-        if isinstance(value, str) and value.strip().lower() in ("true", "enabled", "yes", "1"):
-            return True
-    return False
-
-
 def cpu_from_processors(processors: list[dict[str, Any]]) -> tuple[int, int, int, str | None]:
     """
     Summarize a device's CPUs from its `serverProcessors` inventory.
@@ -272,14 +259,16 @@ def cpu_from_processors(processors: list[dict[str, Any]]) -> tuple[int, int, int
         tuple[int, int, int, str | None]: `(sockets, cores, threads, model)`.
             `sockets` is the entry count; `cores`/`threads` sum across
             sockets; `model` is the first entry's fullest available name.
-            When OME reports no per-socket thread count but flags
-            hyperthreading, threads falls back to `2 * cores` — see
-            docs/dell-collectors.md, "CPU summary".
+            When OME reports no per-socket thread count, threads falls back
+            to `2 * cores` — see docs/dell-collectors.md, "CPU summary".
     """
     sockets = len(processors)
     cores = sum(_as_int(p.get("NumberOfCores")) for p in processors)
     threads = sum(_logical_processors(p) for p in processors)
-    if threads == 0 and cores > 0 and any(_hyperthreading_on(p) for p in processors):
+    if threads == 0 and cores > 0:
+        # Live OME serverProcessors carried neither a logical-processor
+        # count nor an HT flag; the Dell Xeons here run hyperthreaded, so
+        # two threads per core. See docs/dell-collectors.md, "CPU summary".
         threads = cores * 2
     model: str | None = None
     for p in processors:
@@ -309,8 +298,6 @@ def memory_bytes_from_modules(modules: list[dict[str, Any]]) -> int:
     return sum(_as_int(m.get("Size")) for m in modules) * _BYTES_PER_MB
 
 
-_MEDIA_TYPE_MAP = {"hdd": "HDD", "ssd": "SSD", "nvme": "NVME"}
-
 # OME rollup status codes and status strings mapped onto `HealthSeverity`.
 # See docs/dell-collectors.md, "Drive health".
 _STATUS_CODE_MAP = {1000: "HEALTHY", 2000: "UNKNOWN", 3000: "WARNING", 4000: "CRITICAL"}
@@ -326,15 +313,31 @@ _STATUS_TEXT_MAP = {
 
 def _media_type(device: dict[str, Any]) -> str:
     """
-    Map an OME disk's `MediaType` onto the platform's `MediaType`.
+    Classify an OME disk's media from whatever fields describe it.
+
+    `MediaType` alone was `UNKNOWN` on live hardware (it is not the plain
+    "HDD"/"SSD" string assumed), so this also reads `BusType` and the model
+    string: an NVMe drive names itself in all three. NVMe is reported as its
+    own media type rather than folded into SSD.
 
     Args:
-        device (dict[str, Any]): One `serverStorage` `InventoryInfo` entry.
+        device (dict[str, Any]): One `serverArrayDisks` `InventoryInfo`
+            entry.
 
     Returns:
-        str: HDD, SSD, NVME, or UNKNOWN.
+        str: NVME, SSD, HDD, or UNKNOWN.
     """
-    return _MEDIA_TYPE_MAP.get(str(device.get("MediaType", "") or "").strip().lower(), "UNKNOWN")
+    haystack = " ".join(
+        str(device.get(key) or "")
+        for key in ("MediaType", "BusType", "ModelNumber", "Model", "Name")
+    ).lower()
+    if "nvme" in haystack:
+        return "NVME"
+    if "ssd" in haystack or "solid state" in haystack:
+        return "SSD"
+    if "hdd" in haystack or "hard disk" in haystack:
+        return "HDD"
+    return "UNKNOWN"
 
 
 def _drive_health(device: dict[str, Any]) -> str:
@@ -356,19 +359,18 @@ def _drive_health(device: dict[str, Any]) -> str:
     return _STATUS_TEXT_MAP.get(text, "UNKNOWN")
 
 
-def _disk_capacity_bytes(value: object) -> int | None:
+def _size_field_bytes(value: object) -> int | None:
     """
-    Parse a `serverArrayDisks` `Size` into bytes.
+    Parse a single OME size field into bytes.
 
-    OME reports this either as a plain byte count or as a "<number> <unit>"
-    string (e.g. `"960.0 GB"`); both are handled. See
-    docs/dell-collectors.md, "Capacity units".
+    Accepts a plain byte count or a "<number> <unit>" string (decimal
+    units). See docs/dell-collectors.md, "Capacity units".
 
     Args:
-        value (object): The raw `Size` field.
+        value (object): The raw field value.
 
     Returns:
-        int | None: Capacity in bytes, or `None` when absent or unparseable.
+        int | None: Bytes, or `None` when absent or unparseable.
     """
     if value is None or isinstance(value, bool):
         return None
@@ -379,9 +381,38 @@ def _disk_capacity_bytes(value: object) -> int | None:
         return None
     number, unit = match.group(1), (match.group(2) or "B").upper()
     try:
-        return int(float(number) * _UNIT_BYTES.get(unit, 1)) or None
+        return int(float(number) * _DECIMAL_UNIT_BYTES.get(unit, 1)) or None
     except ValueError:
         return None
+
+
+def _disk_capacity_bytes(device: dict[str, Any]) -> int | None:
+    """
+    A disk's capacity in bytes, from its size field or, failing that, its
+    model string.
+
+    Live hardware populated none of the expected size fields, leaving
+    capacity at zero; the Dell model string reliably ends in the marketed
+    capacity ("... M.2 480GB", "... U.2 1.92TB"), so it is the fallback.
+    See docs/dell-collectors.md, "Capacity units".
+
+    Args:
+        device (dict[str, Any]): One `serverArrayDisks` `InventoryInfo`
+            entry.
+
+    Returns:
+        int | None: Capacity in bytes, or `None` when neither source yields
+            one.
+    """
+    for key in _DISK_SIZE_KEYS:
+        parsed = _size_field_bytes(device.get(key))
+        if parsed:
+            return parsed
+    model = str(device.get("ModelNumber") or device.get("Model") or device.get("Name") or "")
+    match = _MODEL_SIZE_RE.search(model)
+    if match:
+        return int(float(match.group(1)) * _DECIMAL_UNIT_BYTES[match.group(2).upper()]) or None
+    return None
 
 
 def storage_from_devices(
@@ -403,7 +434,7 @@ def storage_from_devices(
     drives: list[dict[str, object]] = []
     total_bytes = 0
     for device in devices:
-        capacity_bytes = _disk_capacity_bytes(device.get("Size"))
+        capacity_bytes = _disk_capacity_bytes(device)
         total_bytes += capacity_bytes or 0
         drives.append(
             {
