@@ -337,18 +337,22 @@ def _format_tb(capacity_bytes: int) -> str:
     return f"{capacity_bytes / 1000**4:.2f} TB"
 
 
-def _format_gb(capacity_bytes: int) -> str:
+def _format_disk_size(capacity_bytes: int) -> str:
     """
-    Render a byte count as decimal GB.
+    Render one drive's capacity in the unit its model is marketed in.
 
-    Decimal (base-1000), used for an individual drive.
+    Decimal (base-1000), switching to TB at 1 TB so a drive reads the way
+    its model names it — a `480GB` drive as GB, a `1.92TB` drive as TB —
+    rather than a 1.92 TB disk showing as `1920.0 GB`.
 
     Args:
         capacity_bytes (int): The capacity to render, in bytes.
 
     Returns:
-        str: e.g. `"480.0 GB"`.
+        str: e.g. `"480.0 GB"` below 1 TB, `"1.92 TB"` at or above it.
     """
+    if capacity_bytes >= 1000**4:
+        return f"{capacity_bytes / 1000**4:.2f} TB"
     return f"{capacity_bytes / 1000**3:.1f} GB"
 
 
@@ -418,7 +422,11 @@ async def _dry_run_one_manager(
                 print(f"        nic —  mac={mac}  (link state not reported)")
         for drive in ps.storage_drives:
             capacity_bytes = drive.get("capacity_bytes")
-            size = _format_gb(capacity_bytes) if isinstance(capacity_bytes, int) else "size unknown"
+            size = (
+                _format_disk_size(capacity_bytes)
+                if isinstance(capacity_bytes, int)
+                else "size unknown"
+            )
             print(
                 f"        disk {drive.get('id')}  {drive.get('model') or '—'}"
                 f"  serial={drive.get('serial') or '—'}"
