@@ -4,11 +4,14 @@ Date: 2026-08-23
 
 ## Status
 
-**Draft — not yet implemented.** No collector code exists. This records
-the design, the evidence behind it, and what it cannot yet claim, for
-review before implementation. The three defects in "Pre-existing defects
-this surfaced" are in shipped code today and are fixed as separate
-commits ahead of the collector.
+**Accepted, not yet implemented.** No collector code exists. This records
+the design, the evidence behind it, and what it cannot yet claim. The six
+open questions it was reviewed against were settled on 2026-08-23 and are
+folded in below; `docs/notes/redfish-plan.md` §6 has the reasoning for
+each.
+
+The three defects in "Pre-existing defects this surfaced" were in shipped
+code and are **fixed** — commits `1b2c10b`, `acca277`, `d8cdda2`.
 
 ## Context
 
@@ -114,10 +117,25 @@ leaks it. Revisit sushy if vendor-specific branches pass ~5.
 
 **Configuration is a login with no endpoint** — the same carve-out
 `UCS_MANAGER` uses, and the reason `credentials/env.py` has two maps
-rather than one. The fleet comes from an inventory file mounted from a
-ConfigMap; per-host credential overrides are referenced **by name** from
-a Secret. A homogeneous fleet therefore needs two environment variables
-and a list of hosts.
+rather than one. The fleet comes from a **TOML** inventory file mounted
+from a ConfigMap, parsed with stdlib `tomllib` so it adds no dependency
+and no air-gap mirror entry; per-host credential overrides are referenced
+**by name** from a Secret. A homogeneous fleet therefore needs two
+environment variables and a list of hosts.
+
+TOML over YAML because `pyyaml` reaches this project only transitively
+via `uvicorn[standard]`, so using it properly would mean a direct pin and
+regenerated lock files. TOML over a bare list because the file needs
+**comments** — `verify_tls = false  # INC-1234` is how a relaxed security
+control stays reviewable — and **grouping**, so a per-site credential is
+expressible without inventing syntax.
+
+The credential resolution chain (host → group → defaults → the
+fleet-wide login) is built in the first slice rather than deferred. Its
+value is not exotic hardware support: it is **load-time validation**. A
+typo'd group name fails the run naming the known groups, instead of
+silently falling through to the default service account and presenting it
+to a machine it was never meant for.
 
 **This deviates from ADR-0012's "no secret volume to mount", and the
 deviation is named rather than slipped in.** That statement was about
@@ -269,6 +287,44 @@ Specifically unsettled:
   `PowerState`, the pre-Redfish dotted `@odata.type`, and no standard
   `Storage` at all. Any equally divergent BMC of any brand fails the same
   gate.
+
+## Settled review decisions
+
+The four remaining questions this ADR was reviewed against, and what was
+decided.
+
+**The credential breaker trips at three distinct BMCs, and says so
+loudly.** Three *different* hosts rejecting the same credential disables
+it for the rest of the run: remaining hosts on that credential are
+skipped without a connection attempt, hosts on other credentials
+continue, and one aggregate error names the credential and the hosts that
+rejected it. Three attempts against a *single* BMC cannot arise — a 401
+is never retried, so one host produces at most one authentication failure
+per run.
+
+**Stated plainly because it is easy to over-claim: this bounds damage, it
+does not prevent lockout.** With 16 hosts contacted concurrently, ~16
+logins are already in flight before the first rejection returns, so the
+effective threshold is concurrency rather than three — and Dell blocks
+the source IP at three failures, which is reached before the breaker can
+act. The pre-flight against a single host is the mechanism that
+prevents; the breaker is the backstop behind it.
+
+**Exit 3 keeps its meaning, and nothing alerts on Job status.** A partial
+run must never report success — that is how a bad credential stays
+invisible for weeks. But with PARTIAL as the *normal* outcome for
+hundreds of independent BMCs, the Job is routinely red, and an alert
+nobody can act on gets muted before the day it matters. Alerting is on
+staleness instead. `backoffLimit` is **1**, not 0: a ConfigMap mount can
+lag at pod start and read as "inventory absent", and with no retry that
+loses an entire collection cycle. The retry-sprays-credentials risk that
+argued for 0 is already covered by the pre-flight and the breaker.
+
+**`Accept-Encoding: identity` is not sent.** It was proposed as a
+one-line decompression-bomb defence, but some BMCs reject the header
+outright — turning a theoretical attack into a real, silent zero-data
+failure on those hosts, with nothing pointing at the cause. A streaming
+byte cap gives the same protection with no compatibility risk.
 
 ## Consequences
 

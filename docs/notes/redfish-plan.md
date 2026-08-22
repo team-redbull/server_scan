@@ -487,3 +487,100 @@ failing for two weeks", because collector metrics are unscrapeable
 scraped). **My recommendation: ship the collector with the mongosh query
 in the runbook, and schedule the gauges as a follow-up** — but say
 plainly in the ADR that staleness detection is manual until then.
+
+---
+
+## 6. Decisions settled (user, 2026-08-23)
+
+All six answered. Recorded here as given, with the implementation
+consequence of each.
+
+### D1 — TOML
+
+Parsed with stdlib `tomllib`. **No new dependency and no new air-gap
+mirror entry** — confirmed that `pyyaml` reaches this project only
+transitively via `uvicorn[standard]`, so choosing YAML would have meant
+promoting it to a direct pin and regenerating `requirements.txt` and
+`pylock.toml`.
+
+The two properties that decided it over plain text: **comments**, so
+`verify_tls = false  # INC-1234` records why a security control was
+relaxed and shows up in review; and **grouping**, so "every lab machine
+uses this credential" is expressible without inventing syntax.
+
+### D2 — Build the credential chain now
+
+Per-host and per-group credential overrides, resolved
+host → group → defaults → the fleet-wide login, referenced **by name**
+rather than by host.
+
+The value that justifies it even on a fleet with one credential is
+**load-time validation**: a typo'd group name is a hard failure naming
+the known groups, rather than a silent fall-through that sends the
+default service account to a machine it was never meant for. That check
+exists only if the chain exists.
+
+### D3 — Stop after 3, and log a clear error
+
+> "after 3 times when i cannot login to the bmc log something like error
+> couldn't login"
+
+**Reading, stated explicitly because it changes the behaviour:** three
+**distinct BMCs** rejecting the *same credential* trips the breaker for
+that credential — not three attempts against one BMC. The latter cannot
+arise: a 401 is never retried, so one host produces at most one
+authentication failure per run.
+
+So `INVENTORY_REDFISH_AUTH_FAILURE_THRESHOLD=3`, and on the third
+distinct rejection:
+
+- every remaining host on that credential is **skipped without a
+  connection attempt**;
+- hosts on other credentials continue normally;
+- one aggregate `collection_errors` entry, not one per skipped host;
+- an ERROR log naming the credential, the hosts that rejected it, and
+  what happens if the run is simply repeated.
+
+**The honest caveat stays in the ADR:** with 16 hosts contacted at once,
+~16 logins are already in flight before the first rejection returns, so
+the effective threshold is concurrency rather than 3 — and Dell blocks
+the source IP at 3 failures, which is reached before the breaker can
+act. **The breaker bounds damage; the pre-flight is what prevents
+lockout.**
+
+### D4 — Exit 3 stays meaningful; alert on staleness, never on Job failure
+
+- Exit 3 (PARTIAL) keeps its meaning. A partial run must never report
+  success.
+- **`backoffLimit: 1`, not 0** — a ConfigMap mount can lag at pod start
+  and read as "inventory absent", and with no retry that loses a whole
+  collection cycle. The retry-sprays-credentials risk that argued for 0
+  is already handled by the breaker and the pre-flight.
+- **No alerting on Job status.** With PARTIAL as the normal outcome the
+  Job is routinely red, and an alert nobody can act on gets muted.
+  Alerting is on staleness: no successful run in 3× the schedule
+  interval, and stale-server ratio above a threshold.
+
+### D5 — Drop `Accept-Encoding: identity`
+
+The research found some BMCs reject the header outright, which turns a
+theoretical decompression-bomb defence into a real, silent
+zero-data failure on those hosts. Bound the response with a **streaming
+byte cap** instead — same protection, no compatibility risk.
+
+### D6 — Staleness monitoring is a follow-up, and the ADR says so
+
+Ship the collector with the documented manual query; schedule the
+Mongo-derived gauges separately.
+
+The constraint is structural, not a scheduling preference: **a CronJob
+pod cannot be scraped.** Verified — `/metrics` is served only by the API
+process, and `run_collector`'s sole metrics import is the health-policy
+registry, an unrelated domain concept. So the only thing that can answer
+"40 hosts have been failing for two weeks" is the API reading
+`last_seen_at` (already written on every ingest, currently read by
+nothing).
+
+**Until it lands, a host that quietly stops answering is invisible unless
+someone runs the query.** That sentence belongs in the ADR's
+consequences, not in a footnote.
