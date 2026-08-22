@@ -66,7 +66,18 @@ class ProviderServer:
 
     serial: str | None = None
     system_uuid: str | None = None
-    nic_macs: tuple[str, ...] = ()
+
+    # `None` means "this collector could not read it on this run", and is
+    # NOT the same as an empty tuple / zero, which mean "read, and there
+    # are none". `IngestService` carries the previous value forward for a
+    # `None`, and overwrites for a real value.
+    #
+    # Without the distinction a provider whose sub-resource query failed
+    # (a Redfish `Storage` collection returning 404, say) reports zeros
+    # that overwrite good data — which silently clears the seeded
+    # `storage.failed_drive` policy, because zero drives means zero
+    # failed drives. See docs/adr/0016-redfish-standalone-collector.md.
+    nic_macs: tuple[str, ...] | None = None
 
     bmc_address_raw: str | None = None
     bmc_mac: str | None = None
@@ -94,15 +105,16 @@ class ProviderServer:
     profile_template_name: str | None = None
     profile_template_external_id: str | None = None
 
-    cpu_sockets: int = 0
-    cpu_cores: int = 0
-    cpu_threads: int = 0
+    # `None` throughout means "not read this run" — see `nic_macs` above.
+    cpu_sockets: int | None = None
+    cpu_cores: int | None = None
+    cpu_threads: int | None = None
     cpu_model: str | None = None
 
-    memory_total_bytes: int = 0
+    memory_total_bytes: int | None = None
 
-    storage_total_bytes: int = 0
-    storage_drives: tuple[dict[str, object], ...] = ()
+    storage_total_bytes: int | None = None
+    storage_drives: tuple[dict[str, object], ...] | None = None
 
     attachments: tuple[ProviderAttachment, ...] = ()
 

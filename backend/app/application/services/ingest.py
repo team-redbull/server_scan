@@ -108,6 +108,33 @@ def _opt_int(value: object) -> int | None:
     return int(str(value))
 
 
+def _carry_forward[T](reported: T | None, previous: T | None, *, default: T) -> T:
+    """
+    Resolve one optionally-reported field against what is already stored.
+
+    A provider reports `None` for a field it could not read on this run
+    (see `app.domain.ports.provider.ProviderServer`). Overwriting a stored
+    value with the zero value in that case silently destroys good data —
+    and, for storage, silently clears the seeded `storage.failed_drive`
+    health policy. See docs/adr/0016-redfish-standalone-collector.md.
+
+    Args:
+        reported (T | None): What the provider reported, or `None` if it
+            could not read the field.
+        previous (T | None): The value on the existing document, or `None`
+            for a server being created.
+        default (T): The value for a new server whose provider reported
+            nothing.
+
+    Returns:
+        T: The reported value when there is one, else the stored value,
+            else `default`.
+    """
+    if reported is not None:
+        return reported
+    return previous if previous is not None else default
+
+
 def _drive_from_dict(data: dict[str, object]) -> StorageDrive:
     media_raw = data.get("media_type")
     try:
@@ -328,9 +355,17 @@ class IngestService:
         created_at = existing.created_at if existing is not None else now
         revision = existing.revision + 1 if existing is not None else 1
 
+        existing_hardware = existing.hardware if existing is not None else None
+
         bmc_parsed = parse_bmc_address(ps.bmc_address_raw)
         bmc_mac = normalize_mac(ps.bmc_mac)
-        nic_macs = [mac for mac in (normalize_mac(m) for m in ps.nic_macs) if mac is not None]
+        nic_macs = _carry_forward(
+            [mac for mac in (normalize_mac(m) for m in ps.nic_macs) if mac is not None]
+            if ps.nic_macs is not None
+            else None,
+            existing.identity.nic_macs if existing is not None else None,
+            default=[],
+        )
 
         identity = Identity(
             vendor=vendor,
@@ -386,15 +421,48 @@ class IngestService:
 
         hardware = Hardware(
             cpu=Cpu(
-                sockets=ps.cpu_sockets,
-                cores=ps.cpu_cores,
-                threads=ps.cpu_threads,
-                model=ps.cpu_model,
+                sockets=_carry_forward(
+                    ps.cpu_sockets,
+                    existing_hardware.cpu.sockets if existing_hardware else None,
+                    default=0,
+                ),
+                cores=_carry_forward(
+                    ps.cpu_cores,
+                    existing_hardware.cpu.cores if existing_hardware else None,
+                    default=0,
+                ),
+                threads=_carry_forward(
+                    ps.cpu_threads,
+                    existing_hardware.cpu.threads if existing_hardware else None,
+                    default=0,
+                ),
+                model=_carry_forward(
+                    ps.cpu_model,
+                    existing_hardware.cpu.model if existing_hardware else None,
+                    default=None,
+                ),
             ),
-            memory=Memory(total_bytes=ps.memory_total_bytes, modules=[]),
+            memory=Memory(
+                total_bytes=_carry_forward(
+                    ps.memory_total_bytes,
+                    existing_hardware.memory.total_bytes if existing_hardware else None,
+                    default=0,
+                ),
+                modules=[],
+            ),
             storage=Storage(
-                total_bytes=ps.storage_total_bytes,
-                drives=[_drive_from_dict(d) for d in ps.storage_drives],
+                total_bytes=_carry_forward(
+                    ps.storage_total_bytes,
+                    existing_hardware.storage.total_bytes if existing_hardware else None,
+                    default=0,
+                ),
+                drives=_carry_forward(
+                    [_drive_from_dict(d) for d in ps.storage_drives]
+                    if ps.storage_drives is not None
+                    else None,
+                    existing_hardware.storage.drives if existing_hardware else None,
+                    default=[],
+                ),
             ),
             # `ProviderServer` has no GPU field (see
             # `app.infrastructure.providers.fake.generator`'s docstring) —
