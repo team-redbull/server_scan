@@ -36,7 +36,7 @@ import { HEALTH_POLICY_EVENT_TYPES } from "@/types/events";
 
 const SEVERITIES: HealthSeverity[] = ["UNKNOWN", "HEALTHY", "INFO", "WARNING", "CRITICAL"];
 const MODES: PolicyMode[] = ["EVALUATE", "SUPPRESS"];
-const VENDORS: Vendor[] = ["dell", "cisco", "hp"];
+const VENDORS: Vendor[] = ["dell", "cisco", "hp", "standalone"];
 const MANAGER_TYPES: ManagerType[] = [
   "OPENMANAGE",
   "UCS_MANAGER",

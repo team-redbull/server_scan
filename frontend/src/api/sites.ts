@@ -42,4 +42,13 @@ export function listSites(): Promise<SiteStatsListResponse> {
  * not the other. */
 export const SITE_CODES: readonly SiteCode[] = ["one", "two", "three", "four", "five"];
 
-export const VENDORS: readonly Vendor[] = ["dell", "cisco", "hp"];
+export const VENDORS: readonly Vendor[] = ["dell", "cisco", "hp", "standalone"];
+
+/** How a server is reached, which is a different question from who built
+ * it. A Dell reached at its own BMC is still `vendor: "dell"`; what makes
+ * it unmanaged is `source_provider: "REDFISH_STANDALONE"`. Values match
+ * the backend's `ManagerType`. */
+export const SOURCE_PROVIDERS: readonly { value: string; label: string }[] = [
+  { value: "UCS_CENTRAL", label: "UCS Central" },
+  { value: "REDFISH_STANDALONE", label: "Standalone (Redfish)" },
+];

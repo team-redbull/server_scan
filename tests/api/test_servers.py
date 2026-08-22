@@ -111,6 +111,10 @@ async def test_list_returns_expected_items(
         "model",
         "site_id",
         "manager_id",
+        # Which collector produced the record. Distinct from `vendor`:
+        # a Dell reached at its own BMC is still vendor `dell`, and what
+        # makes it unmanaged is source_provider REDFISH_STANDALONE.
+        "source_provider",
         "classification",
         "health",
         "maintenance",

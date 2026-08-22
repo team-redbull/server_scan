@@ -1,0 +1,71 @@
+# Standalone Redfish collector — the fleet list.
+#
+# This file IS the collection filter. `INVENTORY_COLLECTOR_NAME_PATTERN`
+# (`^ocp`) deliberately does not apply to this collector, because a BMC
+# does not know the server's OS hostname — so a machine listed here is
+# collected, and nothing else is. Treat it as a production-critical,
+# review-gated artifact: write access to it is equivalent to write access
+# to the credential Secret, since it decides where those credentials are
+# sent.
+#
+# Mounted read-only from a ConfigMap at the path named by
+# INVENTORY_REDFISH_INVENTORY_FILE. That setting also accepts a
+# *directory* of `*.toml` files, which is how a large estate is sharded
+# per site without changing anything else.
+#
+# Addresses below are RFC 5737 documentation ranges. NEVER put a password
+# in this file — see redfish-credentials.example.toml.
+
+version = 1
+
+[defaults]
+# Trusted in addition to the system store. The scalable answer for
+# self-signed BMC certificates is an internal CA (every vendor in scope
+# supports CSR/import) or Dell's custom signing certificate — one import
+# and every iDRAC using it is trusted.
+ca_bundle = "/etc/redfish-ca/ca-bundle.crt"
+port = 443
+
+# Groups exist so a per-site credential or CA does not have to be repeated
+# on every host.
+[groups.site-one]
+credential = "site-one-shared"
+
+[groups.lab]
+verify_tls = false
+# Required whenever verification is off. The collector sends this BMC's
+# password in the clear, so the reason is what makes the exception visible
+# in review rather than invisible in a config file.
+verify_tls_reason = "lab BMCs keep factory certificates; not on the production management VLAN"
+
+# --- Hosts -------------------------------------------------------------
+#
+# Credential resolution, first match wins:
+#   1. this host's own `credential`
+#   2. a credential named exactly after `host`   <- the usual case
+#   3. its group's `credential`
+#   4. [defaults].credential
+#   5. INVENTORY_REDFISH_USERNAME / _PASSWORD
+#
+# Rung 2 is why an estate where every BMC has its own account does not
+# repeat the name on all 400 entries.
+
+[[hosts]]
+host = "192.0.2.41"
+# Optional. Wins over whatever the BMC reports, and is what the platform
+# parses the site out of — `ocp4-prod-one-infra-01` -> site `one`. Without
+# it, a machine named after its BMC lands in "Unassigned".
+name = "ocp4-prod-one-infra-01"
+
+[[hosts]]
+host = "192.0.2.42"
+group = "site-one"
+
+[[hosts]]
+host = "bmc-043.mgmt.example.com"
+credential = "legacy-box-43"
+
+[[hosts]]
+host = "192.0.2.44"
+port = 8443
+group = "lab"

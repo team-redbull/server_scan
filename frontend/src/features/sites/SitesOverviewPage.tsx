@@ -20,6 +20,7 @@ const VENDOR_LABELS: Record<string, string> = {
   dell: "Dell",
   cisco: "Cisco",
   hp: "HP",
+  standalone: "Other",
 };
 
 /** Bar widths are proportional to the site's own total, not to the

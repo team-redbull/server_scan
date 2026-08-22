@@ -584,3 +584,115 @@ nothing).
 **Until it lands, a host that quietly stops answering is invisible unless
 someone runs the query.** That sentence belongs in the ADR's
 consequences, not in a footnote.
+
+---
+
+## 7. Correction (user, 2026-08-23): per-host credentials are the norm
+
+> "i think that most of my times each bmc would have its own password and
+> username"
+
+The design assumed a homogeneous fleet on one service account, with
+per-host overrides as the escape hatch. **It is the other way round.**
+That is not a tuning change — it weakens two of the safety mechanisms and
+changes the shape of the Secret.
+
+### What it breaks
+
+**The credential circuit breaker barely fires.** It counts distinct hosts
+rejecting *the same credential*. With 400 hosts on 400 credentials, every
+counter sits at 1 while accounts lock one at a time — the red team named
+this and it was filed as an edge case. It is now the main case.
+
+**Fix, already on the table as the second half of D3:** a
+**credential-agnostic total authentication-failure budget for the run**
+(`INVENTORY_REDFISH_AUTH_FAILURE_BUDGET`). Ten 401s across ten different
+credentials is not ten unrelated mistakes — it is a stale Secret, a bad
+render, or the wrong file mounted. Stop and say so. The per-credential
+breaker stays for the shared-account case; the run budget is what covers
+the per-host one.
+
+**The pre-flight gets much weaker.** Testing one host proves that host's
+credential and nothing else. It still earns its place — it catches the
+mounted-the-wrong-Secret case cheaply — but it can no longer be described
+as preventing an estate-wide lockout. The run budget is what bounds that
+now. The ADR must say this rather than inherit the earlier claim.
+
+### What it changes in the file
+
+Repeating `credential = "..."` on all 400 hosts is noise. Add one rung to
+the resolution chain: **a credential named exactly after the host key**.
+
+```toml
+[[hosts]]
+host = "10.20.30.41"          # uses credential "10.20.30.41" if defined
+
+[[hosts]]
+host = "10.20.30.42"
+credential = "shared-lab"     # explicit override still wins
+```
+
+Chain becomes: explicit `credential` → **a credential named after the
+host** → group → `defaults` → the fleet-wide login → hard failure.
+
+The Secret is then one entry per host, which is the honest shape for this
+estate, and the inventory file stays a list of addresses.
+
+**The load-time validation matters more, not less**, now that there are
+hundreds of names to get wrong: a host referencing an undefined
+credential fails the run naming it, and never falls through to a
+different account.
+
+### Operational consequence to write down
+
+A ~400-entry Secret is a different management problem from a two-key one.
+It is the case `collectors.existingSecret` exists for — an external
+secret store (Vault, External Secrets) owning it, rather than values
+passed at install time. `deploy/README.md` should say so plainly instead
+of implying `--set` is viable at this size.
+
+---
+
+## 8. Requested: surface a failed login on the server itself
+
+> "if the login doesn't work i want to see this as logged and maybe in
+> the object of the server with error message as login to bmc failed"
+
+Logging is already in the design (`redfish.auth_rejected`, an aggregated
+`collection_errors` entry, and exit 3). **Recording it on the server
+document is new**, and worth doing — an operator looking at a server
+should not have to correlate against a CronJob log to learn why its data
+is three weeks old.
+
+The cost is real though, so it is proposed rather than assumed:
+
+**Shape.** A small block on `Server`, written by the collector path only:
+
+```python
+class CollectionStatus(BaseModel):
+    last_attempt_at: datetime | None = None
+    last_success_at: datetime | None = None
+    last_error: str | None = None        # "login to BMC failed"
+    last_error_at: datetime | None = None
+```
+
+**The wrinkle: a failure produces no `ProviderServer`,** so there is
+nothing for `IngestService` to attach it to. Two cases:
+
+- **A host collected successfully before** has a document. It can be
+  found by its BMC host — but `network.bmc.host` is **not indexed**, so
+  this needs a new index, and per ADR-0007 an unindexed lookup at 10k
+  documents is exactly the mistake that load-testing caught last time.
+- **A host never collected successfully** has no document at all, and
+  cannot get one: `Vendor` is required and correlation is
+  `(vendor, serial_normalized)` — both unknown until a successful read.
+  So a BMC that has never authenticated stays invisible in the UI no
+  matter what. It appears only in `collection_errors` and the logs.
+
+**That asymmetry has to be stated, not glossed:** this feature surfaces
+"a server we know about has stopped answering", which is the common and
+valuable case. It cannot surface "a server we have never reached",
+because the platform has nothing to call it.
+
+It also touches the API schema and the UI to be worth anything, which
+makes it a slice of its own rather than a line in the collector.

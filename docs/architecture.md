@@ -459,12 +459,73 @@ integration that isn't `FakeProvider`. See
   servers named after their chassis slot rather than their service
   profile — which silently defeated both site parsing and
   classification.
-- `OPENMANAGE`/`INTERSIGHT`/`ONEVIEW`/`UCS_CENTRAL` have configuration
-  slots but no collector — `tools.run_collector` raises a clear
-  `NotImplementedError` for them rather than silently doing nothing.
-  Intersight reuses the same three settings with different meanings: it
-  signs requests with an API key, so `username` is the API Key ID and
-  `password` the secret key.
+- `OPENMANAGE`/`INTERSIGHT`/`ONEVIEW` have configuration slots but no
+  collector — `tools.run_collector` raises a clear `NotImplementedError`
+  for them rather than silently doing nothing. Intersight reuses the same
+  three settings with different meanings: it signs requests with an API
+  key, so `username` is the API Key ID and `password` the secret key.
+
+### Standalone Redfish collector (`REDFISH_STANDALONE`)
+
+The second real collector, and the first that points at no manager at
+all. It reaches a BMC directly over DMTF Redfish — any conformant one, so
+a Cisco CIMC that Intersight cannot yet manage sits alongside an iDRAC
+and a current iLO. HPE iLO 4 is excluded on *conformance* grounds rather
+than vendor grounds: it answers `/redfish/v1` with pre-Redfish property
+spellings, and the collector rejects it at the service root before
+sending a credential.
+
+`app.infrastructure.providers.redfish` mirrors `ucs_manager`'s split —
+`client.py` (I/O, session lifecycle, TLS, the retry taxonomy),
+`mapping.py` (pure payload -> `ProviderServer`), `provider.py` (fan-out
+and budgets) — plus `targets.py`, which has no analogue elsewhere because
+no other collector has a fleet list to parse. Nothing is shared with
+`ucs_common`: that module is DN structure and Cisco SDK presence
+semantics, and Redfish has neither.
+
+**Three properties invert what the other collectors assume.**
+
+*The fleet list is input, not discovery.* Nothing enumerates standalone
+machines, so a mounted TOML inventory does. It is also the only
+collection filter — `INVENTORY_COLLECTOR_NAME_PATTERN` is deliberately
+not applied, because a BMC does not know the server's `ocp4-...` name and
+`^ocp` would discard every listed host. Credentials resolve
+host -> host-named -> group -> defaults -> a fleet-wide fallback, and the
+whole file is validated before a single connection opens: an unknown
+group, an undefined credential, a duplicate host, an address carrying
+credentials, or a TLS opt-out with no written reason each fail the run
+naming what to fix. Failing closed matters more than it looks — a
+typo'd group name that fell through to the default credential would send
+a shared service account to a machine it was never meant for.
+
+*Cost is per server.* A UCS Central run costs ~11 round trips for the
+whole Cisco fleet; this costs ~25 against each BMC, on embedded hardware
+that degrades when polled. Bounded fleet concurrency, a per-host
+wall-clock budget and an in-process run budget are therefore correctness
+requirements. The run budget must trip before the CronJob's
+`activeDeadlineSeconds`, or the pod is killed with no summary at all.
+Hosts are shuffled each run so a truncated sweep does not starve the same
+slow hosts forever, and servers stream out as each host finishes rather
+than being gathered, so a killed run has already persisted what completed.
+
+*Failure is routine.* Some of several hundred independent BMCs are always
+down, so per-host failures accumulate in `collection_errors` (exit 3,
+PARTIAL) and the run continues. Only a systemic authentication failure
+stops it: a rejected login is never retried, a credential is disabled
+after enough *distinct* hosts reject it, and a run-wide failure budget
+covers the estate where every BMC has its own account — there the
+per-credential counter never trips while accounts lock one at a time.
+Both bound damage rather than preventing lockout, and ADR-0016 says so
+explicitly rather than over-claiming.
+
+Two guards exist because the collector parses JSON from a device it does
+not fully trust: an `@odata.id` that is not a relative path under
+`/redfish/v1` is refused rather than followed, and redirects are never
+followed — both would retarget the next request, which carries the
+session token.
+
+Full design, evidence and open questions: `docs/adr/0016`. Runbook:
+`docs/test-redfish-standalone-collector.md`.
 
 ### CI supply chain
 
@@ -481,6 +542,17 @@ edited `requirements.txt`, a generated air-gap export, as though it were
 a source manifest. Keeping the pins current is a documented manual pass
 (`CLAUDE.md`'s "Keeping CI current"), and the reasoning behind all of it
 is `docs/adr/0013`.
+
+### Staleness detection is the collector's missing half
+
+A CronJob pod lives minutes and exits, so Prometheus never scrapes it —
+no metric the Redfish collector emits could report its own *absence*,
+which is exactly the failure that matters when hosts quietly stop
+answering. The answer is gauges derived from MongoDB's `last_seen_at`
+(written on every ingest, currently read by nothing) exported by the API
+process. Until that lands, staleness is a documented manual query, and
+`docs/test-redfish-standalone-collector.md` §6 carries it rather than
+implying coverage that does not exist.
 
 Real authentication is designed (see the session's approved plan) but
 lands in a subsequent slice — this document will gain a section and an

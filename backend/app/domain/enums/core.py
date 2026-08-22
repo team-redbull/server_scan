@@ -26,11 +26,25 @@ class Vendor(StrEnum):
 
     `HP`, not `HPE`: the platform reports the vendor the way operators
     here refer to it.
+
+    `STANDALONE` means **a manufacturer this platform does not model** —
+    Lenovo, Supermicro, a whitebox — not "collected without a manager".
+    That distinction matters: a Dell reached over Redfish with no
+    aggregator is still `DELL`, because `IngestService` correlates on
+    `(vendor, serial_normalized)` and moving a machine between vendors
+    splits it into two documents. Which collector found a server is
+    carried by `Server.source_provider`. See
+    docs/adr/0016-redfish-standalone-collector.md.
+
+    It is not the `UNKNOWN` this docstring argues against: it is never
+    guessed from a payload. A provider that cannot read `Manufacturer` at
+    all reports a collection failure rather than defaulting here.
     """
 
     DELL = "dell"
     CISCO = "cisco"
     HP = "hp"
+    STANDALONE = "standalone"
 
 
 class SiteCode(StrEnum):
@@ -53,11 +67,20 @@ class SiteCode(StrEnum):
 
 
 class ManagerType(StrEnum):
+    """How this platform reaches a server.
+
+    `REDFISH_STANDALONE` is the odd one out and deliberately so: it names
+    no manager at all. It is the collector for machines no aggregator
+    owns, reached one BMC at a time over DMTF Redfish. See
+    docs/adr/0016-redfish-standalone-collector.md.
+    """
+
     OPENMANAGE = "OPENMANAGE"
     UCS_MANAGER = "UCS_MANAGER"
     UCS_CENTRAL = "UCS_CENTRAL"
     INTERSIGHT = "INTERSIGHT"
     ONEVIEW = "ONEVIEW"
+    REDFISH_STANDALONE = "REDFISH_STANDALONE"
 
 
 class InstallationType(StrEnum):

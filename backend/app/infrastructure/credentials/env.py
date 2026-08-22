@@ -48,6 +48,7 @@ _LOGIN_FIELDS: dict[ManagerType, tuple[str, str]] = {
     ManagerType.ONEVIEW: ("oneview_username", "oneview_password"),
     ManagerType.OPENMANAGE: ("ome_username", "ome_password"),
     ManagerType.INTERSIGHT: ("intersight_username", "intersight_password"),
+    ManagerType.REDFISH_STANDALONE: ("redfish_username", "redfish_password"),
 }
 
 # manager type -> the `Settings` field holding the address to connect to.
@@ -58,6 +59,11 @@ _LOGIN_FIELDS: dict[ManagerType, tuple[str, str]] = {
 # for it. There is no `INVENTORY_UCS_MANAGER_IP` to set, so `resolve()`
 # says that in as many words rather than demanding a variable that no
 # longer exists.
+# `REDFISH_STANDALONE` is absent for the same reason `UCS_MANAGER` is,
+# and it is the second instance of the shape this split exists to
+# express: it has a fleet-wide fallback login but no single endpoint,
+# because its endpoints are the hosts in its inventory file. See
+# docs/adr/0016-redfish-standalone-collector.md.
 _ENDPOINT_FIELD: dict[ManagerType, str] = {
     ManagerType.UCS_CENTRAL: "ucs_central_ip",
     ManagerType.ONEVIEW: "oneview_ip",
@@ -88,6 +94,14 @@ class EnvConnectionResolver:
                 "INVENTORY_UCS_CENTRAL_IP/_USERNAME/_PASSWORD plus the fleet-wide "
                 "INVENTORY_UCS_MANAGER_USERNAME/_PASSWORD, and collect with "
                 "--manager-type UCS_CENTRAL."
+            )
+        if manager_type is ManagerType.REDFISH_STANDALONE:
+            raise ManagerNotConfiguredError(
+                "REDFISH_STANDALONE has no endpoint of its own to configure — it reaches one "
+                "BMC at a time from an inventory file. Set INVENTORY_REDFISH_INVENTORY_FILE to "
+                "that file, give each host a credential in "
+                "INVENTORY_REDFISH_CREDENTIALS_FILE, and/or set INVENTORY_REDFISH_USERNAME and "
+                "INVENTORY_REDFISH_PASSWORD as the fleet-wide fallback login."
             )
         endpoint_field = _ENDPOINT_FIELD.get(manager_type)
         login_fields = _LOGIN_FIELDS.get(manager_type)

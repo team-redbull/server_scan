@@ -5,7 +5,7 @@ import { ApiError } from "@/api/client";
 import type { ServerListParams } from "@/api/servers";
 import type { SortableField } from "@/features/inventory/InventoryTable";
 import { InventoryTable } from "@/features/inventory/InventoryTable";
-import { SITE_CODES, VENDORS } from "@/api/sites";
+import { SITE_CODES, SOURCE_PROVIDERS, VENDORS } from "@/api/sites";
 import { useServersQuery } from "@/features/inventory/hooks";
 import { useDebouncedValue } from "@/lib/useDebouncedValue";
 
@@ -59,6 +59,7 @@ export function InventoryPage() {
   const siteId = searchParams.get("site_id") ?? "";
   const installationType = searchParams.get("installation_type") ?? "";
   const healthOverall = searchParams.get("health_overall") ?? "";
+  const sourceProvider = searchParams.get("source_provider") ?? "";
   const maintenanceOnly = searchParams.get("maintenance") === "true";
   const sortParam = searchParams.get("sort") ?? "";
   const sortField: SortableField = isSortableField(sortParam) ? sortParam : DEFAULT_SORT;
@@ -74,6 +75,7 @@ export function InventoryPage() {
     if (debouncedSearch) params.search = debouncedSearch;
     if (vendor) params.vendor = vendor;
     if (siteId) params.site_id = siteId;
+    if (sourceProvider) params.source_provider = sourceProvider;
     if (installationType) params.installation_type = installationType;
     if (healthOverall) params.health_overall = healthOverall;
     if (maintenanceOnly) params.maintenance = true;
@@ -84,6 +86,7 @@ export function InventoryPage() {
     debouncedSearch,
     vendor,
     siteId,
+    sourceProvider,
     installationType,
     healthOverall,
     maintenanceOnly,
@@ -199,6 +202,27 @@ export function InventoryPage() {
             {VENDORS.map((v) => (
               <option key={v} value={v}>
                 {v}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        {/* How a server is reached, which is a different question from who
+            built it. `REDFISH_STANDALONE` means the machine has no manager,
+            so there is no point looking for it in OpenManage or UCS. */}
+        <label className="flex flex-col text-xs font-medium text-[var(--text-secondary)]">
+          Source
+          <select
+            value={sourceProvider}
+            onChange={(e) => {
+              updateFilters({ source_provider: e.target.value });
+            }}
+            className={FIELD_CLASS}
+          >
+            <option value="">All</option>
+            {SOURCE_PROVIDERS.map((s) => (
+              <option key={s.value} value={s.value}>
+                {s.label}
               </option>
             ))}
           </select>

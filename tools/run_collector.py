@@ -57,9 +57,27 @@ from app.infrastructure.mongodb.indexes import ensure_indexes
 from app.infrastructure.mongodb.manager_repository import MongoManagerRepository
 from app.infrastructure.mongodb.server_repository import MongoServerRepository
 from app.infrastructure.mongodb.site_repository import MongoSiteRepository
+from app.infrastructure.providers.redfish.provider import RedfishStandaloneProvider
+from app.infrastructure.providers.redfish.targets import load_targets
 from app.infrastructure.providers.ucs_central.provider import UcsCentralProvider
 
 logger = structlog.get_logger(__name__)
+
+_DEBUG_HTTP_VAR = "INVENTORY_REDFISH_DEBUG_HTTP"
+
+
+def _debug_http_enabled() -> bool:
+    """
+    Report whether `--debug-http` was passed.
+
+    Threaded through the environment rather than the factory signature so
+    it reaches every client the run constructs, matching how `--debug-xml`
+    already reaches `UcsManagerClient`.
+
+    Returns:
+        bool: True when HTTP tracing is on.
+    """
+    return os.environ.get(_DEBUG_HTTP_VAR) == "1"
 
 
 def _ucs_central_provider(
@@ -113,11 +131,83 @@ def _ucs_central_provider(
 # `_build_provider` says so in its own words instead of claiming no
 # collector exists.
 #
+# REDFISH_STANDALONE is the one entry that names no manager at all: it
+# reaches machines no aggregator owns, one BMC at a time, from an
+# inventory file. See docs/adr/0016-redfish-standalone-collector.md.
+#
 # Annotated rather than inferred: mypy would otherwise widen the value
 # type, and the annotation is also what pins the factory contract every
 # future provider must match.
+def _redfish_provider(
+    *,
+    manager: Manager,
+    credentials: ManagerConnection,
+    timeout_seconds: float,
+    settings: Settings,
+) -> ServerInventoryProvider:
+    """The standalone Redfish collector — one BMC at a time, from a file.
+
+    `timeout_seconds` is deliberately unused. This collector splits
+    connect from read (`INVENTORY_REDFISH_CONNECT_TIMEOUT_SECONDS` /
+    `_READ_TIMEOUT_SECONDS`), because one value cannot serve both a fleet
+    with dead hosts in it and a BMC that answers slowly. Named here so a
+    parameter this factory ignores is documented rather than surprising.
+    """
+    return RedfishStandaloneProvider(
+        manager=manager,
+        # Parsed and fully validated before any connection is opened: a
+        # fan-out collector must not find a typo on host 380 of 400, and a
+        # credential must never reach a host a mistake put in front of.
+        targets=load_targets(
+            inventory_path=settings.redfish_inventory_file,
+            credentials_path=settings.redfish_credentials_file,
+            fallback_login=_optional_login(settings, ManagerType.REDFISH_STANDALONE),
+            ca_bundle=settings.redfish_ca_bundle or None,
+        ),
+        connect_timeout=settings.redfish_connect_timeout_seconds,
+        read_timeout=settings.redfish_read_timeout_seconds,
+        host_budget_seconds=settings.redfish_host_budget_seconds,
+        run_budget_seconds=settings.redfish_run_budget_seconds,
+        fleet_concurrency=settings.redfish_fleet_concurrency,
+        auth_failure_threshold=settings.redfish_auth_failure_threshold,
+        auth_failure_budget=settings.redfish_auth_failure_budget,
+        tls_min_version=settings.redfish_tls_min_version,
+        debug_http=_debug_http_enabled(),
+    )
+
+
+def _optional_login(settings: Settings, manager_type: ManagerType) -> tuple[str, str] | None:
+    """A type's fleet-wide login, or None when it has none configured.
+
+    Unlike `resolve_login`, a missing value is not an error here: an
+    estate where every BMC has its own account configures no fleet-wide
+    fallback at all, and `load_targets` then produces a far better message
+    naming the specific host whose credential could not be resolved.
+    """
+    try:
+        return resolve_login(settings, manager_type)
+    except ManagerNotConfiguredError:
+        return None
+
+
+# Types reached without a single configured endpoint. Both resolve a
+# login only; their addresses come from elsewhere at runtime — UCS Central
+# reports its domains, and the Redfish collector reads an inventory file.
+# `EnvConnectionResolver.resolve` would otherwise demand an `_IP` variable
+# that deliberately does not exist.
+_ENDPOINTLESS_TYPES = frozenset({ManagerType.REDFISH_STANDALONE})
+
+# `INVENTORY_COLLECTOR_NAME_PATTERN` is not applied to these. The pattern
+# exists because a vendor manager holds the whole datacenter and the name
+# is the only discriminator; a standalone collector's inventory file is
+# already that filter, and a far more precise one. Applying `^ocp` over a
+# name a BMC does not know would discard every host the operator listed.
+_UNFILTERED_TYPES = frozenset({ManagerType.REDFISH_STANDALONE})
+
+
 _PROVIDER_FACTORIES: dict[ManagerType, Callable[..., ServerInventoryProvider]] = {
     ManagerType.UCS_CENTRAL: _ucs_central_provider,
+    ManagerType.REDFISH_STANDALONE: _redfish_provider,
 }
 
 
@@ -137,6 +227,15 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help=(
             "Print what each manager reports and exit without writing anything. "
             "Nothing is classified, health-evaluated, audited or upserted."
+        ),
+    )
+    parser.add_argument(
+        "--debug-http",
+        action="store_true",
+        help=(
+            "Log one line per Redfish request: method, path and status only. "
+            "Headers and bodies are never logged, and the session exchange is "
+            "skipped entirely rather than redacted."
         ),
     )
     parser.add_argument(
@@ -287,7 +386,11 @@ async def _build_provider(
         raise NotImplementedError(
             f"No collector implemented yet for manager type {manager.type!r}."
         )
-    connection = credential_resolver.resolve(manager.type)
+    connection = (
+        ManagerConnection(endpoint="", username="", password="")
+        if manager.type in _ENDPOINTLESS_TYPES
+        else credential_resolver.resolve(manager.type)
+    )
     return factory(
         manager=manager,
         credentials=connection,
@@ -501,7 +604,19 @@ async def _run(
         # One manager per type, straight from configuration — nothing is
         # read from the `managers` collection to decide where to connect.
         try:
-            connection = credential_resolver.resolve(manager_type)
+            if manager_type in _ENDPOINTLESS_TYPES:
+                # No `_IP` variable exists for these, so `resolve()` would
+                # exit 2 naming a variable that cannot be set. The
+                # `Manager` projection carries the inventory path instead,
+                # which is the most informative answer to "where did these
+                # servers come from".
+                connection = ManagerConnection(
+                    endpoint=settings.redfish_inventory_file,
+                    username="",
+                    password="",
+                )
+            else:
+                connection = credential_resolver.resolve(manager_type)
             # Pre-flight for the one collector that needs a *second* set of
             # credentials: UCS Central also logs into each domain's UCS
             # Manager. Checked here, beside the endpoint resolution, so a
@@ -516,6 +631,9 @@ async def _run(
             print(f"{exc}")
             return 2
         manager = manager_for(manager_type, connection)
+        # Computed once, so the reason lives in one place rather than
+        # being duplicated at both call sites below.
+        name_pattern = "" if manager_type in _UNFILTERED_TYPES else settings.collector_name_pattern
 
         if dry_run:
             # No indexes, no ingest pipeline, no repositories at all.
@@ -525,7 +643,7 @@ async def _run(
                     credential_resolver=credential_resolver,
                     timeout_seconds=settings.collector_connect_timeout_seconds,
                     limit=limit,
-                    name_pattern=settings.collector_name_pattern,
+                    name_pattern=name_pattern,
                     settings=settings,
                 )
             except Exception:
@@ -560,7 +678,7 @@ async def _run(
             ingest_service=ingest_service,
             credential_resolver=credential_resolver,
             timeout_seconds=settings.collector_connect_timeout_seconds,
-            name_pattern=settings.collector_name_pattern,
+            name_pattern=name_pattern,
             settings=settings,
         )
         if outcome is None:
@@ -600,6 +718,8 @@ def main(argv: list[str] | None = None) -> None:
         # Read by `UcsManagerClient`; set here so it covers every provider
         # this run constructs.
         os.environ["INVENTORY_UCS_DUMP_XML"] = "1"
+    if args.debug_http:
+        os.environ[_DEBUG_HTTP_VAR] = "1"
     exit_code = asyncio.run(
         _run(
             manager_type=ManagerType(args.manager_type),

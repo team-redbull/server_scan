@@ -1,0 +1,156 @@
+{{- /*
+The collector for machines no aggregator owns — reached one BMC at a time
+over DMTF Redfish.
+
+Unlike every other collector in this chart, its cost is per *server*: a
+UCS Central run costs ~11 round trips for the whole Cisco fleet, while
+this costs ~25 against each BMC, on embedded hardware that degrades when
+polled. Every number below follows from that, so do not copy the UCS
+CronJob's values here.
+
+Three differences from the other collectors worth knowing before editing:
+
+  - It mounts files. The fleet list is a ConfigMap (not secret, hundreds
+    of lines, changes when the estate changes rather than when the
+    deployment does) and the per-host logins are a Secret. ADR-0012 said
+    "no secret volume to mount"; ADR-0016 names this deviation and why.
+
+  - INVENTORY_COLLECTOR_NAME_PATTERN is deliberately absent. A BMC does
+    not know the server's `ocp4-...` name, so `^ocp` would discard every
+    host the operator listed. The inventory file is the filter, and there
+    is no second line of defence behind it.
+
+  - Exit 3 (PARTIAL) is the NORMAL outcome. 40 of 400 BMCs down is a
+    Tuesday. Do not alert on Job status; alert on staleness.
+
+See docs/adr/0016-redfish-standalone-collector.md and
+docs/test-redfish-standalone-collector.md.
+*/ -}}
+{{- if .Values.collectors.redfishStandalone.enabled }}
+{{- $rf := .Values.collectors.redfishStandalone }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ .Release.Name }}-collector-redfish-standalone
+  labels:
+    app.kubernetes.io/name: {{ .Release.Name }}-collector-redfish-standalone
+    app.kubernetes.io/component: collector
+    app.kubernetes.io/part-of: server-inventory
+spec:
+  schedule: {{ $rf.schedule | quote }}
+  suspend: {{ $rf.suspend }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 5
+  jobTemplate:
+    spec:
+      backoffLimit: {{ $rf.backoffLimit }}
+      activeDeadlineSeconds: {{ $rf.activeDeadlineSeconds }}
+      template:
+        spec:
+          restartPolicy: Never
+          automountServiceAccountToken: false
+          containers:
+            - name: collector
+              image: "{{ .Values.backend.image.repository }}:{{ .Values.backend.image.tag }}"
+              imagePullPolicy: {{ .Values.backend.image.pullPolicy }}
+              command:
+                - python3
+                - -m
+                - tools.run_collector
+                - --manager-type
+                - REDFISH_STANDALONE
+              env:
+                - name: INVENTORY_ENVIRONMENT
+                  value: production
+                - name: INVENTORY_REDFISH_INVENTORY_FILE
+                  value: /etc/redfish/inventory.toml
+                {{- if $rf.credentialsSecret }}
+                - name: INVENTORY_REDFISH_CREDENTIALS_FILE
+                  value: /etc/redfish-credentials/credentials.toml
+                {{- end }}
+                {{- if $rf.tls.caBundleConfigMap }}
+                - name: INVENTORY_REDFISH_CA_BUNDLE
+                  value: /etc/redfish-ca/ca-bundle.crt
+                {{- end }}
+                - name: INVENTORY_REDFISH_TLS_MIN_VERSION
+                  value: {{ $rf.tls.minVersion | quote }}
+                - name: INVENTORY_REDFISH_FLEET_CONCURRENCY
+                  value: {{ $rf.fleetConcurrency | quote }}
+                - name: INVENTORY_REDFISH_CONNECT_TIMEOUT_SECONDS
+                  value: {{ $rf.connectTimeoutSeconds | quote }}
+                - name: INVENTORY_REDFISH_READ_TIMEOUT_SECONDS
+                  value: {{ $rf.readTimeoutSeconds | quote }}
+                - name: INVENTORY_REDFISH_HOST_BUDGET_SECONDS
+                  value: {{ $rf.hostBudgetSeconds | quote }}
+                - name: INVENTORY_REDFISH_RUN_BUDGET_SECONDS
+                  value: {{ $rf.runBudgetSeconds | quote }}
+                - name: INVENTORY_REDFISH_AUTH_FAILURE_THRESHOLD
+                  value: {{ $rf.authFailureThreshold | quote }}
+                - name: INVENTORY_REDFISH_AUTH_FAILURE_BUDGET
+                  value: {{ $rf.authFailureBudget | quote }}
+                - name: INVENTORY_MONGO_URI
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.db.secretName }}
+                      key: mongo-uri
+                - name: INVENTORY_REDIS_URI
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.db.secretName }}
+                      key: redis-uri
+              envFrom:
+                - configMapRef:
+                    name: {{ .Release.Name }}-api-config
+                # Carries INVENTORY_REDFISH_USERNAME/_PASSWORD, the
+                # fleet-wide fallback for any host that resolves no
+                # per-host credential.
+                - secretRef:
+                    name: {{ .Values.collectors.existingSecret | default (printf "%s-collector-credentials" .Release.Name) }}
+              volumeMounts:
+                - name: inventory
+                  mountPath: /etc/redfish
+                  readOnly: true
+                {{- if $rf.credentialsSecret }}
+                - name: host-credentials
+                  mountPath: /etc/redfish-credentials
+                  readOnly: true
+                {{- end }}
+                {{- if $rf.tls.caBundleConfigMap }}
+                - name: ca-bundle
+                  mountPath: /etc/redfish-ca
+                  readOnly: true
+                {{- end }}
+              resources:
+                {{- toYaml $rf.resources | nindent 16 }}
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: ["ALL"]
+                readOnlyRootFilesystem: true
+                runAsNonRoot: true
+                seccompProfile:
+                  type: RuntimeDefault
+          volumes:
+            # Not secret, and reviewable in git — but production-critical,
+            # since it is the only thing deciding which machines this
+            # collector authenticates against.
+            - name: inventory
+              configMap:
+                name: {{ $rf.inventoryConfigMap | default (printf "%s-redfish-inventory" .Release.Name) }}
+            {{- if $rf.credentialsSecret }}
+            # Per-host logins as a file rather than environment
+            # variables: an estate where every BMC has its own account
+            # cannot be flat settings fields, and a process's whole
+            # environment is readable from /proc/<pid>/environ.
+            - name: host-credentials
+              secret:
+                secretName: {{ $rf.credentialsSecret }}
+                defaultMode: 0400
+            {{- end }}
+            {{- if $rf.tls.caBundleConfigMap }}
+            - name: ca-bundle
+              configMap:
+                name: {{ $rf.tls.caBundleConfigMap }}
+            {{- end }}
+{{- end }}

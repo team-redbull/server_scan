@@ -204,15 +204,45 @@ vendor manager. MongoDB is the only thing connecting them. See
 validation sections record what a live UCS Platform Emulator proved,
 disproved and could not settle.
 
-**One collector exists: `UCS_CENTRAL`, and it covers the whole Cisco
-fleet.** `OPENMANAGE`, `INTERSIGHT` and `ONEVIEW` have configuration
-slots but no implementation — `tools/run_collector.py`'s
-`_PROVIDER_FACTORIES` raises a clear `NotImplementedError` for them, not
-a silent no-op. Building the next one means: implement
-`ServerInventoryProvider` for it under
-`app.infrastructure.providers.<vendor>`, add it to `_PROVIDER_FACTORIES`,
-and add a CronJob template mirroring
-`deploy/helm/server-inventory/templates/ucs-central-collector-cronjob.yaml`.
+**Two collectors exist: `UCS_CENTRAL` (the whole Cisco managed fleet)
+and `REDFISH_STANDALONE` (every machine no aggregator owns).**
+`OPENMANAGE`, `INTERSIGHT` and `ONEVIEW` have configuration slots but no
+implementation — `tools/run_collector.py`'s `_PROVIDER_FACTORIES` raises
+a clear `NotImplementedError` for them, not a silent no-op.
+
+**`REDFISH_STANDALONE` breaks three assumptions the rest of this file
+states, deliberately and with an ADR each time — read
+`docs/adr/0016-redfish-standalone-collector.md` before touching it:**
+
+1. **Its fleet comes from a mounted TOML inventory file, not from env.**
+   There is no aggregator to ask what exists. Like `UCS_MANAGER` it has a
+   login and no endpoint, but its endpoints are the hosts in that file,
+   and each may carry its own credential (referenced by name from a
+   mounted Secret). This deviates from ADR-0012's "no secret volume to
+   mount"; ADR-0016 names the deviation rather than hiding it.
+2. **`INVENTORY_COLLECTOR_NAME_PATTERN` does not apply to it.** A BMC
+   does not know the server's `ocp4-...` name, so `^ocp` would discard
+   every host the operator listed. The inventory file is the filter, and
+   there is no second line of defence behind it — treat it as a
+   review-gated, production-critical artifact.
+3. **Its cost is per *server*, not per manager** (~25 round trips per
+   BMC, against hardware that degrades when polled), so bounded
+   concurrency, a per-host wall-clock budget and a total-run budget are
+   correctness requirements rather than tuning knobs. Supported range is
+   ~400–1000 hosts per CronJob, sharded by inventory directory beyond
+   that. **It does not reach the platform's 10k target in this shape**,
+   and the ADR says so.
+
+A standalone Cisco CIMC is collected this way. That does **not** restore
+a UCS Manager entry point — `--manager-type UCS_MANAGER` remains deleted
+(below), and reaching a CIMC over Redfish is a different protocol to a
+different endpoint that knows nothing about domains or service profiles.
+
+Building the next collector means: implement `ServerInventoryProvider`
+for it under `app.infrastructure.providers.<vendor>`, add it to
+`_PROVIDER_FACTORIES`, and add a CronJob template mirroring
+`deploy/helm/server-inventory/templates/ucs-central-collector-cronjob.yaml`
+(or the `redfish-standalone-` one, if it needs mounted configuration).
 
 **How it works: Central discovers, UCS Manager collects.** Two queries go
 to Central regardless of fleet size — `computeSystem` for the registered
@@ -270,6 +300,13 @@ there works on relative DN structure, never an absolute root.
 
 ### What's explicitly NOT done yet (in rough priority order the user has confirmed)
 
+0. **Staleness detection for the Redfish collector.** A CronJob pod is
+   never scraped by Prometheus, so no collector-side metric can report
+   its own absence — the only thing that can answer "40 hosts have been
+   failing for two weeks" is the API exposing gauges derived from
+   MongoDB's `last_seen_at` (written on every ingest, currently read by
+   nothing). Until that lands, staleness is the manual query in
+   `docs/test-redfish-standalone-collector.md` §6.
 1. **Dell OpenManage / Cisco Intersight / HPE OneView collectors.** Not
    started. Before picking one: research each vendor's *current* API
    docs directly (don't trust this file's or any older research's
@@ -310,10 +347,21 @@ non-obvious enough to bite you.
   substring search (`ocp4-stone-01` contains "one" but names no site),
   and an ambiguous name yields `None` rather than a guess. `None` is a
   real state the UI shows as "Unassigned".
-- **`Vendor` is exactly dell/cisco/hp — there is no `UNKNOWN`.** Every
-  server arrives through a vendor-specific collector, so the vendor is
-  known by construction; an unrecognized value raises and is counted in
-  `IngestSummary.errors` rather than polluting per-vendor counts.
+- **`Vendor` is dell/cisco/hp/standalone — there is still no `UNKNOWN`.**
+  `STANDALONE` means *a manufacturer this platform does not model*
+  (Lenovo, Supermicro, a whitebox), **not** "collected without a
+  manager": a Dell reached at its own BMC is still `dell`, because
+  `IngestService` correlates on `(vendor, serial_normalized)` and moving
+  a machine between vendors splits it into two documents. Which collector
+  found a server is `Server.source_provider`, which is filterable. A
+  provider that cannot read the manufacturer at all reports a collection
+  failure rather than defaulting — see ADR-0016.
+- **A provider reports `None` for a field it could not read**, which is
+  not the same as zero or empty. `IngestService` carries the stored value
+  forward for a `None` and overwrites for a real value. Before this
+  existed, a sub-resource that 404'd wrote zeros over good data — which
+  took a server from CRITICAL to HEALTHY by reporting no drives, and
+  logged an audit event saying the drive had recovered.
 - **A collector only ingests servers whose name matches
   `INVENTORY_COLLECTOR_NAME_PATTERN`** (`^ocp` in `.env.example` and
   `values.yaml`; empty = collect everything). A vendor manager holds the
@@ -325,6 +373,9 @@ non-obvious enough to bite you.
   make dry runs lie. A non-matching server is never fetched: no document,
   no health state, no audit trail. This is **not** the UPI-vs-hosted
   distinction — that's classification rules over what *is* collected.
+  **`REDFISH_STANDALONE` is exempt** (`_UNFILTERED_TYPES`): a BMC does not
+  know the server's `ocp4-...` name, so the pattern would discard every
+  host the operator listed. Its inventory file is the filter instead.
 - **A collector's whole connection config is env** — one endpoint and
   login per `ManagerType`. No `Manager` document is read to decide where
   to connect and there is no credentials directory; see the collector

@@ -12,6 +12,7 @@ export interface ServerListParams {
   site_id?: string;
   vendor?: string;
   manager_id?: string;
+  source_provider?: string;
   installation_type?: string;
   health_overall?: string;
   maintenance?: boolean;

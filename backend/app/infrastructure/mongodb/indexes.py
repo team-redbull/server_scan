@@ -107,6 +107,18 @@ SERVER_INDEXES: list[IndexModel] = [
         [("maintenance.enabled", ASCENDING), ("name_normalized", ASCENDING), ("_id", ASCENDING)],
         name="maintenance_enabled_name_id",
     ),
+    IndexModel(
+        [("source_provider", ASCENDING), ("name_normalized", ASCENDING), ("_id", ASCENDING)],
+        name="source_provider_name_id",
+    ),
+    # Backs "which servers from this collector have not been seen lately",
+    # which is the only way a fleet of standalone BMCs surfaces a host that
+    # quietly stopped answering — a CronJob pod is never scraped, so no
+    # collector-side metric can report its own absence.
+    IndexModel(
+        [("source_provider", ASCENDING), ("last_seen_at", ASCENDING)],
+        name="source_provider_last_seen",
+    ),
     IndexModel([("updated_at", DESCENDING), ("_id", DESCENDING)], name="updated_at_id"),
     # Unfiltered sorts (no `FILTER_FIELDS` value supplied) still need a
     # supporting index per `SORT_FIELDS` entry, or they fall back to an

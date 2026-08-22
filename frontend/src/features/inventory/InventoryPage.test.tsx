@@ -14,6 +14,7 @@ function makeServer(overrides: Partial<ServerSummary> = {}): ServerSummary {
     model: "PowerEdge R760",
     site_id: "one",
     manager_id: "mgr_ome_tlv_01",
+    source_provider: "UCS_CENTRAL",
     classification: { installation_type: "HOSTED_CLUSTER" },
     health: { overall: "HEALTHY" },
     maintenance: { enabled: false },

@@ -135,6 +135,65 @@ class Settings(BaseSettings):
 
     collector_connect_timeout_seconds: float = 15.0
 
+    # --- Standalone Redfish collector ---
+    #
+    # A fleet-wide fallback login and **no endpoint**, the same shape
+    # UCS_MANAGER has: the endpoints are the hosts in the inventory file.
+    # Most estates give each BMC its own account, so the inventory's own
+    # per-host credential names are the normal path and these two are the
+    # fallback. See docs/adr/0016-redfish-standalone-collector.md.
+    redfish_username: str = ""
+    redfish_password: str = ""
+
+    # TOML, mounted read-only from a ConfigMap. Accepts a file or a
+    # directory of `*.toml` — a directory is what lets a large estate be
+    # sharded per site without a format change.
+    redfish_inventory_file: str = ""
+    # TOML, mounted read-only from a Secret, mapping credential names to
+    # username/password. Optional: a fleet on one account needs only the
+    # two variables above.
+    redfish_credentials_file: str = ""
+
+    # PEM bundle trusted in addition to the system store. The scalable
+    # answer for self-signed BMC certificates — Dell's custom signing
+    # certificate, or an internal CA imported to every BMC. Empty uses the
+    # system trust store alone, which correctly rejects a factory
+    # self-signed certificate.
+    redfish_ca_bundle: str = ""
+    redfish_tls_min_version: Literal["TLSv1", "TLSv1_1", "TLSv1_2", "TLSv1_3"] = "TLSv1_2"
+
+    # Connect and read are split because they answer different questions:
+    # connect bounds "is this host there at all" and wants to fail fast
+    # across a fleet with dead hosts in it, while read bounds a BMC that
+    # answered but is slow. 30s for read is evidence-led — a documented
+    # iLO fleet failed at 3s and was fixed at 20s.
+    redfish_connect_timeout_seconds: float = 10.0
+    redfish_read_timeout_seconds: float = 30.0
+
+    # Total wall clock for one host, all requests. Neither timeout above
+    # can bound this: a BMC that answers every packet slowly consumes
+    # unbounded time without ever tripping a socket timeout.
+    redfish_host_budget_seconds: float = 180.0
+    # Total wall clock for the run, enforced in-process so it trips before
+    # the CronJob's `activeDeadlineSeconds` and can report what it
+    # collected. A hard kill reports nothing.
+    redfish_run_budget_seconds: float = 3600.0
+
+    # BMCs read at once. They are independent devices, so this is bounded
+    # by our own sockets and by how much management traffic the network
+    # tolerates, not by any one BMC.
+    redfish_fleet_concurrency: int = 16
+
+    # Distinct hosts that may reject the *same* credential before it is
+    # disabled for the rest of the run.
+    redfish_auth_failure_threshold: int = 3
+    # Authentication failures across *all* credentials before the run
+    # aborts. This is the one that matters on an estate where every BMC
+    # has its own account, since the per-credential threshold above can
+    # never be reached there. Ten 401s across ten credentials is a stale
+    # Secret, not ten unrelated mistakes.
+    redfish_auth_failure_budget: int = 10
+
     # How many domains the UCS Central collector talks to at once. It uses
     # Central only to enumerate registered domains and their service-profile
     # names, then reads each domain's real inventory from that domain's own

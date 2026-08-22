@@ -15,7 +15,7 @@
 /** The three vendors this platform ingests from. There is no "unknown":
  * every server arrives through a vendor-specific collector, so the
  * vendor is known by construction. */
-export type Vendor = "dell" | "cisco" | "hp";
+export type Vendor = "dell" | "cisco" | "hp" | "standalone";
 
 /** The closed set of sites. A server's site is parsed from its name
  * (`ocp4-prod-one-infra-01` -> "one"); `null` means the name carries no
@@ -71,6 +71,9 @@ export interface ServerSummary {
   model: string;
   site_id: SiteCode | null;
   manager_id: string;
+  /** Which collector produced this record — `REDFISH_STANDALONE`
+   * means the machine has no manager and is reached at its own BMC. */
+  source_provider: string | null;
   classification: Classification;
   health: HealthSummary;
   maintenance: MaintenanceState;
@@ -221,6 +224,7 @@ export interface ServerDetail {
   maintenance: MaintenanceState;
   site_id: SiteCode | null;
   manager_id: string;
+  source_provider: string | null;
   tags?: string[];
   last_seen_at: string | null;
   updated_at: string;

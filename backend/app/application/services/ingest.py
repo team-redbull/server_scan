@@ -49,7 +49,7 @@ from app.domain.models.connectivity import (
     ConnectivityAttachment,
     compute_connectivity_facts,
 )
-from app.domain.models.hardware import Cpu, Hardware, Memory, Power, Storage, StorageDrive
+from app.domain.models.hardware import Cpu, Gpu, Hardware, Memory, Power, Storage, StorageDrive
 from app.domain.models.manager import Manager
 from app.domain.models.network import BmcInfo, NetworkInfo
 from app.domain.models.server import Identity, ProfileTemplate, Server
@@ -133,6 +133,28 @@ def _carry_forward[T](reported: T | None, previous: T | None, *, default: T) -> 
     if reported is not None:
         return reported
     return previous if previous is not None else default
+
+
+def _gpu_from_dict(data: dict[str, object]) -> Gpu:
+    """
+    Build a `Gpu` from the untyped dict a provider reports.
+
+    Args:
+        data (dict[str, object]): One entry from `ProviderServer.gpus`.
+
+    Returns:
+        Gpu: The domain model. `memory_bytes` is already in bytes — the
+            provider converts, since Redfish reports GPU memory in MiB.
+    """
+    return Gpu(
+        vendor=_opt_str(data.get("vendor")),
+        model=_opt_str(data.get("model")),
+        serial=_opt_str(data.get("serial")),
+        memory_bytes=_opt_int(data.get("memory_bytes")),
+        health=_opt_str(data.get("health")),
+        pci_address=_opt_str(data.get("pci_address")),
+        firmware_version=_opt_str(data.get("firmware_version")),
+    )
 
 
 def _drive_from_dict(data: dict[str, object]) -> StorageDrive:
@@ -464,10 +486,11 @@ class IngestService:
                     default=[],
                 ),
             ),
-            # `ProviderServer` has no GPU field (see
-            # `app.infrastructure.providers.fake.generator`'s docstring) —
-            # nothing to populate this from until the port grows one.
-            gpus=[],
+            gpus=_carry_forward(
+                [_gpu_from_dict(g) for g in ps.gpus] if ps.gpus is not None else None,
+                existing_hardware.gpus if existing_hardware else None,
+                default=[],
+            ),
             power=Power(psus=[]),
         )
 

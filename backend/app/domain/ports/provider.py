@@ -116,6 +116,14 @@ class ProviderServer:
     storage_total_bytes: int | None = None
     storage_drives: tuple[dict[str, object], ...] | None = None
 
+    # Keys mirror `app.domain.models.hardware.Gpu`. `memory_bytes` is
+    # already converted: Redfish reports GPU memory in MiB while system
+    # memory is GiB, and the port boundary is where vendor units are
+    # normalized. An empty tuple means "none discoverable through this
+    # provider", which is not the same claim as "none installed" — no
+    # standard path is populated by every vendor.
+    gpus: tuple[dict[str, object], ...] | None = None
+
     attachments: tuple[ProviderAttachment, ...] = ()
 
     tags: tuple[str, ...] = field(default_factory=tuple)

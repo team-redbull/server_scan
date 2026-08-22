@@ -32,7 +32,7 @@ import type {
 import { CLASSIFICATION_EVENT_TYPES } from "@/types/events";
 
 const INSTALLATION_TYPES: InstallationType[] = ["HOSTED_CLUSTER", "UPI", "UNCLASSIFIED"];
-const VENDORS: Vendor[] = ["dell", "cisco", "hp"];
+const VENDORS: Vendor[] = ["dell", "cisco", "hp", "standalone"];
 const MANAGER_TYPES: ManagerType[] = [
   "OPENMANAGE",
   "UCS_MANAGER",

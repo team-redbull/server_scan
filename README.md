@@ -31,6 +31,9 @@ collectors. Built so far, in order:
 9. A UI rebuilt around what an operator actually scans for: a per-site
    overview as the landing page, and a three-column server list (name,
    model, state) with everything else on the detail page.
+10. The second collector: **standalone Redfish**, for machines no
+    aggregator owns — a Cisco CIMC that Intersight cannot manage, an
+    iDRAC, a current iLO. One BMC at a time, from an inventory file.
 
 See `docs/architecture.md` for the full per-slice writeup and
 `docs/adr/` for the individual design decisions.
@@ -65,8 +68,30 @@ server's own name (`ocp4-prod-one-infra-01` -> site `one`), so a
 misconfigured manager cannot mislabel everything it collects. A name with
 no site token is surfaced as "Unassigned" rather than defaulted.
 
+**Not every machine has a manager, and those are collected too.** The
+`REDFISH_STANDALONE` collector reaches a BMC directly over DMTF Redfish —
+any conformant one, including a Cisco server whose CIMC works but which
+Intersight cannot yet manage. It is the one collector whose configuration
+differs, and it differs because it has to: there is no aggregator to ask
+what exists, so **the fleet comes from an inventory file the platform
+owns**, and each BMC may have its own login. That file is also the only
+collection filter, since a BMC does not know the server's `ocp4-...`
+name. Two consequences worth knowing before deploying it: its cost is per
+*server* rather than per manager, and a run where some hosts do not
+answer is the normal outcome rather than a failure. See
+`docs/adr/0016-redfish-standalone-collector.md` and
+`docs/test-redfish-standalone-collector.md`.
+
+Which collector produced a record is carried by `source_provider`, not by
+the vendor — a Dell reached at its own BMC is still `vendor: dell`. So
+`?source_provider=REDFISH_STANDALONE` answers "these have no manager,
+don't look for them in OpenManage or UCS", and
+`?vendor=cisco&source_provider=REDFISH_STANDALONE` answers "Cisco
+standalone".
+
 ```
  UCS Central CronJob ─┐   (one login per UCS Manager domain)
+ Redfish CronJob ─────┼── (one login per BMC, from an inventory file)
  OpenManage CronJob ──┼──▶  ProviderServer  ──▶  IngestService  ──▶  MongoDB
  Intersight CronJob ──┤       (vendor-neutral)   (classify, health,        │
  OneView CronJob ─────┘                           audit, upsert)          │

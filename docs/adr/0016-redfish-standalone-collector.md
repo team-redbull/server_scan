@@ -4,11 +4,24 @@ Date: 2026-08-23
 
 ## Status
 
-**Accepted, not yet implemented.** No collector code exists. This records
-the design, the evidence behind it, and what it cannot yet claim. The six
-open questions it was reviewed against were settled on 2026-08-23 and are
-folded in below; `docs/notes/redfish-plan.md` §6 has the reasoning for
-each.
+**Accepted and implemented**, against zero real hardware — see "What is
+still unproven", which is the section that matters most in this ADR.
+
+Implemented as `app.infrastructure.providers.redfish`, with a stdlib
+test fixture (`tests/redfish_fixture.py`) serving a Redfish mockup over
+`http.server`. It is hand-rolled because neither `sushy-tools` nor DMTF's
+own mockup server implements `SessionService` at all, so neither can
+exercise login, logout or a rejected credential — the only genuinely
+non-trivial part of the client.
+
+**No dependency was added.** The client is built on the `httpx` already
+pinned, so `pyproject.toml`, `uv.lock`, `requirements.txt` and
+`pylock.toml` are all unchanged — which is the concrete payoff of
+rejecting both candidate libraries.
+
+The six open questions it was reviewed against were settled on
+2026-08-23 and are folded in below; `docs/notes/redfish-plan.md` §6 has
+the reasoning for each.
 
 The three defects in "Pre-existing defects this surfaced" were in shipped
 code and are **fixed** — commits `1b2c10b`, `acca277`, `d8cdda2`.
