@@ -190,9 +190,11 @@ class FakeIngestService:
     def __init__(self, *, error: Exception | None = None) -> None:
         self._error = error
         self.ingested = 0
+        self.managers: list[Any] = []
 
-    async def ingest(self, provider: Any) -> Any:
+    async def ingest(self, provider: Any, *, managers: Any = (), sites: Any = ()) -> Any:
         self.ingested += 1
+        self.managers = list(managers)
         if self._error is not None:
             raise self._error
         return "summary"
@@ -241,6 +243,22 @@ class TestRunOneManager:
         assert result is not None
         assert result.collection_errors == ("domain 'b' (10.0.0.2) failed: bad credentials",)
 
+    async def test_upserts_the_manager_projection(self) -> None:
+        """`IngestService` only writes managers it is handed, so omitting
+        `managers=` left every collected server pointing at a
+        `manager_id` no document had — see docs/adr/0016.
+        """
+        ingest = FakeIngestService()
+        manager = _manager()
+        await _run_one_manager(
+            manager,
+            ingest_service=ingest,  # type: ignore[arg-type]
+            credential_resolver=FakeCredentialResolver(),  # type: ignore[arg-type]
+            timeout_seconds=5.0,
+            settings=_central_settings(),
+        )
+        assert [m.id for m in ingest.managers] == [manager.id]
+
     async def test_does_not_health_check_separately_from_ingest(self) -> None:
         """`IngestService.ingest()` health-checks as its first step, and a
         UCS login is ~4 round trips — collecting the health check here too
@@ -249,7 +267,7 @@ class TestRunOneManager:
         calls: list[str] = []
 
         class RecordingIngest(FakeIngestService):
-            async def ingest(self, provider: Any) -> Any:
+            async def ingest(self, provider: Any, *, managers: Any = (), sites: Any = ()) -> Any:
                 calls.append("ingest")
                 return "summary"
 

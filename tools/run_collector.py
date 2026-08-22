@@ -296,6 +296,26 @@ async def _build_provider(
     )
 
 
+# What a dry run prints for a field the provider could not read, as
+# distinct from `—` for a field it read and found empty. See
+# `app.domain.ports.provider.ProviderServer`.
+_UNREAD = "not read"
+
+
+def _or_unread(value: object) -> str:
+    """
+    Render an optionally-reported value for the dry-run print.
+
+    Args:
+        value (object): The reported value, or `None` if the provider
+            could not read it.
+
+    Returns:
+        str: The value as text, or `"not read"` for `None`.
+    """
+    return _UNREAD if value is None else str(value)
+
+
 def _format_capacity(capacity_bytes: int) -> str:
     """
     Render a byte count as GiB, or TiB once it is large enough that GiB
@@ -352,22 +372,34 @@ async def _dry_run_one_manager(
             break
         count += 1
         site = parse_site_code(ps.name)
+        memory = (
+            f"{ps.memory_total_bytes / 1024**3:.1f} GiB"
+            if ps.memory_total_bytes is not None
+            else _UNREAD
+        )
+        storage = (
+            _format_capacity(ps.storage_total_bytes)
+            if ps.storage_total_bytes is not None
+            else _UNREAD
+        )
+        drive_count = _or_unread(None if ps.storage_drives is None else len(ps.storage_drives))
+        macs = _UNREAD if ps.nic_macs is None else (", ".join(ps.nic_macs) or "—")
         print(
             f"\n[{count}] {ps.name}"
             f"\n     external_id : {ps.external_id}"
             f"\n     site (from name): {site.value if site else '— none in name'}"
             f"\n     vendor/model: {ps.vendor} / {ps.model}"
             f"\n     serial/uuid : {ps.serial} / {ps.system_uuid}"
-            f"\n     cpu         : {ps.cpu_sockets} sockets, {ps.cpu_cores} cores,"
-            f" {ps.cpu_threads} threads ({ps.cpu_model or 'model unknown'})"
-            f"\n     memory      : {ps.memory_total_bytes / 1024**3:.1f} GiB"
-            f"\n     storage     : {_format_capacity(ps.storage_total_bytes)} total across"
-            f" {len(ps.storage_drives)} drive(s)"
+            f"\n     cpu         : {_or_unread(ps.cpu_sockets)} sockets,"
+            f" {_or_unread(ps.cpu_cores)} cores,"
+            f" {_or_unread(ps.cpu_threads)} threads ({ps.cpu_model or 'model unknown'})"
+            f"\n     memory      : {memory}"
+            f"\n     storage     : {storage} total across {drive_count} drive(s)"
             f"\n     bmc         : {ps.bmc_address_raw or '—'} (mac {ps.bmc_mac or '—'})"
             f"\n     profile     : {ps.profile_dn or '—'}"
             f"\n     profile tmpl: {ps.profile_template_name or '—'}"
             f" [{ps.profile_template_external_id or '—'}]"
-            f"\n     nic macs    : {', '.join(ps.nic_macs) if ps.nic_macs else '—'}"
+            f"\n     nic macs    : {macs}"
             f"\n     attachments : {len(ps.attachments)}"
         )
         for a in ps.attachments:
@@ -377,7 +409,7 @@ async def _dry_run_one_manager(
                 f"  peer={a.fabric_port or '—'}"
                 f"  FI model/serial={a.fabric_model or '—'}/{a.fabric_serial or '—'}"
             )
-        for drive in ps.storage_drives:
+        for drive in ps.storage_drives or ():
             capacity_bytes = drive.get("capacity_bytes")
             size = (
                 _format_capacity(capacity_bytes)
@@ -437,7 +469,11 @@ async def _run_one_manager(
         # too would double that cost per manager and burn a second session
         # against UCS Manager's per-user session cap for nothing — this
         # `except` handles a health-check failure identically either way.
-        summary = await ingest_service.ingest(provider)
+        # `managers=[manager]` is what actually writes the `Manager`
+        # projection `manager_for()` builds. Without it every collected
+        # server carried a `manager_id` pointing at a document that was
+        # never created — see docs/adr/0016.
+        summary = await ingest_service.ingest(provider, managers=[manager])
         return _RunOutcome(summary=summary, collection_errors=collection_errors_of(provider))
     except Exception:
         logger.exception(
