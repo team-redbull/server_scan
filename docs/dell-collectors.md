@@ -147,18 +147,23 @@ Still an assumption (the analogue of the UCS `total_memory` MB assumption
 `docs/adr/0009` flags) — confirm a known-32 GiB DIMM reports `Size == 32768`.
 
 **Disks** are **decimal** (base-1000): a "480GB" drive is 480e9 bytes.
-`_disk_capacity_bytes` tries several size fields
-(`Size`/`Capacity`/`CapacityBytes`/`SizeInBytes`/`RawSize`/`DiskSize`),
-each parsed as a byte count or a "<number> <unit>" string, and — because a
-live appliance populated **none** of them (every disk came back `0`) —
-falls back to the capacity in the Dell **model string**, which reliably
-ends in it ("... M.2 480GB", "... U.2 1.92TB"). That fallback is what
-actually produces capacity today; the real size field is still unknown, so
-**paste one raw `serverArrayDisks` entry** to replace the model-string
-heuristic with the true field.
+`_disk_capacity_bytes` reads the capacity from the Dell **model string
+first** ("... M.2 480GB", "... U.2 1.92TB") because it is the one source
+that carries its own unit. The numeric fields
+(`Size`/`Capacity`/`CapacityBytes`/`SizeInBytes`/`RawSize`/`DiskSize`) are
+only a fallback for a disk whose model has no size token.
 
-The dry-run renders the per-server total in **TB** and each drive in
-**GB**, both decimal (`_format_tb`/`_format_gb`).
+This ordering is deliberate and was forced by live hardware: a
+`serverArrayDisks` entry *does* populate a `Size` field, but in an
+ambiguous unit — a 1.92 TB disk reported ~1.9e6 (i.e. MB, not bytes).
+Read as bytes it collapses to `0.0 GB`, and because it was tried first it
+shadowed the correct model-string value. Reading the unit-bearing model
+string first sidesteps the unit ambiguity entirely. If a raw
+`serverArrayDisks` entry ever confirms the true unit of a numeric field,
+that field can become primary again.
+
+The dry-run renders the per-server total in **TB** and each drive in GB
+below 1 TB / TB at or above (`_format_tb`/`_format_disk_size`).
 
 ## CPU summary
 

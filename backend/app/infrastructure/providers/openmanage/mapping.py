@@ -391,10 +391,14 @@ def _disk_capacity_bytes(device: dict[str, Any]) -> int | None:
     A disk's capacity in bytes, from its size field or, failing that, its
     model string.
 
-    Live hardware populated none of the expected size fields, leaving
-    capacity at zero; the Dell model string reliably ends in the marketed
-    capacity ("... M.2 480GB", "... U.2 1.92TB"), so it is the fallback.
-    See docs/dell-collectors.md, "Capacity units".
+    The Dell model string carries the marketed capacity with its unit
+    ("... M.2 480GB", "... U.2 1.92TB"), so it is read **first** and is
+    authoritative. The numeric `Size`-style fields are only a fallback for a
+    disk whose model has no size token: on live hardware one of them is
+    populated but in an ambiguous unit (a 1.92 TB disk reported ~1.9e6,
+    i.e. MB), which — taken as bytes — collapses to 0 GB. Trusting the
+    unit-bearing model string sidesteps that entirely. See
+    docs/dell-collectors.md, "Capacity units".
 
     Args:
         device (dict[str, Any]): One `serverArrayDisks` `InventoryInfo`
@@ -404,14 +408,14 @@ def _disk_capacity_bytes(device: dict[str, Any]) -> int | None:
         int | None: Capacity in bytes, or `None` when neither source yields
             one.
     """
-    for key in _DISK_SIZE_KEYS:
-        parsed = _size_field_bytes(device.get(key))
-        if parsed:
-            return parsed
     model = str(device.get("ModelNumber") or device.get("Model") or device.get("Name") or "")
     match = _MODEL_SIZE_RE.search(model)
     if match:
         return int(float(match.group(1)) * _DECIMAL_UNIT_BYTES[match.group(2).upper()]) or None
+    for key in _DISK_SIZE_KEYS:
+        parsed = _size_field_bytes(device.get(key))
+        if parsed:
+            return parsed
     return None
 
 
