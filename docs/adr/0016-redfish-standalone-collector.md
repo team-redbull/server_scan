@@ -4,8 +4,10 @@ Date: 2026-08-23
 
 ## Status
 
-**Accepted and implemented**, against zero real hardware — see "What is
-still unproven", which is the section that matters most in this ADR.
+**Accepted and implemented, and now run once against real hardware** —
+see "Update (2026-08-23): two defects found on the first real run" at the
+end of this file. "What is still unproven" below is otherwise unchanged:
+this was one operator's fleet, not a survey.
 
 Implemented as `app.infrastructure.providers.redfish`, with a stdlib
 test fixture (`tests/redfish_fixture.py`) serving a Redfish mockup over
@@ -254,12 +256,16 @@ exactly as it already does for classification and health.
 
 Held to ADR-0009's standard: what a live run has *not* settled.
 
-**No Redfish hardware has been touched.** Everything rests on the DMTF
-schema, DMTF's own mockups, and vendor documentation. ADR-0009 found five
-real defects that were invisible without hardware — a nonexistent MO
-class, a BMC filter matching nothing, a whole class of adapter interface
-never collected, fabric counts always zero, and servers named after their
-chassis slot. **Assume this design has an equivalent set.**
+**One BMC has been touched, not a survey.** Before 2026-08-23 this rested
+entirely on the DMTF schema, DMTF's own mockups, and vendor documentation.
+The first real run already found two defects — see the dated update at
+the end of this file — matching ADR-0009's experience closely enough to
+repeat its warning rather than retire it: that ADR found five real
+defects invisible without hardware — a nonexistent MO class, a BMC filter
+matching nothing, a whole class of adapter interface never collected,
+fabric counts always zero, and servers named after their chassis slot.
+**Assume this design still has more of its own**, on hardware and vendors
+not yet run against.
 
 Specifically unsettled:
 
@@ -384,3 +390,46 @@ invisible-but-present.
 by both.** Correctness converges — they share `(vendor, serial)` and
 therefore one document — but `manager_id` and `source_provider` are
 single-valued and flip each cycle. Documented, not detected.
+
+## Update (2026-08-23): two defects found on the first real run
+
+Reported against the operator's own hardware, the day this ADR was
+written. Both fixed; neither had been caught by the CI fixture, and both
+are the exact class this ADR's "What is still unproven" warned about —
+untested assumptions the schema alone could not rule out.
+
+**The client forced a trailing slash onto the session-creation URI, and
+real hardware rejected it.** `_login()` unconditionally appended `/` to
+whatever the service root advertised at `Links.Sessions` or
+`SessionService.@odata.id` before POSTing to it — a rewrite of a
+server-supplied `@odata.id` that DSP0266 gives no basis for and that this
+ADR's own Evidence section never claimed to have researched. A live BMC
+answers its Sessions collection at an exact path and 404s the same URI
+with a trailing slash appended, so every login failed against it. The CI
+fixture never caught this because its own routing matches by
+`str.startswith`, tolerating exactly the mistake real hardware does not
+— a reminder that a hand-rolled test fixture can be *more* permissive
+than the thing it stands in for, not just less capable. Fixed by posting
+the advertised URI unmodified
+(`app.infrastructure.providers.redfish.client._login`).
+
+**`MemorySummary.TotalSystemMemoryGiB` is absent on real hardware**,
+despite `system_to_provider_server` treating it as the only source of a
+server's memory. The property is schema-optional — confirmed already in
+this ADR's Evidence section for `ProcessorSummary`/`CoreCount`, just not
+carried over to memory at the time. The reported BMC populates `Memory`
+(the `ComputerSystem` navigation link to a `MemoryCollection`, one member
+per installed DIMM, confirmed present since `ComputerSystem` v1_1_0)
+instead, each member's own `CapacityMiB` — schema-optional too, but
+populated on this hardware. `mapping.memory_bytes` now sums
+`Memory[].CapacityMiB` across every non-absent DIMM
+(`Status.State != "Absent"`, the same empty-bay signal already relied on
+for `Drive`) whenever `MemorySummary` is absent or unparseable — the
+identical "required fallback, not a defensive one" shape `cpu_summary`
+already used for `CoreCount`. `provider.py` fetches `Memory` through the
+same `_optional()` used for `Processors`/`EthernetInterfaces`, so a BMC
+that cannot serve it degrades to `None` rather than failing the host.
+
+Neither defect changed anything about the account-lockout safety design
+— both are read-path mapping/transport bugs, not authentication-retry
+behaviour.

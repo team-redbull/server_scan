@@ -313,12 +313,16 @@ class RedfishClient:
             RedfishAuthError: If the credential is rejected.
             RedfishProtocolError: If the response carries no token.
         """
-        uri = self._sessions_uri()
-        if not uri.endswith("/"):
-            uri = f"{uri}/"
+        # Posted exactly as advertised — DSP0266 places no requirement on
+        # a trailing slash either way, and appending one unconditionally
+        # broke real hardware: confirmed against a live BMC that answers
+        # its Sessions collection at an exact path and 404s the same URI
+        # with a trailing slash appended. The CI fixture never caught this
+        # because its own routing matches by prefix (`str.startswith`),
+        # tolerating exactly the mistake real hardware does not.
         response = await self._send(
             "POST",
-            uri,
+            self._sessions_uri(),
             authenticated=False,
             json={
                 "UserName": self._target.credential.username,
