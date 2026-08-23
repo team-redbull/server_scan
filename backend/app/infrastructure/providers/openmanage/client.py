@@ -15,12 +15,19 @@ throttling that a blocking client forces. See docs/dell-collectors.md,
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 import httpx
 import structlog
 
 logger = structlog.get_logger(__name__)
+
+# When set, `get_inventory` logs the raw first entry (and its keys) of every
+# section it fetches. A field-discovery aid: OME's inventory field names
+# vary by version, and this is how the real ones are confirmed rather than
+# guessed. Off by default; noisy when on, so pair it with --limit 1.
+_DUMP_INVENTORY_ENV = "INVENTORY_OME_DUMP_INVENTORY"
 
 
 class OmeConnectionError(Exception):
@@ -220,7 +227,16 @@ class OmeClient:
         info = body.get("InventoryInfo")
         if not isinstance(info, list):
             return []
-        return [entry for entry in info if isinstance(entry, dict)]
+        entries = [entry for entry in info if isinstance(entry, dict)]
+        if entries and os.environ.get(_DUMP_INVENTORY_ENV):
+            logger.info(
+                "ome.inventory_raw",
+                section=section,
+                device_id=str(device_id),
+                keys=sorted(entries[0].keys()),
+                first_entry=entries[0],
+            )
+        return entries
 
     async def _get_json(self, path: str) -> dict[str, Any]:
         """
