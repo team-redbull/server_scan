@@ -322,6 +322,38 @@ def is_gpu_processor(processor: dict[str, Any]) -> bool:
     return str(processor.get("ProcessorType", "")) == "GPU" and not is_absent(processor)
 
 
+def has_only_gpu_processors(processors: list[dict[str, Any]] | None) -> bool:
+    """
+    Report whether a `ComputerSystem` is a GPU-only baseboard tray rather
+    than an independently bootable host.
+
+    NVIDIA's DGX/HGX platforms expose the GPU baseboard as its own
+    `ComputerSystem` — confirmed against NVIDIA's own Redfish docs, e.g.
+    `/redfish/v1/Systems/HGX_Baseboard_0` alongside a separate host
+    system such as `/redfish/v1/Systems/DGX`. A tray reports GPUs and
+    nothing that looks like a CPU (`cpu_summary`'s own convention: a
+    `Processor` with no `ProcessorType` defaults to `"CPU"`), so `provider.py`
+    uses this to recognize one and merge its GPUs into its sibling host
+    system instead of ingesting it as a second, CPU-less, often
+    vendor-less "server" for the same physical machine. See
+    docs/adr/0016's dated update.
+
+    Args:
+        processors (list[dict[str, Any]] | None): The system's
+            `Processors` members, or None when unread.
+
+    Returns:
+        bool: True when every non-absent processor is a GPU and at least
+            one is. False for an empty or unread `Processors`, so a
+            system this collector could not read is never assumed to be
+            a tray.
+    """
+    if not processors:
+        return False
+    present = [p for p in processors if not is_absent(p)]
+    return bool(present) and all(is_gpu_processor(p) for p in present)
+
+
 def _gpu_memory_type(processor: dict[str, Any]) -> str | None:
     """
     A GPU's memory generation, e.g. `"HBM3"`, `"HBM3e"`, `"GDDR6"`.
@@ -558,6 +590,7 @@ def system_to_provider_server(
     bmc_mac: str | None,
     gpu_metrics_by_processor: dict[str, dict[str, Any]] | None = None,
     gpu_environment_by_processor: dict[str, dict[str, Any]] | None = None,
+    extra_gpus: tuple[dict[str, object], ...] = (),
 ) -> ProviderServer:
     """
     Convert one `ComputerSystem` and its sub-resources into a
@@ -582,6 +615,10 @@ def system_to_provider_server(
         gpu_environment_by_processor (dict[str, dict[str, Any]] | None):
             Each GPU processor's own `EnvironmentMetrics`, keyed the same
             way.
+        extra_gpus (tuple[dict[str, object], ...]): Already-mapped GPU
+            entries from a sibling GPU-baseboard system being merged
+            into this one — see `has_only_gpu_processors`. Appended
+            after this system's own GPUs, if any.
 
     Returns:
         ProviderServer: The vendor-neutral DTO the ingest pipeline
@@ -594,6 +631,14 @@ def system_to_provider_server(
     odata_id = str(system.get("@odata.id", ""))
     sockets, cores, threads, cpu_model = cpu_summary(system, processors)
     storage_drives, storage_total = storage_from_drives(drives)
+
+    gpus = gpus_from_processors(
+        processors,
+        metrics_by_processor=gpu_metrics_by_processor,
+        environment_by_processor=gpu_environment_by_processor,
+    )
+    if extra_gpus:
+        gpus = (gpus or ()) + extra_gpus
 
     return ProviderServer(
         external_id=f"redfish://{host}{odata_id}",
@@ -616,11 +661,7 @@ def system_to_provider_server(
         memory_total_bytes=memory_bytes(system, dimms),
         storage_total_bytes=storage_total,
         storage_drives=storage_drives,
-        gpus=gpus_from_processors(
-            processors,
-            metrics_by_processor=gpu_metrics_by_processor,
-            environment_by_processor=gpu_environment_by_processor,
-        ),
+        gpus=gpus,
         # A standalone server has no fabric interconnect, so there is
         # nothing to attach. An empty tuple keeps the seeded
         # `connectivity.fabric_paths_down` policies from evaluating

@@ -522,3 +522,57 @@ this risk does. If the split is observed in practice, the fix is
 correlation-time reconciliation (detecting a `STANDALONE` document and a
 newer real-vendor document that plausibly describe the same host), not
 reverting this change.
+
+## Update (2026-08-23): DGX/HGX GPU-baseboard systems are merged into their host
+
+The operator's earlier question ("what's the difference between
+`/redfish/v1/Systems/DGX` and `/redfish/v1/Systems/HGX_Baseboard_0`?")
+surfaced a real bug rather than a curiosity. Confirmed against NVIDIA's
+own docs (the DGX B300 user guide and the DGX GB200 rack-scale guide):
+NVIDIA's DGX/HGX platforms model one physical machine as **two**
+`ComputerSystem` resources — a host system (`DGX`, or `System_0` on
+rack-scale) carrying BIOS/CPU/host memory/host storage, and a separate
+GPU-baseboard system (`HGX_Baseboard_0`) carrying only the GPUs
+(`Processors/GPU_SXM_<id>`) and their telemetry. On rack-scale GB200
+systems this goes further still — separate management controllers
+(`BMC_0` vs `HGX_BMC_0`) for the two trays.
+
+`_collect_systems` already anticipated "one BMC, several systems," but
+only for genuinely independent hosts sharing a BMC (OpenBMC multi-node).
+It had no way to recognize that a DGX's two systems are one physical
+machine, so each would ingest as its own server: the host with CPU/
+memory/storage but zero GPUs, and the baseboard with 8 GPUs but no CPU
+and — until the Manufacturer change above — no vendor either, failing
+collection outright.
+
+**`mapping.has_only_gpu_processors`** recognizes a GPU-baseboard tray by
+shape, not by name (`HGX_Baseboard_0` is NVIDIA's current convention,
+not a guaranteed one to match against forever): every non-absent
+`Processor` reports `ProcessorType == "GPU"` and none looks like a CPU
+(reusing `cpu_summary`'s own convention that an unmarked processor
+defaults to `"CPU"`). `_collect_systems` reads every system's
+`Processors` up front, partitions them into trays and hosts by that
+test, and — **only when there is exactly one host** — folds every
+tray's already-mapped GPUs into that host's `ProviderServer` via a new
+`extra_gpus` parameter on `system_to_provider_server`, and does not
+ingest the tray as its own server at all.
+
+**The one-host requirement is a deliberate safety rail, not an
+oversight.** Zero hosts, or more than one, means there is no way to
+know which host a tray's GPUs belong to — merging would be a guess.
+In that case nothing is merged: every system, tray included, ingests
+independently exactly as before (a tray now succeeds as
+`vendor: standalone` rather than failing, per the Manufacturer change
+above, rather than being silently dropped), and a
+`redfish.gpu_baseboard_ambiguous` warning names what was found. The
+common one-host-one-or-more-trays case logs
+`redfish.gpu_baseboard_merged` per tray instead.
+
+Not yet run against real DGX/HGX hardware — verified against NVIDIA's
+documentation and a hand-built fixture shaped to match it
+(`_with_hgx_baseboard` in the test file), not a live BMC. The one thing
+most worth confirming on a real run: whether `HGX_Baseboard_0` genuinely
+reports zero CPU-type `Processors` entries (rather than, say, omitting
+`Processors` from its service root link entirely, in which case
+`has_only_gpu_processors` correctly returns `False` for it and it would
+be — wrongly — treated as an unmergeable second host).

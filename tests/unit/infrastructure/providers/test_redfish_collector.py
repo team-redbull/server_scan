@@ -223,6 +223,102 @@ class TestHealthyHost:
         assert len(servers) == 1
 
 
+def _with_hgx_baseboard(resources: dict[str, Any]) -> dict[str, Any]:
+    """Add a second `ComputerSystem` shaped like NVIDIA's GPU-baseboard
+    tray (`HGX_Baseboard_0`, confirmed against NVIDIA's own DGX/HGX
+    Redfish docs) alongside `minimal_service()`'s host system.
+    """
+    resources = dict(resources)
+    resources["/redfish/v1/Systems"] = {
+        **resources["/redfish/v1/Systems"],
+        "Members": [
+            {"@odata.id": "/redfish/v1/Systems/1"},
+            {"@odata.id": "/redfish/v1/Systems/HGX_Baseboard_0"},
+        ],
+    }
+    resources["/redfish/v1/Systems/HGX_Baseboard_0"] = {
+        "@odata.id": "/redfish/v1/Systems/HGX_Baseboard_0",
+        "@odata.type": "#ComputerSystem.v1_22_0.ComputerSystem",
+        "Id": "HGX_Baseboard_0",
+        "Name": "HGX Baseboard",
+        # No Manufacturer, no CPU — the shape that distinguishes a GPU
+        # tray from an independently bootable host.
+        "Processors": {"@odata.id": "/redfish/v1/Systems/HGX_Baseboard_0/Processors"},
+    }
+    resources["/redfish/v1/Systems/HGX_Baseboard_0/Processors"] = {
+        "@odata.id": "/redfish/v1/Systems/HGX_Baseboard_0/Processors",
+        "Members": [{"@odata.id": "/redfish/v1/Systems/HGX_Baseboard_0/Processors/GPU_SXM_1"}],
+    }
+    resources["/redfish/v1/Systems/HGX_Baseboard_0/Processors/GPU_SXM_1"] = {
+        "@odata.id": "/redfish/v1/Systems/HGX_Baseboard_0/Processors/GPU_SXM_1",
+        "@odata.type": "#Processor.v1_22_0.Processor",
+        "Id": "GPU_SXM_1",
+        "Name": "GPU_SXM_1",
+        "ProcessorType": "GPU",
+        "Manufacturer": "Nvidia(R) Corporation",
+        "Model": "H100 SXM5",
+        "MemorySummary": {"TotalMemorySizeMiB": 81920},
+        "Status": {"State": "Enabled", "Health": "OK"},
+    }
+    return resources
+
+
+class TestGpuBaseboardMerging:
+    """NVIDIA's DGX/HGX platforms split one physical machine into a host
+    `ComputerSystem` and a GPU-only baseboard one (confirmed against
+    NVIDIA's own Redfish docs — `/redfish/v1/Systems/DGX` alongside
+    `/redfish/v1/Systems/HGX_Baseboard_0`). See docs/adr/0016's dated
+    update.
+    """
+
+    async def test_a_gpu_only_tray_is_merged_into_its_one_sibling_host(self) -> None:
+        resources = _with_hgx_baseboard(minimal_service())
+        with RedfishFixture(resources=resources) as fixture:
+            servers = await _collect(_provider(fixture.port))
+
+        # One server, not two — the tray is not ingested on its own.
+        assert len(servers) == 1
+        server = servers[0]
+        assert server.name == "ocp4-prod-one-infra-01"
+        assert server.vendor == Vendor.DELL.value  # from the host, not the tray
+        assert server.cpu_cores == 64  # the tray has none to contribute
+
+        gpus = server.gpus or ()
+        assert len(gpus) == 2
+        models = {gpu["model"] for gpu in gpus}
+        assert models == {"Nvidia(R) TU102", "H100 SXM5"}
+
+    async def test_an_ambiguous_tray_is_left_unmerged(self) -> None:
+        """Two real hosts plus one tray: there is no single sibling to
+        fold it into, so nothing is merged and every system ingests
+        separately rather than guessing which host owns the tray.
+        """
+        resources = _with_hgx_baseboard(minimal_service())
+        second_host = dict(resources["/redfish/v1/Systems/1"])
+        second_host["@odata.id"] = "/redfish/v1/Systems/2"
+        second_host["Id"] = "2"
+        second_host["HostName"] = "ocp4-prod-one-infra-02"
+        second_host["SerialNumber"] = "FCH2201V0AC"
+        resources["/redfish/v1/Systems/2"] = second_host
+        resources["/redfish/v1/Systems"] = {
+            **resources["/redfish/v1/Systems"],
+            "Members": [
+                {"@odata.id": "/redfish/v1/Systems/1"},
+                {"@odata.id": "/redfish/v1/Systems/2"},
+                {"@odata.id": "/redfish/v1/Systems/HGX_Baseboard_0"},
+            ],
+        }
+        with RedfishFixture(resources=resources) as fixture:
+            servers = await _collect(_provider(fixture.port))
+
+        # All three ingest independently: the two real hosts, plus the
+        # tray on its own (as vendor=standalone, per the Manufacturer
+        # change) rather than being silently dropped or guessed onto
+        # either host.
+        assert len(servers) == 3
+        assert sum(1 for s in servers if s.vendor == Vendor.STANDALONE.value) == 1
+
+
 class TestFailureModes:
     async def test_an_unreachable_host_is_recorded_not_raised(self) -> None:
         # Port 1 is reserved and refuses immediately.

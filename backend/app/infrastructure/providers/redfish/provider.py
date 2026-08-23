@@ -40,7 +40,12 @@ from app.infrastructure.providers.redfish.client import (
     RedfishUnreachableError,
     validate_odata_id,
 )
-from app.infrastructure.providers.redfish.mapping import is_gpu_processor, system_to_provider_server
+from app.infrastructure.providers.redfish.mapping import (
+    gpus_from_processors,
+    has_only_gpu_processors,
+    is_gpu_processor,
+    system_to_provider_server,
+)
 from app.infrastructure.providers.redfish.targets import RedfishTarget
 
 logger = structlog.get_logger(__name__)
@@ -403,20 +408,31 @@ class RedfishStandaloneProvider:
         """
         Open a session and map every `ComputerSystem` the BMC exposes.
 
-        One BMC can expose more than one system — OpenBMC multi-host does
-        — so this returns a list rather than a single server.
+        One BMC can expose more than one system, for two different
+        reasons that need opposite handling. OpenBMC multi-host genuinely
+        means several independent servers sharing a BMC — each becomes
+        its own `ProviderServer`. NVIDIA's DGX/HGX platforms instead
+        split *one* physical machine into a host system (e.g.
+        `/redfish/v1/Systems/DGX`) and a GPU-baseboard system with no CPU
+        at all (`/redfish/v1/Systems/HGX_Baseboard_0`) — ingesting both
+        independently would create a second, CPU-less, often
+        vendor-less "server" for the same box. `has_only_gpu_processors`
+        tells the two apart: a tray reports GPUs and nothing that looks
+        like a CPU. See docs/adr/0016's dated update.
 
         Args:
             target (RedfishTarget): The BMC to collect.
 
         Returns:
-            list[ProviderServer]: One per system.
+            list[ProviderServer]: One per physical machine — a
+                GPU-baseboard tray's GPUs are folded into its sibling
+                host rather than counted separately, whenever exactly
+                one sibling host is present to fold them into.
 
         Raises:
             RedfishError: Propagated to `_collect_host`, which classifies
                 it.
         """
-        collected: list[ProviderServer] = []
         async with self._client_factory(target) as client:
             systems_link = client.service_root.get("Systems", {})
             systems_path = systems_link.get("@odata.id") if isinstance(systems_link, dict) else None
@@ -430,9 +446,57 @@ class RedfishStandaloneProvider:
                 return []
 
             bmc_mac = await self._bmc_mac(client, systems[0])
+
+            # Read every system's Processors + GPU telemetry up front, so
+            # a GPU-baseboard tray can be recognized and its metrics
+            # already in hand before deciding whether to merge it.
+            fetched: list[
+                tuple[dict[str, Any], list[dict[str, Any]] | None, dict[str, Any], dict[str, Any]]
+            ] = []
             for system in systems:
                 processors = await self._optional(client, system, "Processors")
                 gpu_metrics, gpu_environment = await self._gpu_telemetry(client, processors)
+                fetched.append((system, processors, gpu_metrics, gpu_environment))
+
+            is_tray = [has_only_gpu_processors(f[1]) for f in fetched]
+            trays = [f for f, tray in zip(fetched, is_tray, strict=True) if tray]
+            hosts = [f for f, tray in zip(fetched, is_tray, strict=True) if not tray]
+
+            extra_gpus: tuple[dict[str, object], ...] = ()
+            emit = fetched
+            if trays and len(hosts) == 1:
+                merged: list[dict[str, object]] = []
+                for tray_system, tray_processors, tray_metrics, tray_environment in trays:
+                    tray_gpus = gpus_from_processors(
+                        tray_processors,
+                        metrics_by_processor=tray_metrics,
+                        environment_by_processor=tray_environment,
+                    )
+                    merged.extend(tray_gpus or ())
+                    logger.info(
+                        "redfish.gpu_baseboard_merged",
+                        host=target.host,
+                        tray=str(tray_system.get("@odata.id") or tray_system.get("Id") or ""),
+                        into=str(hosts[0][0].get("@odata.id") or hosts[0][0].get("Id") or ""),
+                        gpus=len(tray_gpus or ()),
+                    )
+                extra_gpus = tuple(merged)
+                emit = hosts  # the tray itself is not ingested as its own server
+            elif trays:
+                logger.warning(
+                    "redfish.gpu_baseboard_ambiguous",
+                    host=target.host,
+                    trays=[str(t[0].get("@odata.id") or t[0].get("Id") or "") for t in trays],
+                    hosts=len(hosts),
+                    hint=(
+                        "Found a GPU-only ComputerSystem (all-GPU Processors, no CPU) but "
+                        "could not identify exactly one sibling host to merge it into, so "
+                        "every system is being ingested separately instead."
+                    ),
+                )
+
+            collected: list[ProviderServer] = []
+            for system, processors, gpu_metrics, gpu_environment in emit:
                 # Never raises: a missing/null Manufacturer maps to
                 # Vendor.STANDALONE (vendor_from_manufacturer) rather than
                 # failing the system, so there is nothing to catch here.
@@ -450,6 +514,7 @@ class RedfishStandaloneProvider:
                         bmc_mac=bmc_mac,
                         gpu_metrics_by_processor=gpu_metrics,
                         gpu_environment_by_processor=gpu_environment,
+                        extra_gpus=extra_gpus,
                     )
                 )
         return collected
