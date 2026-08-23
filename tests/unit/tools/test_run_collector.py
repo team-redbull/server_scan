@@ -366,6 +366,58 @@ class TestDryRun:
         assert "five" in out
         assert "Nothing was written" in out
 
+    async def test_dry_run_shows_gpu_detail(self, capsys: Any) -> None:
+        """The dry-run print has to show every field a collector reports,
+        not just count them — this is the one place a naming/data problem
+        is visible before a write.
+        """
+
+        class FakeProvider:
+            provider_type = "REDFISH_STANDALONE"
+
+            async def health_check(self) -> None:
+                return None
+
+            async def list_servers(self) -> Any:
+                yield ProviderServer(
+                    external_id="redfish://10.0.0.5/redfish/v1/Systems/1",
+                    vendor="standalone",
+                    name="dgx-h100-01",
+                    gpus=(
+                        {
+                            "vendor": "Nvidia(R) Corporation",
+                            "model": "H100",
+                            "serial": "GPU-ABC123",
+                            "memory_bytes": 80 * 1024**3,
+                            "memory_type": "HBM3",
+                            "ecc_mode_enabled": True,
+                            "correctable_error_count": 2,
+                            "uncorrectable_error_count": 0,
+                            "temperature_celsius": 58.0,
+                            "power_watts": 350.0,
+                            "health": "HEALTHY",
+                            "pci_address": None,
+                            "firmware_version": "96.00.5E.00.02",
+                        },
+                    ),
+                )
+
+        await _dry_run_one_manager(
+            _manager(),
+            credential_resolver=FakeCredentialResolver(),  # type: ignore[arg-type]
+            timeout_seconds=5.0,
+            limit=None,
+            provider_factory=_factory(FakeProvider()),
+        )
+        out = capsys.readouterr().out
+        assert "gpus        : 1" in out
+        assert "gpu H100  vendor=Nvidia(R) Corporation  serial=GPU-ABC123" in out
+        assert "HBM3" in out
+        assert "ecc=True" in out
+        assert "errors=2c/0u" in out
+        assert "temp=58°C" in out
+        assert "power=350W" in out
+
     async def test_dry_run_respects_limit(self, capsys: Any) -> None:
         class FakeProvider:
             provider_type = "UCS_MANAGER"

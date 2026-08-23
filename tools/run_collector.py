@@ -504,6 +504,7 @@ async def _dry_run_one_manager(
             f" [{ps.profile_template_external_id or '—'}]"
             f"\n     nic macs    : {macs}"
             f"\n     attachments : {len(ps.attachments)}"
+            f"\n     gpus        : {_or_unread(None if ps.gpus is None else len(ps.gpus))}"
         )
         for a in ps.attachments:
             print(
@@ -523,6 +524,24 @@ async def _dry_run_one_manager(
                 f"        disk {drive.get('id')}  {drive.get('model') or '—'}"
                 f"  serial={drive.get('serial') or '—'}"
                 f"  {drive.get('media_type')}  {size}  health={drive.get('health')}"
+            )
+        for gpu in ps.gpus or ():
+            gpu_memory = gpu.get("memory_bytes")
+            gpu_size = (
+                _format_capacity(gpu_memory) if isinstance(gpu_memory, int) else "VRAM unknown"
+            )
+            temp = gpu.get("temperature_celsius")
+            power = gpu.get("power_watts")
+            print(
+                f"        gpu {gpu.get('model') or '—'}  vendor={gpu.get('vendor') or '—'}"
+                f"  serial={gpu.get('serial') or '—'}"
+                f"  {gpu_size} ({gpu.get('memory_type') or 'memory type unknown'})"
+                f"  ecc={gpu.get('ecc_mode_enabled')}"
+                f"  errors={gpu.get('correctable_error_count')}c/"
+                f"{gpu.get('uncorrectable_error_count')}u"
+                f"  temp={f'{temp:.0f}°C' if isinstance(temp, (int, float)) else '—'}"
+                f"  power={f'{power:.0f}W' if isinstance(power, (int, float)) else '—'}"
+                f"  health={gpu.get('health')}"
             )
     print(f"\n{manager.name}: {count} server(s) reported. Nothing was written.")
     return count
