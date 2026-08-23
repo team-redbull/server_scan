@@ -139,8 +139,13 @@ export interface StorageInfo {
 }
 
 export interface GpuInfo {
+  vendor?: string;
   model?: string;
+  serial?: string;
   memory_bytes?: number;
+  health?: HealthSeverity;
+  pci_address?: string;
+  firmware_version?: string;
 }
 
 export interface PsuInfo {

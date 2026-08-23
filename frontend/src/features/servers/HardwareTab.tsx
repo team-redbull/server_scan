@@ -86,11 +86,34 @@ export function HardwareTab({ hardware }: { hardware: HardwareInfo | undefined }
       <section>
         <h2 className="text-sm font-semibold uppercase tracking-wide text-gray-500">GPU</h2>
         {gpus && gpus.length > 0 ? (
-          <ul className="mt-2 list-disc pl-5 text-sm">
-            {gpus.map((gpu, index) => (
-              <li key={`${gpu.model ?? "gpu"}-${index}`}>{gpu.model ?? "Unknown model"}</li>
-            ))}
-          </ul>
+          <table className="mt-2 min-w-full divide-y divide-gray-200 text-sm dark:divide-gray-700">
+            <thead>
+              <tr className="text-left text-gray-500">
+                <th className="py-1 pr-4">Vendor</th>
+                <th className="py-1 pr-4">Model</th>
+                <th className="py-1 pr-4">Serial</th>
+                <th className="py-1 pr-4">VRAM</th>
+                <th className="py-1 pr-4">Health</th>
+                <th className="py-1 pr-4">Firmware</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
+              {gpus.map((gpu, index) => (
+                <tr key={`${gpu.serial ?? gpu.model ?? "gpu"}-${index}`}>
+                  <td className="py-1 pr-4">{gpu.vendor ?? "—"}</td>
+                  <td className="py-1 pr-4">{gpu.model ?? "Unknown model"}</td>
+                  <td className="py-1 pr-4">{gpu.serial ?? "—"}</td>
+                  <td className="py-1 pr-4">
+                    {gpu.memory_bytes !== undefined ? formatBytes(gpu.memory_bytes) : "—"}
+                  </td>
+                  <td className="py-1 pr-4">
+                    {gpu.health ? <HealthBadge severity={gpu.health} /> : "—"}
+                  </td>
+                  <td className="py-1 pr-4">{gpu.firmware_version ?? "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         ) : (
           <p className="mt-2 text-sm text-gray-500">No GPUs.</p>
         )}
