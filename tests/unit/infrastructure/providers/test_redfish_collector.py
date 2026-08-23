@@ -308,9 +308,12 @@ class TestFailureModes:
 
         assert servers[0].memory_total_bytes == 128 * 1024**3
 
-    async def test_a_system_without_a_manufacturer_is_skipped(self) -> None:
-        """Guessing the vendor would change the correlation key and split
-        one machine into two documents the day the property came back.
+    async def test_a_system_without_a_manufacturer_ingests_as_standalone(self) -> None:
+        """Reversed 2026-08-23 at the operator's request: a missing/null
+        Manufacturer now maps to Vendor.STANDALONE and the system is
+        still ingested, rather than being a collection failure. See
+        docs/adr/0016's dated update for the correlation-key tradeoff
+        this reopens.
         """
         resources = minimal_service()
         system = dict(resources["/redfish/v1/Systems/1"])
@@ -320,8 +323,9 @@ class TestFailureModes:
             provider = _provider(fixture.port)
             servers = await _collect(provider)
 
-        assert servers == []
-        assert any("Manufacturer" in e for e in provider.collection_errors)
+        assert len(servers) == 1
+        assert servers[0].vendor == Vendor.STANDALONE.value
+        assert provider.collection_errors == ()
 
     async def test_a_non_conformant_service_fails_before_any_login(self) -> None:
         """What makes "iLO 4 is out of scope" true rather than

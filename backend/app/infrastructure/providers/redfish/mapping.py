@@ -69,7 +69,7 @@ _PLACEHOLDER_SERIALS = frozenset(
 )
 
 
-def vendor_from_manufacturer(manufacturer: object) -> Vendor | None:
+def vendor_from_manufacturer(manufacturer: object) -> Vendor:
     """
     Map a Redfish `Manufacturer` onto this platform's vendor.
 
@@ -77,15 +77,17 @@ def vendor_from_manufacturer(manufacturer: object) -> Vendor | None:
         manufacturer (object): `ComputerSystem.Manufacturer` as received.
 
     Returns:
-        Vendor | None: The matching vendor, `Vendor.STANDALONE` for a
-            manufacturer this platform does not model, or `None` when the
-            property is absent or null — which is a collection failure for
-            that host, not a vendor decision, because guessing here would
-            change the server's correlation key and split one machine into
-            two documents.
+        Vendor: The matching vendor, or `Vendor.STANDALONE` both for a
+            manufacturer this platform does not model and for one that is
+            absent or null. The absent/null case was a collection failure
+            through 2026-08-23 rather than a vendor decision — changed at
+            the operator's request. See docs/adr/0016's dated update for
+            the correlation-key risk this reopens: if the property starts
+            reporting after ingesting under STANDALONE, the machine splits
+            into two documents rather than one being corrected in place.
     """
     if not isinstance(manufacturer, str) or not manufacturer.strip():
-        return None
+        return Vendor.STANDALONE
     text = manufacturer.strip().lower()
     for prefix, vendor in _VENDOR_PREFIXES:
         if text.startswith(prefix):
@@ -583,21 +585,11 @@ def system_to_provider_server(
 
     Returns:
         ProviderServer: The vendor-neutral DTO the ingest pipeline
-            consumes.
-
-    Raises:
-        ValueError: If `Manufacturer` is absent or null. That is a
-            collection failure rather than a vendor decision: defaulting
-            it would change the server's correlation key and orphan a
-            duplicate document the day the property came back.
+            consumes. Never raises on a missing `Manufacturer` — see
+            `vendor_from_manufacturer`, which maps that to
+            `Vendor.STANDALONE` rather than failing the system.
     """
     vendor = vendor_from_manufacturer(system.get("Manufacturer"))
-    if vendor is None:
-        raise ValueError(
-            f"{host}: ComputerSystem reports no Manufacturer, so its vendor cannot be "
-            "determined. Ingesting it under a guessed vendor would split this machine into "
-            "two documents once the property returns."
-        )
 
     odata_id = str(system.get("@odata.id", ""))
     sockets, cores, threads, cpu_model = cpu_summary(system, processors)

@@ -431,30 +431,27 @@ class RedfishStandaloneProvider:
 
             bmc_mac = await self._bmc_mac(client, systems[0])
             for system in systems:
-                try:
-                    processors = await self._optional(client, system, "Processors")
-                    gpu_metrics, gpu_environment = await self._gpu_telemetry(client, processors)
-                    collected.append(
-                        system_to_provider_server(
-                            system,
-                            host=target.host,
-                            base_url=target.base_url,
-                            manager_id=self._manager.id,
-                            override_name=target.name,
-                            processors=processors,
-                            drives=await self._drives(client, system),
-                            dimms=await self._optional(client, system, "Memory"),
-                            interfaces=await self._optional(client, system, "EthernetInterfaces"),
-                            bmc_mac=bmc_mac,
-                            gpu_metrics_by_processor=gpu_metrics,
-                            gpu_environment_by_processor=gpu_environment,
-                        )
+                processors = await self._optional(client, system, "Processors")
+                gpu_metrics, gpu_environment = await self._gpu_telemetry(client, processors)
+                # Never raises: a missing/null Manufacturer maps to
+                # Vendor.STANDALONE (vendor_from_manufacturer) rather than
+                # failing the system, so there is nothing to catch here.
+                collected.append(
+                    system_to_provider_server(
+                        system,
+                        host=target.host,
+                        base_url=target.base_url,
+                        manager_id=self._manager.id,
+                        override_name=target.name,
+                        processors=processors,
+                        drives=await self._drives(client, system),
+                        dimms=await self._optional(client, system, "Memory"),
+                        interfaces=await self._optional(client, system, "EthernetInterfaces"),
+                        bmc_mac=bmc_mac,
+                        gpu_metrics_by_processor=gpu_metrics,
+                        gpu_environment_by_processor=gpu_environment,
                     )
-                except ValueError as exc:
-                    # A system this collector cannot identify, most often
-                    # a null Manufacturer. Fails that system, not the host.
-                    logger.warning("redfish.system_skipped", host=target.host, error=str(exc))
-                    self._collection_errors.append(f"{target.host}: {exc}")
+                )
         return collected
 
     def _note_no_systems(self, target: RedfishTarget, *, reason: str) -> None:

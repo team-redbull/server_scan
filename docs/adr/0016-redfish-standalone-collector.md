@@ -183,12 +183,12 @@ built, is a separate program that cannot present a credential.
 
 **Vendor is the manufacturer, mapped.** `ComputerSystem.Manufacturer` →
 `dell`/`cisco`/`hp` where recognized, `Vendor.STANDALONE` where present
-but unrecognized. "Has no manager" is carried by `source_provider`, not
-by `vendor`, because `IngestService` correlates on
+but unrecognized **or absent/null** (reversed 2026-08-23 — see the dated
+update below). "Has no manager" is carried by `source_provider`, not by
+`vendor`, because `IngestService` correlates on
 `(vendor, serial_normalized)` — putting management state into the vendor
 field means a machine splits into two documents the day it gains a
-manager. A **null or absent** `Manufacturer` is a collection failure for
-that host, not a vendor decision, for the mirror-image reason.
+manager.
 
 **`INVENTORY_COLLECTOR_NAME_PATTERN` does not apply.** The pattern exists
 because a vendor manager holds the whole datacenter and the name is the
@@ -489,3 +489,36 @@ API on every server without ever being visible — the reason the
 operator could not see it was a display gap, not a collection gap. Now
 renders every field as a table, matching how storage drives already
 render.
+
+## Update (2026-08-23): a missing Manufacturer no longer fails the system
+
+Reversed at the operator's explicit request. Through this point, an
+absent or null `ComputerSystem.Manufacturer` raised `ValueError` in
+`system_to_provider_server`, which `provider.py` caught to skip that one
+system and record a collection error — reasoned about at length in the
+Decision section above as the mirror image of mapping an *unrecognized*
+manufacturer string to `Vendor.STANDALONE`: guessing a vendor for a
+genuinely unreadable property risks a machine splitting into two
+documents the day the property starts reporting.
+
+`vendor_from_manufacturer` now returns `Vendor.STANDALONE` for that case
+too — a missing/null Manufacturer and a present-but-unrecognized one are
+treated identically. `system_to_provider_server` can no longer raise at
+all, so the `try/except ValueError` around it in `provider.py`'s
+collection loop was removed as dead code rather than left in place.
+
+**The correlation-key risk this reopens is real, not hypothetical, and
+is now accepted rather than avoided.** A server ingested once under
+`STANDALONE` because its BMC did not report `Manufacturer` on that run,
+then later reporting a real manufacturer (firmware update, transient
+read fixed, licensing unlocked) is `(vendor, serial)`-keyed — a vendor
+change is a new document, not an update to the old one, and the old
+`STANDALONE` document is orphaned rather than corrected. The prior
+design accepted a *skip* to avoid this; the current one accepts the
+*split* to keep every host with a listed BMC actually ingested, on the
+view that a whitebox/OEM system permanently reporting no `Manufacturer`
+is common enough in the field that failing it outright cost more than
+this risk does. If the split is observed in practice, the fix is
+correlation-time reconciliation (detecting a `STANDALONE` document and a
+newer real-vendor document that plausibly describe the same host), not
+reverting this change.

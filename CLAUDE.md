@@ -349,13 +349,16 @@ non-obvious enough to bite you.
   real state the UI shows as "Unassigned".
 - **`Vendor` is dell/cisco/hp/standalone — there is still no `UNKNOWN`.**
   `STANDALONE` means *a manufacturer this platform does not model*
-  (Lenovo, Supermicro, a whitebox), **not** "collected without a
-  manager": a Dell reached at its own BMC is still `dell`, because
-  `IngestService` correlates on `(vendor, serial_normalized)` and moving
-  a machine between vendors splits it into two documents. Which collector
-  found a server is `Server.source_provider`, which is filterable. A
-  provider that cannot read the manufacturer at all reports a collection
-  failure rather than defaulting — see ADR-0016.
+  (Lenovo, Supermicro, a whitebox) **or one the BMC did not report at
+  all** (`ComputerSystem.Manufacturer` absent/null maps to `STANDALONE`
+  too, since 2026-08-23 — a deliberate reversal of the original
+  fail-the-system design, accepting a real correlation-key risk to keep
+  every listed BMC ingested; see ADR-0016's dated update), **not**
+  "collected without a manager": a Dell reached at its own BMC is still
+  `dell`, because `IngestService` correlates on `(vendor,
+  serial_normalized)` and moving a machine between vendors splits it
+  into two documents. Which collector found a server is
+  `Server.source_provider`, which is filterable.
 - **A provider reports `None` for a field it could not read**, which is
   not the same as zero or empty. `IngestService` carries the stored value
   forward for a `None` and overwrites for a real value. Before this
