@@ -53,6 +53,22 @@ dev = [
     "types-regex",
 ]
 
+[tool.uv]
+# The actual mirror URL is not committed here — it's environment-specific
+# (`UV_INDEX_URL`/`UV_DEFAULT_INDEX`, or a deployment-local `uv.toml`; see
+# docs/air-gap.md). This setting is about how uv searches whatever index(es)
+# end up configured: the default "first-index" strategy stops resolving a
+# package as soon as *any* configured index reports a version of it, which
+# can miss a newer or better-matching version sitting on a different index.
+# "unsafe-best-match" searches every configured index and takes the best
+# match across all of them. "unsafe" names the real tradeoff — a
+# lower-trust index could in principle shadow a package that should have
+# come from a higher-trust one — which does not apply in a fully
+# air-gapped environment where every configured index is the operator's
+# own mirror, not a mix of public and private sources.
+# https://docs.astral.sh/uv/reference/settings/#index-strategy
+index-strategy = "unsafe-best-match"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
