@@ -229,10 +229,33 @@ class TestFailureModes:
         with RedfishFixture(resources=resources) as fixture:
             servers = await _collect(_provider(fixture.port))
 
-        assert servers[0].memory_total_bytes is None
-        # Falls back to summing the Processors collection.
+        # Falls back to summing the Memory collection (128 GiB, the two
+        # 64 GiB DIMMs `minimal_service()` fixtures) and the Processors
+        # collection respectively, same as an absent summary would.
+        assert servers[0].memory_total_bytes == 128 * 1024**3
         assert servers[0].cpu_cores == 32
         assert servers[0].serial == "FCH2201V0AB"
+
+    async def test_memory_falls_back_to_the_dimm_collection_with_no_summary_at_all(self) -> None:
+        """The shape confirmed against real hardware: `MemorySummary` is
+        schema-optional, and a BMC has been observed omitting it entirely
+        while `Memory` (one member per DIMM) is populated.
+
+        `minimal_service()`'s third member (`DIMM_B1`) is an empty slot
+        carrying a stale `CapacityMiB` but `Status.State == "Absent"` —
+        Redfish's empty-bay signal, the same one already relied on for
+        `Drive`. Landing on exactly 128 GiB (the two real 64 GiB DIMMs,
+        not 160) proves it was excluded *because* it is absent, not
+        merely because a capacity happened to be missing.
+        """
+        resources = minimal_service()
+        system = dict(resources["/redfish/v1/Systems/1"])
+        del system["MemorySummary"]
+        resources["/redfish/v1/Systems/1"] = system
+        with RedfishFixture(resources=resources) as fixture:
+            servers = await _collect(_provider(fixture.port))
+
+        assert servers[0].memory_total_bytes == 128 * 1024**3
 
     async def test_a_system_without_a_manufacturer_is_skipped(self) -> None:
         """Guessing the vendor would change the correlation key and split

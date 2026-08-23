@@ -438,6 +438,7 @@ class RedfishStandaloneProvider:
                             override_name=target.name,
                             processors=await self._optional(client, system, "Processors"),
                             drives=await self._drives(client, system),
+                            dimms=await self._optional(client, system, "Memory"),
                             interfaces=await self._optional(client, system, "EthernetInterfaces"),
                             bmc_mac=bmc_mac,
                         )

@@ -228,8 +228,49 @@ def minimal_service(**overrides: Any) -> dict[str, Any]:
             "MemorySummary": {"TotalSystemMemoryGiB": 512.0},
             "Processors": {"@odata.id": "/redfish/v1/Systems/1/Processors"},
             "Storage": {"@odata.id": "/redfish/v1/Systems/1/Storage"},
+            "Memory": {"@odata.id": "/redfish/v1/Systems/1/Memory"},
             "EthernetInterfaces": {"@odata.id": "/redfish/v1/Systems/1/EthernetInterfaces"},
             "Links": {"ManagedBy": [{"@odata.id": "/redfish/v1/Managers/bmc"}]},
+        },
+        "/redfish/v1/Systems/1/Memory": {
+            "@odata.id": "/redfish/v1/Systems/1/Memory",
+            "Members": [
+                {"@odata.id": "/redfish/v1/Systems/1/Memory/DIMM_A1"},
+                {"@odata.id": "/redfish/v1/Systems/1/Memory/DIMM_A2"},
+                {"@odata.id": "/redfish/v1/Systems/1/Memory/DIMM_B1"},
+            ],
+        },
+        "/redfish/v1/Systems/1/Memory/DIMM_A1": {
+            "@odata.id": "/redfish/v1/Systems/1/Memory/DIMM_A1",
+            "@odata.type": "#Memory.v1_16_0.Memory",
+            "Id": "DIMM_A1",
+            "Name": "DIMM_A1",
+            "CapacityMiB": 65536,
+            "MemoryDeviceType": "DDR5",
+            "Status": {"State": "Enabled", "Health": "OK"},
+        },
+        "/redfish/v1/Systems/1/Memory/DIMM_A2": {
+            "@odata.id": "/redfish/v1/Systems/1/Memory/DIMM_A2",
+            "@odata.type": "#Memory.v1_16_0.Memory",
+            "Id": "DIMM_A2",
+            "Name": "DIMM_A2",
+            "CapacityMiB": 65536,
+            "MemoryDeviceType": "DDR5",
+            "Status": {"State": "Enabled", "Health": "OK"},
+        },
+        # An empty DIMM slot: physically present in the collection, and
+        # deliberately given a stale CapacityMiB (some firmware reports
+        # one for a slot's last-known module) to prove exclusion happens
+        # because of `Status.State == "Absent"` — the same empty-bay
+        # signal ADR-0016 confirmed for `Drive` — not merely because a
+        # capacity was missing.
+        "/redfish/v1/Systems/1/Memory/DIMM_B1": {
+            "@odata.id": "/redfish/v1/Systems/1/Memory/DIMM_B1",
+            "@odata.type": "#Memory.v1_16_0.Memory",
+            "Id": "DIMM_B1",
+            "Name": "DIMM_B1",
+            "CapacityMiB": 32768,
+            "Status": {"State": "Absent"},
         },
         "/redfish/v1/Systems/1/Processors": {
             "@odata.id": "/redfish/v1/Systems/1/Processors",

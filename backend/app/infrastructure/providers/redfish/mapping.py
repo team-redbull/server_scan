@@ -378,31 +378,41 @@ def macs_from_interfaces(interfaces: list[dict[str, Any]] | None) -> tuple[str, 
     return tuple(macs)
 
 
-def memory_bytes(system: dict[str, Any]) -> int | None:
+def memory_bytes(system: dict[str, Any], dimms: list[dict[str, Any]] | None) -> int | None:
     """
     A server's total memory, in bytes.
 
-    `TotalSystemMemoryGiB` is typed `number`, not `integer`, so a
-    fractional value is schema-legal and does occur — a real 768 GB
-    machine has been observed reporting `715.256064`. The rounding is
-    ours to do.
+    `MemorySummary.TotalSystemMemoryGiB` is schema-optional, and real
+    hardware has been observed omitting it entirely while its `Memory`
+    collection (one member per installed DIMM) is populated — the same
+    shape `cpu_summary` already handles for `ProcessorSummary.CoreCount`,
+    so summing `Memory[].CapacityMiB` is a required fallback here too,
+    not a defensive one. `TotalSystemMemoryGiB` is also typed `number`,
+    not `integer`, so a fractional value is schema-legal and does occur —
+    a real 768 GB machine has been observed reporting `715.256064`. The
+    rounding is ours to do either way.
 
     Args:
         system (dict[str, Any]): The `ComputerSystem` resource.
+        dimms (list[dict[str, Any]] | None): Its `Memory` collection
+            members, or None when unread.
 
     Returns:
-        int | None: Total memory in bytes, or None when unreported.
+        int | None: Total memory in bytes, or None when neither source
+            could supply it.
     """
     summary = system.get("MemorySummary")
-    if not isinstance(summary, dict):
+    raw = summary.get("TotalSystemMemoryGiB") if isinstance(summary, dict) else None
+    if raw is not None:
+        try:
+            return round(float(raw) * _GIB)
+        except (TypeError, ValueError):
+            pass
+    if dimms is None:
         return None
-    raw = summary.get("TotalSystemMemoryGiB")
-    if raw is None:
-        return None
-    try:
-        return round(float(raw) * _GIB)
-    except (TypeError, ValueError):
-        return None
+    sizes = [_as_int(d.get("CapacityMiB")) for d in dimms if not is_absent(d)]
+    present = [s for s in sizes if s is not None]
+    return sum(present) * _MIB if present else None
 
 
 def system_to_provider_server(
@@ -414,6 +424,7 @@ def system_to_provider_server(
     override_name: str | None,
     processors: list[dict[str, Any]] | None,
     drives: list[dict[str, Any]] | None,
+    dimms: list[dict[str, Any]] | None,
     interfaces: list[dict[str, Any]] | None,
     bmc_mac: str | None,
 ) -> ProviderServer:
@@ -430,6 +441,8 @@ def system_to_provider_server(
             over anything the BMC reports.
         processors (list[dict[str, Any]] | None): `Processors` members.
         drives (list[dict[str, Any]] | None): Every `Drive` read.
+        dimms (list[dict[str, Any]] | None): `Memory` collection members
+            — one per installed DIMM.
         interfaces (list[dict[str, Any]] | None): `EthernetInterfaces`
             members.
         bmc_mac (str | None): The BMC's own MAC.
@@ -474,7 +487,7 @@ def system_to_provider_server(
         cpu_cores=cores,
         cpu_threads=threads,
         cpu_model=cpu_model,
-        memory_total_bytes=memory_bytes(system),
+        memory_total_bytes=memory_bytes(system, dimms),
         storage_total_bytes=storage_total,
         storage_drives=storage_drives,
         gpus=gpus_from_processors(processors),
