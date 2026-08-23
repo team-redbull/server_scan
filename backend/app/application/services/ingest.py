@@ -108,6 +108,21 @@ def _opt_int(value: object) -> int | None:
     return int(str(value))
 
 
+def _opt_float(value: object) -> float | None:
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    try:
+        return float(str(value))
+    except ValueError:
+        return None
+
+
+def _opt_bool(value: object) -> bool | None:
+    return value if isinstance(value, bool) else None
+
+
 def _carry_forward[T](reported: T | None, previous: T | None, *, default: T) -> T:
     """
     Resolve one optionally-reported field against what is already stored.
@@ -154,6 +169,12 @@ def _gpu_from_dict(data: dict[str, object]) -> Gpu:
         health=_opt_str(data.get("health")),
         pci_address=_opt_str(data.get("pci_address")),
         firmware_version=_opt_str(data.get("firmware_version")),
+        memory_type=_opt_str(data.get("memory_type")),
+        ecc_mode_enabled=_opt_bool(data.get("ecc_mode_enabled")),
+        correctable_error_count=_opt_int(data.get("correctable_error_count")),
+        uncorrectable_error_count=_opt_int(data.get("uncorrectable_error_count")),
+        temperature_celsius=_opt_float(data.get("temperature_celsius")),
+        power_watts=_opt_float(data.get("power_watts")),
     )
 
 

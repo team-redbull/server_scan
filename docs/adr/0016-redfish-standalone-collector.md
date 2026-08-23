@@ -433,3 +433,59 @@ that cannot serve it degrades to `None` rather than failing the host.
 Neither defect changed anything about the account-lockout safety design
 — both are read-path mapping/transport bugs, not authentication-retry
 behaviour.
+
+## Update (2026-08-23): GPU telemetry for DGX/HGX-class fleets
+
+Requested for an operator's A100/H100/H200/B200/B300 fleet. Verified
+against DMTF's `Processor.v1_22_0`, `ProcessorMetrics.v1_6_0`,
+`EnvironmentMetrics.v1_5_0`, `PCIeDevice.v1_16_0` and
+`PCIeFunction.v1_5_0` schemas — not yet against real DGX/HGX hardware.
+
+**Added to `Gpu`:** `memory_type` (`ProcessorMemory[].MemoryType`, e.g.
+`"HBM3"`/`"HBM3e"` — distinguishes an H100 from an H200 by memory
+generation rather than model string alone), `ecc_mode_enabled`
+(`MemorySummary.ECCModeEnabled`), `correctable_error_count` /
+`uncorrectable_error_count`, and `temperature_celsius` /
+`power_watts`.
+
+**The error counts are a real ambiguity, not a confirmed mapping.**
+`ProcessorMetrics` scopes `Correctable`/`UncorrectableErrorCount` to
+"Core" and "Other" components without specifying which bucket a GPU's
+own HBM stacks report under — the schema is shared between CPU and GPU
+`Processor` entries and was clearly written CPU-first. Both buckets are
+summed into one correctable/one uncorrectable total rather than guessed
+apart, since neither vendor documentation nor a live run has settled it.
+If a real run shows one bucket always zero for a GPU, or shows vendor
+`Oem` extensions carrying more precise HBM-specific counts DMTF does not
+model, that is the next thing to fold in.
+
+**`pci_address` stays unpopulated, deliberately.** Went looking for a
+source and found none: DMTF's schema has no bus:device.function
+addressing field anywhere in `PCIeDevice` or `PCIeFunction` — only
+`VendorId`/`DeviceId`/`FunctionId`/slot location. Some vendors set a
+`PCIeDevice`'s own `Id` to something BDF-shaped as a convention, but
+that is not spec-guaranteed, so it was not read as one. Revisit with a
+real BMC's `PCIeDevice.Id` in hand rather than assuming the convention
+holds.
+
+**Cost is no longer flat per GPU discovery — it now scales with GPU
+count.** Each GPU's `Metrics` and `EnvironmentMetrics` are separate
+per-processor resources, not part of the `Processors` collection fetch,
+so reading them costs two more requests per GPU: +2 for a single add-in
+GPU, +16 for an 8-GPU DGX-class baseboard. This is exactly the kind of
+cost this ADR already treats as a correctness requirement rather than a
+tuning knob (see "Cost is per server, not per manager" in Context) —
+the per-host budget and timeouts already in place bound it, but a
+fleet's `host_budget_seconds` should be re-checked against a real
+8-GPU host's response time rather than assumed adequate. Each fetch is
+independently tolerant of failure (`_optional_link`, the single-resource
+analogue of `_optional`): one GPU's metrics 500ing degrades that GPU's
+telemetry to `None`, never the host.
+
+**The frontend was fixed alongside this**, not held back for a separate
+pass: `HardwareTab.tsx`'s GPU section only ever rendered `model`, so
+`memory_bytes` (VRAM) was already being collected and returned by the
+API on every server without ever being visible — the reason the
+operator could not see it was a display gap, not a collection gap. Now
+renders every field as a table, matching how storage drives already
+render.

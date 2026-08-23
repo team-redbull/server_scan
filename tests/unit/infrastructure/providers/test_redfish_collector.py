@@ -157,6 +157,57 @@ class TestHealthyHost:
         assert gpus[0]["memory_bytes"] == 11264 * 1024**2
         assert gpus[0]["model"] == "Nvidia(R) TU102"
 
+    async def test_gpu_telemetry_is_read_from_its_own_metrics_resources(self) -> None:
+        """Memory type, ECC mode and error counts, temperature and power
+        all come from resources linked off the GPU's own `Processor`
+        entry — `ProcessorMemory`, `MemorySummary.ECCModeEnabled`, its
+        own `ProcessorMetrics`, and its own `EnvironmentMetrics`.
+        """
+        with RedfishFixture(resources=minimal_service()) as fixture:
+            servers = await _collect(_provider(fixture.port))
+
+        [gpu] = servers[0].gpus or ()
+        assert gpu["memory_type"] == "HBM2"
+        assert gpu["ecc_mode_enabled"] is True
+        # 3 correctable-core + 1 correctable-other; 0 uncorrectable either way.
+        assert gpu["correctable_error_count"] == 4
+        assert gpu["uncorrectable_error_count"] == 0
+        assert gpu["temperature_celsius"] == 62.5
+        assert gpu["power_watts"] == 310.0
+
+    async def test_gpu_telemetry_is_none_when_the_metrics_links_are_absent(self) -> None:
+        """Older firmware, or a GPU with no Metrics/EnvironmentMetrics
+        support at all, must degrade to unread rather than fail the GPU.
+        """
+        resources = minimal_service()
+        gpu = dict(resources["/redfish/v1/Systems/1/Processors/GPU1"])
+        del gpu["Metrics"]
+        del gpu["EnvironmentMetrics"]
+        resources["/redfish/v1/Systems/1/Processors/GPU1"] = gpu
+        with RedfishFixture(resources=resources) as fixture:
+            servers = await _collect(_provider(fixture.port))
+
+        [mapped_gpu] = servers[0].gpus or ()
+        assert mapped_gpu["correctable_error_count"] is None
+        assert mapped_gpu["uncorrectable_error_count"] is None
+        assert mapped_gpu["temperature_celsius"] is None
+        assert mapped_gpu["power_watts"] is None
+        # The rest of the GPU still maps.
+        assert mapped_gpu["memory_type"] == "HBM2"
+
+    async def test_a_gpus_metrics_fetch_failing_does_not_fail_the_host(self) -> None:
+        resources = minimal_service()
+        with RedfishFixture(
+            resources=resources,
+            faults={"/redfish/v1/Systems/1/Processors/GPU1/ProcessorMetrics": 500},
+        ) as fixture:
+            servers = await _collect(_provider(fixture.port))
+
+        [gpu] = servers[0].gpus or ()
+        assert gpu["correctable_error_count"] is None
+        # EnvironmentMetrics still read even though ProcessorMetrics 500'd.
+        assert gpu["temperature_celsius"] == 62.5
+
     async def test_the_session_is_deleted_on_success(self) -> None:
         with RedfishFixture(resources=minimal_service()) as fixture:
             await _collect(_provider(fixture.port))

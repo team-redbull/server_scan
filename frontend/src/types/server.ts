@@ -146,6 +146,12 @@ export interface GpuInfo {
   health?: HealthSeverity;
   pci_address?: string;
   firmware_version?: string;
+  memory_type?: string;
+  ecc_mode_enabled?: boolean;
+  correctable_error_count?: number;
+  uncorrectable_error_count?: number;
+  temperature_celsius?: number;
+  power_watts?: number;
 }
 
 export interface PsuInfo {

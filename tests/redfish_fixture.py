@@ -297,8 +297,31 @@ def minimal_service(**overrides: Any) -> dict[str, Any]:
             "ProcessorType": "GPU",
             "Manufacturer": "Nvidia(R) Corporation",
             "Model": "Nvidia(R) TU102",
-            "MemorySummary": {"TotalMemorySizeMiB": 11264},
+            "MemorySummary": {"TotalMemorySizeMiB": 11264, "ECCModeEnabled": True},
+            "ProcessorMemory": [{"CapacityMiB": 11264, "MemoryType": "HBM2"}],
+            "Metrics": {"@odata.id": "/redfish/v1/Systems/1/Processors/GPU1/ProcessorMetrics"},
+            "EnvironmentMetrics": {
+                "@odata.id": "/redfish/v1/Systems/1/Processors/GPU1/EnvironmentMetrics"
+            },
             "Status": {"State": "Enabled", "Health": "OK"},
+        },
+        "/redfish/v1/Systems/1/Processors/GPU1/ProcessorMetrics": {
+            "@odata.id": "/redfish/v1/Systems/1/Processors/GPU1/ProcessorMetrics",
+            "@odata.type": "#ProcessorMetrics.v1_6_0.ProcessorMetrics",
+            "Id": "ProcessorMetrics",
+            "Name": "GPU1 Metrics",
+            "CorrectableCoreErrorCount": 3,
+            "UncorrectableCoreErrorCount": 0,
+            "CorrectableOtherErrorCount": 1,
+            "UncorrectableOtherErrorCount": 0,
+        },
+        "/redfish/v1/Systems/1/Processors/GPU1/EnvironmentMetrics": {
+            "@odata.id": "/redfish/v1/Systems/1/Processors/GPU1/EnvironmentMetrics",
+            "@odata.type": "#EnvironmentMetrics.v1_5_0.EnvironmentMetrics",
+            "Id": "EnvironmentMetrics",
+            "Name": "GPU1 Environment",
+            "TemperatureCelsius": {"Reading": 62.5},
+            "PowerWatts": {"Reading": 310.0},
         },
         "/redfish/v1/Systems/1/Storage": {
             "@odata.id": "/redfish/v1/Systems/1/Storage",

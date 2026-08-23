@@ -301,8 +301,116 @@ def cpu_summary(
     return sockets, cores, threads, str(model) if model else None
 
 
+def is_gpu_processor(processor: dict[str, Any]) -> bool:
+    """
+    Report whether a `Processor` entry represents a GPU rather than a CPU.
+
+    The single filter `gpus_from_processors` applies, factored out so
+    `provider.py` can use the exact same test to decide which
+    processors are worth a `Metrics`/`EnvironmentMetrics` follow-up
+    fetch, without a second, driftable copy of the condition.
+
+    Args:
+        processor (dict[str, Any]): A `Processor` resource.
+
+    Returns:
+        bool: True when `ProcessorType == "GPU"` and the slot is not
+            reported absent.
+    """
+    return str(processor.get("ProcessorType", "")) == "GPU" and not is_absent(processor)
+
+
+def _gpu_memory_type(processor: dict[str, Any]) -> str | None:
+    """
+    A GPU's memory generation, e.g. `"HBM3"`, `"HBM3e"`, `"GDDR6"`.
+
+    Args:
+        processor (dict[str, Any]): A `Processor` resource.
+
+    Returns:
+        str | None: The first `ProcessorMemory[].MemoryType` reported, or
+            None when the array is absent or every entry omits it. A
+            GPU's HBM stacks are uniform, so the first is representative.
+    """
+    banks = processor.get("ProcessorMemory")
+    if not isinstance(banks, list):
+        return None
+    for bank in banks:
+        if isinstance(bank, dict) and bank.get("MemoryType"):
+            return str(bank["MemoryType"])
+    return None
+
+
+def _gpu_error_counts(metrics: dict[str, Any] | None) -> tuple[int | None, int | None]:
+    """
+    A GPU's correctable and uncorrectable error counts.
+
+    DMTF's `ProcessorMetrics` scopes error counts to "core" and "other"
+    components without specifying which bucket a GPU's own HBM stacks
+    report under, so both are summed rather than guessed apart — revisit
+    once real hardware confirms which field(s) actually carry non-zero
+    counts for a GPU. See docs/adr/0016's dated update.
+
+    Args:
+        metrics (dict[str, Any] | None): The GPU's own `ProcessorMetrics`
+            resource, or None when unread.
+
+    Returns:
+        tuple[int | None, int | None]: `(correctable, uncorrectable)`,
+            each None when no source field was numeric.
+    """
+    if metrics is None:
+        return None, None
+    correctable = [
+        _as_int(metrics.get("CorrectableCoreErrorCount")),
+        _as_int(metrics.get("CorrectableOtherErrorCount")),
+    ]
+    uncorrectable = [
+        _as_int(metrics.get("UncorrectableCoreErrorCount")),
+        _as_int(metrics.get("UncorrectableOtherErrorCount")),
+    ]
+    present_c = [v for v in correctable if v is not None]
+    present_u = [v for v in uncorrectable if v is not None]
+    return (sum(present_c) if present_c else None), (sum(present_u) if present_u else None)
+
+
+def _sensor_reading(container: dict[str, Any] | None, key: str) -> float | None:
+    """
+    Read a Redfish `SensorExcerpt`-shaped property's `.Reading`.
+
+    `EnvironmentMetrics.TemperatureCelsius`/`.PowerWatts` are objects
+    with a nested `Reading`, not bare numbers — the replacement shape
+    for `ProcessorMetrics.TemperatureCelsius`/`.ConsumedPowerWatt`,
+    deprecated since Redfish 1.2.
+
+    Args:
+        container (dict[str, Any] | None): The `EnvironmentMetrics`
+            resource, or None when unread.
+        key (str): The sensor property name, e.g. `"TemperatureCelsius"`.
+
+    Returns:
+        float | None: The reading, or None when absent, unread, or
+            non-numeric.
+    """
+    if container is None:
+        return None
+    sensor = container.get(key)
+    if not isinstance(sensor, dict):
+        return None
+    reading = sensor.get("Reading")
+    if reading is None:
+        return None
+    try:
+        return float(reading)
+    except (TypeError, ValueError):
+        return None
+
+
 def gpus_from_processors(
     processors: list[dict[str, Any]] | None,
+    *,
+    metrics_by_processor: dict[str, dict[str, Any]] | None = None,
+    environment_by_processor: dict[str, dict[str, Any]] | None = None,
 ) -> tuple[dict[str, object], ...] | None:
     """
     Extract GPUs from a server's `Processors` collection.
@@ -320,6 +428,12 @@ def gpus_from_processors(
     Args:
         processors (list[dict[str, Any]] | None): `Processors` members, or
             None when unread.
+        metrics_by_processor (dict[str, dict[str, Any]] | None): Each
+            GPU's own `ProcessorMetrics` resource, keyed by the
+            processor's `@odata.id`. Empty/missing entries degrade to
+            unread rather than failing the GPU.
+        environment_by_processor (dict[str, dict[str, Any]] | None): Each
+            GPU's own `EnvironmentMetrics` resource, keyed the same way.
 
     Returns:
         tuple[dict[str, object], ...] | None: One entry per GPU, or None
@@ -327,12 +441,15 @@ def gpus_from_processors(
     """
     if processors is None:
         return None
+    metrics_by_processor = metrics_by_processor or {}
+    environment_by_processor = environment_by_processor or {}
     gpus: list[dict[str, object]] = []
     for processor in processors:
-        if str(processor.get("ProcessorType", "")) != "GPU" or is_absent(processor):
+        if not is_gpu_processor(processor):
             continue
         summary = processor.get("MemorySummary")
-        mib = _as_int(summary.get("TotalMemorySizeMiB")) if isinstance(summary, dict) else None
+        summary = summary if isinstance(summary, dict) else {}
+        mib = _as_int(summary.get("TotalMemorySizeMiB"))
         if mib is None:
             # Pre-2020.4 firmware has no MemorySummary on a Processor;
             # ProcessorMemory[] is the only path there.
@@ -341,6 +458,10 @@ def gpus_from_processors(
                 sizes = [_as_int(b.get("CapacityMiB")) for b in banks if isinstance(b, dict)]
                 present = [s for s in sizes if s is not None]
                 mib = sum(present) if present else None
+        processor_id = str(processor.get("@odata.id") or "")
+        correctable, uncorrectable = _gpu_error_counts(metrics_by_processor.get(processor_id))
+        environment = environment_by_processor.get(processor_id)
+        ecc_enabled = summary.get("ECCModeEnabled")
         gpus.append(
             {
                 "vendor": processor.get("Manufacturer") or None,
@@ -350,6 +471,12 @@ def gpus_from_processors(
                 "health": health_of(processor),
                 "pci_address": None,
                 "firmware_version": processor.get("FirmwareVersion") or None,
+                "memory_type": _gpu_memory_type(processor),
+                "ecc_mode_enabled": ecc_enabled if isinstance(ecc_enabled, bool) else None,
+                "correctable_error_count": correctable,
+                "uncorrectable_error_count": uncorrectable,
+                "temperature_celsius": _sensor_reading(environment, "TemperatureCelsius"),
+                "power_watts": _sensor_reading(environment, "PowerWatts"),
             }
         )
     return tuple(gpus)
@@ -427,6 +554,8 @@ def system_to_provider_server(
     dimms: list[dict[str, Any]] | None,
     interfaces: list[dict[str, Any]] | None,
     bmc_mac: str | None,
+    gpu_metrics_by_processor: dict[str, dict[str, Any]] | None = None,
+    gpu_environment_by_processor: dict[str, dict[str, Any]] | None = None,
 ) -> ProviderServer:
     """
     Convert one `ComputerSystem` and its sub-resources into a
@@ -446,6 +575,11 @@ def system_to_provider_server(
         interfaces (list[dict[str, Any]] | None): `EthernetInterfaces`
             members.
         bmc_mac (str | None): The BMC's own MAC.
+        gpu_metrics_by_processor (dict[str, dict[str, Any]] | None): Each
+            GPU processor's own `ProcessorMetrics`, keyed by `@odata.id`.
+        gpu_environment_by_processor (dict[str, dict[str, Any]] | None):
+            Each GPU processor's own `EnvironmentMetrics`, keyed the same
+            way.
 
     Returns:
         ProviderServer: The vendor-neutral DTO the ingest pipeline
@@ -490,7 +624,11 @@ def system_to_provider_server(
         memory_total_bytes=memory_bytes(system, dimms),
         storage_total_bytes=storage_total,
         storage_drives=storage_drives,
-        gpus=gpus_from_processors(processors),
+        gpus=gpus_from_processors(
+            processors,
+            metrics_by_processor=gpu_metrics_by_processor,
+            environment_by_processor=gpu_environment_by_processor,
+        ),
         # A standalone server has no fabric interconnect, so there is
         # nothing to attach. An empty tuple keeps the seeded
         # `connectivity.fabric_paths_down` policies from evaluating

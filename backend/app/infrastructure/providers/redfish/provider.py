@@ -2,9 +2,12 @@
 
 The first collector whose cost is per *server* rather than per manager:
 one UCS Central run costs ~11 round trips for a whole fleet, while this
-costs ~25 against each BMC. Bounded concurrency, a per-host wall-clock
-budget and a total-run budget are therefore correctness requirements, not
-tuning knobs — see docs/adr/0016-redfish-standalone-collector.md.
+costs ~25 against each BMC, plus two more per installed GPU (its own
+`ProcessorMetrics` and `EnvironmentMetrics`) — a real, GPU-count-scaled
+cost on an 8-GPU DGX-class server, not a flat addition. Bounded
+concurrency, a per-host wall-clock budget and a total-run budget are
+therefore correctness requirements, not tuning knobs — see
+docs/adr/0016-redfish-standalone-collector.md.
 
 Failure is normal here rather than exceptional. A run where 40 of 400
 hosts do not answer is a Tuesday, so per-host failures are collected into
@@ -37,7 +40,7 @@ from app.infrastructure.providers.redfish.client import (
     RedfishUnreachableError,
     validate_odata_id,
 )
-from app.infrastructure.providers.redfish.mapping import system_to_provider_server
+from app.infrastructure.providers.redfish.mapping import is_gpu_processor, system_to_provider_server
 from app.infrastructure.providers.redfish.targets import RedfishTarget
 
 logger = structlog.get_logger(__name__)
@@ -429,6 +432,8 @@ class RedfishStandaloneProvider:
             bmc_mac = await self._bmc_mac(client, systems[0])
             for system in systems:
                 try:
+                    processors = await self._optional(client, system, "Processors")
+                    gpu_metrics, gpu_environment = await self._gpu_telemetry(client, processors)
                     collected.append(
                         system_to_provider_server(
                             system,
@@ -436,11 +441,13 @@ class RedfishStandaloneProvider:
                             base_url=target.base_url,
                             manager_id=self._manager.id,
                             override_name=target.name,
-                            processors=await self._optional(client, system, "Processors"),
+                            processors=processors,
                             drives=await self._drives(client, system),
                             dimms=await self._optional(client, system, "Memory"),
                             interfaces=await self._optional(client, system, "EthernetInterfaces"),
                             bmc_mac=bmc_mac,
+                            gpu_metrics_by_processor=gpu_metrics,
+                            gpu_environment_by_processor=gpu_environment,
                         )
                     )
                 except ValueError as exc:
@@ -540,6 +547,76 @@ class RedfishStandaloneProvider:
                 except (RedfishForbiddenError, RedfishProtocolError) as exc:
                     logger.warning("redfish.drive_skipped", error=str(exc))
         return list(drives.values())
+
+    async def _gpu_telemetry(
+        self, client: Any, processors: list[dict[str, Any]] | None
+    ) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+        """
+        Read each GPU's own `ProcessorMetrics` and `EnvironmentMetrics`.
+
+        Two extra requests per GPU, not per host — the real cost this
+        module's docstring warns about. A GPU whose metrics link is
+        absent or unreadable degrades that one GPU's telemetry to
+        unread, matching `_optional`'s tolerance, rather than failing
+        the server over an error-counter fetch.
+
+        Args:
+            client (Any): The authenticated client.
+            processors (list[dict[str, Any]] | None): The system's
+                `Processors` members, or None when unread — in which
+                case there is nothing to look up telemetry for.
+
+        Returns:
+            tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+                `(metrics_by_processor, environment_by_processor)`, each
+                keyed by the owning processor's `@odata.id`.
+        """
+        metrics: dict[str, dict[str, Any]] = {}
+        environment: dict[str, dict[str, Any]] = {}
+        for processor in processors or []:
+            if not is_gpu_processor(processor):
+                continue
+            processor_id = str(processor.get("@odata.id") or "")
+            if not processor_id:
+                continue
+            fetched_metrics = await self._optional_link(client, processor, "Metrics")
+            if fetched_metrics is not None:
+                metrics[processor_id] = fetched_metrics
+            fetched_environment = await self._optional_link(client, processor, "EnvironmentMetrics")
+            if fetched_environment is not None:
+                environment[processor_id] = fetched_environment
+        return metrics, environment
+
+    async def _optional_link(
+        self, client: Any, resource: dict[str, Any], key: str
+    ) -> dict[str, Any] | None:
+        """
+        Fetch a single linked sub-resource, tolerating a BMC that cannot
+        serve it.
+
+        The single-resource analogue of `_optional`, which follows a
+        link to a *collection*; this follows a link to one resource
+        (`Processor.Metrics`, `.EnvironmentMetrics`).
+
+        Args:
+            client (Any): The authenticated client.
+            resource (dict[str, Any]): The resource carrying the link.
+            key (str): Link property to follow.
+
+        Returns:
+            dict[str, Any] | None: The resource, or None if the link is
+                absent or could not be read.
+        """
+        link = resource.get(key)
+        path = link.get("@odata.id") if isinstance(link, dict) else None
+        if not path:
+            return None
+        try:
+            resolved: dict[str, Any] = await client.get(validate_odata_id(path))
+            return resolved
+        except (RedfishForbiddenError, RedfishProtocolError, RedfishUnreachableError) as exc:
+            logger.warning("redfish.resource_skipped", resource=key, error=str(exc))
+            return None
 
     async def _bmc_mac(self, client: Any, system: dict[str, Any]) -> str | None:
         """

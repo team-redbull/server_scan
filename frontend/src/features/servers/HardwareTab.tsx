@@ -86,34 +86,60 @@ export function HardwareTab({ hardware }: { hardware: HardwareInfo | undefined }
       <section>
         <h2 className="text-sm font-semibold uppercase tracking-wide text-gray-500">GPU</h2>
         {gpus && gpus.length > 0 ? (
-          <table className="mt-2 min-w-full divide-y divide-gray-200 text-sm dark:divide-gray-700">
-            <thead>
-              <tr className="text-left text-gray-500">
-                <th className="py-1 pr-4">Vendor</th>
-                <th className="py-1 pr-4">Model</th>
-                <th className="py-1 pr-4">Serial</th>
-                <th className="py-1 pr-4">VRAM</th>
-                <th className="py-1 pr-4">Health</th>
-                <th className="py-1 pr-4">Firmware</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
-              {gpus.map((gpu, index) => (
-                <tr key={`${gpu.serial ?? gpu.model ?? "gpu"}-${index}`}>
-                  <td className="py-1 pr-4">{gpu.vendor ?? "—"}</td>
-                  <td className="py-1 pr-4">{gpu.model ?? "Unknown model"}</td>
-                  <td className="py-1 pr-4">{gpu.serial ?? "—"}</td>
-                  <td className="py-1 pr-4">
-                    {gpu.memory_bytes !== undefined ? formatBytes(gpu.memory_bytes) : "—"}
-                  </td>
-                  <td className="py-1 pr-4">
-                    {gpu.health ? <HealthBadge severity={gpu.health} /> : "—"}
-                  </td>
-                  <td className="py-1 pr-4">{gpu.firmware_version ?? "—"}</td>
+          <div className="mt-2 overflow-x-auto">
+            <table className="min-w-full divide-y divide-gray-200 text-sm dark:divide-gray-700">
+              <thead>
+                <tr className="text-left text-gray-500">
+                  <th className="py-1 pr-4">Vendor</th>
+                  <th className="py-1 pr-4">Model</th>
+                  <th className="py-1 pr-4">Serial</th>
+                  <th className="py-1 pr-4">VRAM</th>
+                  <th className="py-1 pr-4">Memory type</th>
+                  <th className="py-1 pr-4">ECC</th>
+                  <th className="py-1 pr-4">Errors (correctable/uncorrectable)</th>
+                  <th className="py-1 pr-4">Temp</th>
+                  <th className="py-1 pr-4">Power</th>
+                  <th className="py-1 pr-4">Health</th>
+                  <th className="py-1 pr-4">Firmware</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
+                {gpus.map((gpu, index) => (
+                  <tr key={`${gpu.serial ?? gpu.model ?? "gpu"}-${index}`}>
+                    <td className="py-1 pr-4">{gpu.vendor ?? "—"}</td>
+                    <td className="py-1 pr-4">{gpu.model ?? "Unknown model"}</td>
+                    <td className="py-1 pr-4">{gpu.serial ?? "—"}</td>
+                    <td className="py-1 pr-4">
+                      {gpu.memory_bytes !== undefined ? formatBytes(gpu.memory_bytes) : "—"}
+                    </td>
+                    <td className="py-1 pr-4">{gpu.memory_type ?? "—"}</td>
+                    <td className="py-1 pr-4">
+                      {gpu.ecc_mode_enabled === undefined
+                        ? "—"
+                        : gpu.ecc_mode_enabled
+                          ? "On"
+                          : "Off"}
+                    </td>
+                    <td className="py-1 pr-4">
+                      {gpu.correctable_error_count ?? "—"} / {gpu.uncorrectable_error_count ?? "—"}
+                    </td>
+                    <td className="py-1 pr-4">
+                      {gpu.temperature_celsius !== undefined
+                        ? `${gpu.temperature_celsius.toFixed(0)}°C`
+                        : "—"}
+                    </td>
+                    <td className="py-1 pr-4">
+                      {gpu.power_watts !== undefined ? `${gpu.power_watts.toFixed(0)}W` : "—"}
+                    </td>
+                    <td className="py-1 pr-4">
+                      {gpu.health ? <HealthBadge severity={gpu.health} /> : "—"}
+                    </td>
+                    <td className="py-1 pr-4">{gpu.firmware_version ?? "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         ) : (
           <p className="mt-2 text-sm text-gray-500">No GPUs.</p>
         )}
