@@ -48,3 +48,6 @@ playwright-report/
 test-results/
 
 **/.claude-flow/
+# Field reports carried back from a site: they hold server names,
+# serials and management addresses, and are never committed.
+field-report-*.txt

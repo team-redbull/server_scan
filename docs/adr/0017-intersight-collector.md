@@ -1,9 +1,13 @@
 # ADR-0017: Cisco Intersight collector
 
-**Status:** Accepted and implemented. The transport and auth path have
-been exercised against the **real `intersight.com` service**; no field
-mapping has ever seen real data. Read "Validation: what this has and has
-not been tested against" before trusting any field it produces.
+**Status:** Accepted and implemented. **Awaiting its first run against
+the user's own on-prem Intersight** — `docs/field-test-checklist.md` is
+what to run and what to bring back.
+
+The transport and auth path have been exercised against the **real
+`intersight.com` service**; no field mapping has ever seen real data.
+Read "Validation: what this has and has not been tested against" before
+trusting any field it produces.
 
 **Date:** 2026-08-29
 
@@ -423,13 +427,26 @@ recorded here as the premises the design rests on — if any of them stops
 being true, this ADR needs revisiting rather than the code needing a
 patch.
 
-**1. Air-gap → there is, or will be, a Private Virtual Appliance.**
-So `INVENTORY_INTERSIGHT_IP` points at an on-prem appliance FQDN, not at
-`intersight.com`, and the collector is deployable in the target site.
-`INVENTORY_INTERSIGHT_CA_BUNDLE` exists for exactly this: an appliance
-with an internal CA. Note the standing dependency this creates — the
-appliance is a licensed commercial SKU that this platform does not
-control, which no other collector here requires.
+**1. Air-gap → there is a reachable Intersight in the target site.**
+Refined twice on 2026-08-29. The build was gated on "a Private Virtual
+Appliance exists or is planned"; the user then clarified they have **no
+PVA**, and then that they do have an Intersight they can point this at
+from the air-gapped environment. Both statements are compatible: Cisco
+ships the on-prem product under several names, and "PVA" is only one of
+them.
+
+What matters for this ADR is the operational fact, and it holds:
+`INVENTORY_INTERSIGHT_IP` points at an on-prem FQDN rather than
+`intersight.com`, and `INVENTORY_INTERSIGHT_CA_BUNDLE` exists for an
+appliance presenting an internal CA. **The collector is deployable and,
+more importantly, testable there** — which is what turns this ADR's
+UNVERIFIED list from a standing risk into a one-command errand
+(`docs/field-test-checklist.md`).
+
+The standing dependency is unchanged and still worth stating: an on-prem
+Intersight is a licensed Cisco product this platform does not control,
+which no other collector here requires. Exactly which flavour is deployed
+is a detail the first `verify_intersight` run will surface.
 
 **2. What it manages → IMM and standalone-claimed servers.**
 Which is precisely the set UCS Central cannot see, so Decision 3's

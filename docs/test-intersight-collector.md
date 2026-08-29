@@ -16,6 +16,10 @@ inventory.
 assumed, and what only a live run can settle. Section 4 here settles the
 biggest assumption in a single query.
 
+**In a hurry, or running this in a site you have to travel to?**
+`docs/field-test-checklist.md` is the short version: four exported
+variables and one command, plus what to bring back.
+
 Nothing in sections 1–5 writes anything: no MongoDB connection, no
 `Manager` document, no `POST` to Intersight. The first write happens in
 section 6, and only when you ask for it.

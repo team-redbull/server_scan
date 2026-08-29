@@ -203,7 +203,9 @@ uv run python -m tools.run_collector --manager-type INTERSIGHT
 
 Run the verifier first. This collector has never been run against a live
 Intersight, and it settles the one assumption that would otherwise
-silently mis-report every server's memory —
+silently mis-report every server's memory.
+`docs/field-test-checklist.md` is the short version — the four variables
+and the one command, plus what to send back; and
 `docs/test-intersight-collector.md` is the full runbook.
 
 ## Local development

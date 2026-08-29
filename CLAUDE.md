@@ -251,101 +251,15 @@ silently. `uv run python -m tools.verify_intersight` settles it in one
 query by summing a real server's DIMMs — run it before scheduling
 anything, and record the result in ADR-0017.
 
-An air-gapped site reaches Intersight **only** through an on-prem Private
-Virtual Appliance; `intersight.com` is public internet and a *Connected*
-Virtual Appliance still calls home. The user has confirmed a PVA exists
-or is planned, which is the premise this collector's deployability rests
-on.
-
-**`REDFISH_STANDALONE` breaks three assumptions the rest of this file
-states, deliberately and with an ADR each time — read
-`docs/adr/0016-redfish-standalone-collector.md` before touching it:**
-
-1. **Its fleet comes from a mounted TOML inventory file, not from env.**
-   There is no aggregator to ask what exists. Like `UCS_MANAGER` it has a
-   login and no endpoint, but its endpoints are the hosts in that file,
-   and each may carry its own credential (referenced by name from a
-   mounted Secret). This deviates from ADR-0012's "no secret volume to
-   mount"; ADR-0016 names the deviation rather than hiding it.
-2. **`INVENTORY_COLLECTOR_NAME_PATTERN` does not apply to it.** A BMC
-   does not know the server's `ocp4-...` name, so `^ocp` would discard
-   every host the operator listed. The inventory file is the filter, and
-   there is no second line of defence behind it — treat it as a
-   review-gated, production-critical artifact.
-3. **Its cost is per *server*, not per manager** (~25 round trips per
-   BMC, against hardware that degrades when polled), so bounded
-   concurrency, a per-host wall-clock budget and a total-run budget are
-   correctness requirements rather than tuning knobs. Supported range is
-   ~400–1000 hosts per CronJob, sharded by inventory directory beyond
-   that. **It does not reach the platform's 10k target in this shape**,
-   and the ADR says so.
-
-A standalone Cisco CIMC is collected this way. That does **not** restore
-a UCS Manager entry point — `--manager-type UCS_MANAGER` remains deleted
-(below), and reaching a CIMC over Redfish is a different protocol to a
-different endpoint that knows nothing about domains or service profiles.
-
-Building the next collector means: implement `ServerInventoryProvider`
-for it under `app.infrastructure.providers.<vendor>`, add it to
-`_PROVIDER_FACTORIES`, and add a CronJob template mirroring
-`deploy/helm/server-inventory/templates/ucs-central-collector-cronjob.yaml`
-(or the `redfish-standalone-` one, if it needs mounted configuration).
-
-**How it works: Central discovers, UCS Manager collects.** Two queries go
-to Central regardless of fleet size — `computeSystem` for the registered
-domains and their addresses, `lsServer` for profile names and each one's
-domain. Everything else is read live from each domain's own UCS Manager
-through `..providers.ucs_manager` unchanged, up to
-`INVENTORY_UCS_CENTRAL_DOMAIN_CONCURRENCY` domains at once, using
-`INVENTORY_UCS_MANAGER_USERNAME`/`_PASSWORD` as the login for every
-domain. So `UcsManagerProvider` is not dead code — it is the engine, and
-ADR-0009's UCSPE validation is exactly why it was reused rather than
-reimplemented against Central's replica.
-
-Two behaviours worth knowing before you touch it. A domain is skipped
-**only** when Central lists profiles for it and none match
-`INVENTORY_COLLECTOR_NAME_PATTERN` — a domain with no known profiles is
-always collected, so an incomplete replica can never silently prune the
-fleet. And collected servers get their `external_id` rewritten from the
-domain-local `sys/...` (which repeats in every domain) to
-`compute/sys-<domainId>/...`, so it identifies one machine and names its
-domain.
-
-**The cost, accepted knowingly: a domain not registered with Central is
-uncollectable, and Central is a hard single point of failure for all
-Cisco collection.** There is no standalone UCS Manager entry point any
-more — `--manager-type UCS_MANAGER` was removed along with its CronJob
-and `INVENTORY_UCS_MANAGER_IP`. Don't "restore" it as a fix without
-asking; it was deleted deliberately.
-
-`docs/adr/0014` has the full evidence trail, including its 2026-08-17
-and 2026-08-18 updates. **It is now validated against a live UCS
-Central** — 152 registered domains, ~3346 equipped servers, real
-`verify_ucs_central` and `run_collector --dry-run` runs. The open
-question of whether Central replicates domain-*local* service
-profiles — the source of a server's name and hence of site parsing,
-classification and the `^ocp` match — is answered for that fleet: it
-uses **zero** local profiles; every one is `global-controlled` (owned by
-Central itself), which makes Central's `lsServer` copy authoritative by
-construction there and settles pruning as safe for it. The SDK schema
-still supports `localized` profiles (`LsSPMeta.ownership_state`), and a
-fleet that actually uses them remains untested here — run
-`uv run python -m tools.verify_ucs_central` against any new deployment
-before trusting it there too: read-only, writes nothing, prints a
-GOOD/PARTIAL/BAD verdict plus the `ownership_state` breakdown. Update
-ADR-0014 with the result. At runtime the provider also logs
-`ucs_central.domain_summary` and warns
-`ucs_central.domain_without_profiles`.
-
-**Shared Cisco logic lives in `app.infrastructure.providers.ucs_common`**
-(`is_equipped`, `group_by_owning_server_dn`, `bmc_interface`,
-`partition_profiles`, plus `normalize_oper_state`/`normalize_admin_state`
-— the interface-state vocabulary Intersight shares with both UCS SDKs),
-and `ucs_manager.mapping` serves both UCS providers.
-`ucscsdk` and `ucsmsdk` describe the same object model with the same
-attribute names — only the DN root differs — so duplicating any of it
-means the next emulator-found fix lands in one copy only. Everything
-there works on relative DN structure, never an absolute root.
+An air-gapped site reaches Intersight **only** through an on-prem
+Intersight; `intersight.com` is public internet and a *Connected* Virtual
+Appliance still calls home. The user has one reachable from the
+air-gapped environment (not the flavour Cisco brands a "Private Virtual
+Appliance" — the product ships under several names). **So this collector
+is testable there, and its first real run is the outstanding action**:
+`docs/field-test-checklist.md` says exactly what to run and what to bring
+back, and `scripts/field-report.sh` does it in one command. The
+`TotalMemory` unit is the answer to look for.
 
 ### What's explicitly NOT done yet (in rough priority order the user has confirmed)
 
