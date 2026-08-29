@@ -18,6 +18,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 
 from app.domain.ports.provider import ProviderServer
+from app.domain.value_objects.site import SiteCatalog
 from app.infrastructure.providers.fake.generator import (
     COLLECTOR_TYPES,
     generate_servers,
@@ -32,7 +33,14 @@ class FakeProvider:
     `seed`, every time it is called on a given instance.
     """
 
-    def __init__(self, *, seed: int, count: int, provider_type: str) -> None:
+    def __init__(
+        self,
+        *,
+        seed: int,
+        count: int,
+        provider_type: str,
+        sites: SiteCatalog | None = None,
+    ) -> None:
         """
         Args:
             seed (int): The generator seed.
@@ -41,10 +49,13 @@ class FakeProvider:
                 collector would have found.
             provider_type (str): The collector this instance imitates, a
                 `ManagerType` value.
+            sites (SiteCatalog | None): The sites whose codes appear in
+                generated hostnames, or None for the shipped default.
         """
         self._seed = seed
         self._count = count
         self.provider_type = provider_type
+        self._sites = sites
 
     async def health_check(self) -> None:
         """No real backend to check — the fake provider is always healthy."""
@@ -55,12 +66,14 @@ class FakeProvider:
         Yields:
             ProviderServer: Each fake server this collector would own.
         """
-        for server in generate_servers(seed=self._seed, count=self._count):
+        for server in generate_servers(seed=self._seed, count=self._count, sites=self._sites):
             if provider_type_for(server) == self.provider_type:
                 yield server
 
 
-def fake_providers(*, seed: int, count: int) -> list[FakeProvider]:
+def fake_providers(
+    *, seed: int, count: int, sites: SiteCatalog | None = None
+) -> list[FakeProvider]:
     """
     One provider per collector the platform actually runs.
 
@@ -70,11 +83,13 @@ def fake_providers(*, seed: int, count: int) -> list[FakeProvider]:
     Args:
         seed (int): The generator seed.
         count (int): How many servers the fleet holds in total.
+        sites (SiteCatalog | None): The sites whose codes appear in
+            generated hostnames, or None for the shipped default.
 
     Returns:
         list[FakeProvider]: A provider per implemented collector.
     """
     return [
-        FakeProvider(seed=seed, count=count, provider_type=manager_type.value)
+        FakeProvider(seed=seed, count=count, provider_type=manager_type.value, sites=sites)
         for manager_type in COLLECTOR_TYPES
     ]

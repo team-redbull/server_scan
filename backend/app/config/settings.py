@@ -73,6 +73,23 @@ class Settings(BaseSettings):
     # must override via INVENTORY_CURSOR_SECRET.
     cursor_secret: str = "dev-insecure-cursor-secret-change-in-production"  # noqa: S105 - dev default, not a real secret
 
+    # --- Sites ---
+    #
+    # Which sites this deployment has, as `code:Display Name` pairs:
+    #
+    #     INVENTORY_SITES="nyc:New York City,tlv:Tel Aviv,bat-yam:Bat Yam"
+    #
+    # The code is the token that appears inside a hostname
+    # (`ocp4-prod-tlv-infra-01` -> `tlv`), so it must be lowercase
+    # letters, digits and single hyphens. The display half is optional;
+    # `nyc,tlv` gives title-cased names.
+    #
+    # Configuration rather than an enum in the source, because which
+    # sites exist is a property of one estate's naming convention — see
+    # docs/adr/0018-sites-from-configuration.md. Empty uses the shipped
+    # default, so dev and CI need set nothing.
+    sites: str = ""
+
     # --- Regex / classification safety ---
     regex_max_pattern_length: int = 200
     regex_match_timeout_seconds: float = 0.25

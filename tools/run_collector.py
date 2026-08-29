@@ -44,7 +44,7 @@ from app.domain.ports.provider import ProviderServer, ServerInventoryProvider
 from app.domain.services.health.metrics import build_default_registry
 from app.domain.services.regex_engine import RegexModuleEngine
 from app.domain.value_objects.bmc_address import parse_bmc_address
-from app.domain.value_objects.site import parse_site_code
+from app.domain.value_objects.site import parse_site_code, site_catalog
 from app.infrastructure.credentials import EnvConnectionResolver
 from app.infrastructure.credentials.env import resolve_login
 from app.infrastructure.logging import configure_logging
@@ -531,6 +531,7 @@ async def _dry_run_one_manager(
         ),
         name_pattern,
     )
+    sites = site_catalog(settings.sites if settings is not None else get_settings().sites)
     print(f"\n=== {manager.name} ({manager.type.value} @ {manager.endpoint}) ===")
     if name_pattern:
         print(f"    (only servers whose name matches {name_pattern!r} are shown/collected)")
@@ -541,7 +542,7 @@ async def _dry_run_one_manager(
             print(f"  … stopped at --limit {limit}")
             break
         count += 1
-        site = parse_site_code(ps.name) or parse_site_code(ps.profile_dn)
+        site = parse_site_code(ps.name, sites) or parse_site_code(ps.profile_dn, sites)
         memory = (
             f"{ps.memory_total_bytes / 1024**3:.1f} GiB"
             if ps.memory_total_bytes is not None
@@ -557,7 +558,7 @@ async def _dry_run_one_manager(
         print(
             f"\n[{count}] {ps.name}"
             f"\n     external_id : {ps.external_id}"
-            f"\n     site (from name): {site.value if site else '— none in name'}"
+            f"\n     site (from name): {site or '— none in name'}"
             f"\n     vendor/model: {ps.vendor} / {ps.model}"
             f"\n     serial/uuid : {ps.serial} / {ps.system_uuid}"
             f"\n     cpu         : {_or_unread(ps.cpu_sockets)} sockets,"
@@ -751,6 +752,7 @@ async def _run(
             server_repo=server_repo,
             site_repo=MongoSiteRepository(mongo),
             manager_repo=manager_repo,
+            sites=site_catalog(settings.sites),
             classification_service=ClassificationService(
                 rule_repo=rule_repo, engine=regex_engine, mongo=mongo
             ),

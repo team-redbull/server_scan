@@ -34,21 +34,27 @@ import uuid
 from collections.abc import Iterator
 from dataclasses import replace
 
-from app.domain.enums import ManagerType, SiteCode
+from app.domain.enums import ManagerType
 from app.domain.models.common import AuditFields
 from app.domain.models.manager import Manager
 from app.domain.models.site import Site
 from app.domain.ports.provider import ProviderAttachment, ProviderServer
-from app.domain.value_objects.site import SITE_DISPLAY_NAMES
+from app.domain.value_objects.site import SiteCatalog, site_catalog
 
 # --- Fixed reference universe -----------------------------------------
 #
-# Sites/managers are a small, fixed set independent of `seed`/`count` —
+# Managers are a small, fixed set independent of `seed`/`count` —
 # re-seeding with a different seed or count must not create duplicate
-# site/manager documents (both have a unique index on `name`). Only the
-# *servers* generated vary with `seed`/`count`.
-
-_SITE_CODES = tuple(member.value for member in SiteCode)
+# manager documents (unique index on `name`). Only the *servers*
+# generated vary with `seed`/`count`.
+#
+# Sites are not fixed here at all: they come from the configured
+# `SiteCatalog`, so a deployment that reconfigures INVENTORY_SITES gets
+# fake data whose hostnames carry ITS site tokens. Seeding names built
+# from some other estate's sites would produce a fleet that is entirely
+# "Unassigned" — which is exactly the bug this generator exists to catch
+# rather than create.
+_DEFAULT_SITES = site_catalog("")
 
 # The manager types that have a collector. `OPENMANAGE` and `ONEVIEW`
 # have configuration slots and no implementation, so seeding servers
@@ -156,21 +162,27 @@ def provider_type_for(server: ProviderServer) -> str:
     return ManagerType.REDFISH_STANDALONE.value
 
 
-def list_sites() -> list[Site]:
+def list_sites(sites: SiteCatalog | None = None) -> list[Site]:
     """
-    The fixed set of sites servers are distributed across.
+    The sites servers are distributed across.
+
+    Args:
+        sites (SiteCatalog | None): The configured sites, or None for the
+            shipped default.
 
     Returns:
-        list[Site]: One `Site` per `SiteCode`, named as the API names it.
+        list[Site]: One `Site` per configured site, named as the API
+            names it.
     """
+    catalog = sites if sites is not None else _DEFAULT_SITES
     return [
         Site(
-            id=_site_id(code),
-            name=SITE_DISPLAY_NAMES[SiteCode(code)],
-            code=code.upper(),
+            id=_site_id(definition.code),
+            name=definition.name,
+            code=definition.code.upper(),
             audit=AuditFields.new(),
         )
-        for code in _SITE_CODES
+        for definition in catalog.definitions
     ]
 
 
@@ -634,7 +646,9 @@ def _build_attachments(rng: random.Random, *, site_code: str) -> tuple[ProviderA
     return tuple(physical) + tuple(vnics)
 
 
-def generate_servers(*, seed: int, count: int) -> Iterator[ProviderServer]:
+def generate_servers(
+    *, seed: int, count: int, sites: SiteCatalog | None = None
+) -> Iterator[ProviderServer]:
     """
     Yield `count` deterministic `ProviderServer` DTOs for the given `seed`.
 
@@ -645,21 +659,23 @@ def generate_servers(*, seed: int, count: int) -> Iterator[ProviderServer]:
     Args:
         seed (int): The RNG seed.
         count (int): How many servers to generate.
+        sites (SiteCatalog | None): The sites whose codes appear in the
+            generated hostnames, or None for the shipped default.
 
     Yields:
         ProviderServer: One fake server.
     """
     rng = random.Random(seed)  # noqa: S311 - deterministic fake data, never security-sensitive
-    sites = _SITE_CODES
+    site_codes = (sites if sites is not None else _DEFAULT_SITES).codes
 
     for index in range(count):
-        site_index = index % len(sites)
-        site_code = sites[site_index]
+        site_index = index % len(site_codes)
+        site_code = site_codes[site_index]
         # Stepped by site cycle, not by `index`: there are as many vendors
         # as sites, so a plain `index % len(_VENDORS)` locks each site to
         # exactly one vendor and leaves every per-site vendor breakdown a
         # single bar.
-        vendor = _VENDORS[(index // len(sites)) % len(_VENDORS)]
+        vendor = _VENDORS[(index // len(site_codes)) % len(_VENDORS)]
         # Shuffle vendor pick slightly so it isn't perfectly periodic —
         # still fully deterministic (drawn from `rng`), just less uniform.
         if rng.random() < 0.15:

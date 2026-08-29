@@ -6,10 +6,10 @@ from __future__ import annotations
 
 from tools.run_collector import manager_for
 
-from app.domain.enums import HealthSeverity, ManagerType, SiteCode, Vendor
+from app.domain.enums import HealthSeverity, ManagerType, Vendor
 from app.domain.models.hardware import Gpu
 from app.domain.ports.credentials import ManagerConnection
-from app.domain.value_objects.site import parse_site_code
+from app.domain.value_objects.site import parse_site_code, site_catalog
 from app.infrastructure.providers.fake.generator import (
     collector_for,
     generate_servers,
@@ -18,6 +18,11 @@ from app.infrastructure.providers.fake.generator import (
     manager_id_for,
     provider_type_for,
 )
+
+# The shipped default catalog. The generator takes one explicitly now
+# that sites are configuration, and these fixtures pin the default so a
+# reconfigured deployment cannot silently change what they assert.
+SITES = site_catalog("")
 
 
 def test_same_seed_produces_byte_identical_output() -> None:
@@ -113,7 +118,7 @@ def test_only_ucs_central_servers_carry_a_service_profile_dn() -> None:
             continue
         assert s.profile_dn is not None
         assert s.profile_dn.startswith("org-root/org-")
-        assert parse_site_code(s.profile_dn) is not None
+        assert parse_site_code(s.profile_dn, SITES) is not None
 
 
 def test_a_siteless_ucs_central_name_still_resolves_through_its_org_dn() -> None:
@@ -125,11 +130,12 @@ def test_a_siteless_ucs_central_name_still_resolves_through_its_org_dn() -> None
     siteless = [
         s
         for s in generate_servers(seed=42, count=300)
-        if provider_type_for(s) == ManagerType.UCS_CENTRAL.value and parse_site_code(s.name) is None
+        if provider_type_for(s) == ManagerType.UCS_CENTRAL.value
+        and parse_site_code(s.name, SITES) is None
     ]
     assert siteless, "the siteless name family should reach UCS Central servers too"
     for s in siteless:
-        assert parse_site_code(s.profile_dn) is not None
+        assert parse_site_code(s.profile_dn, SITES) is not None
 
 
 def test_each_collector_reports_gpus_to_its_own_ceiling() -> None:
@@ -241,12 +247,12 @@ def test_every_generated_name_resolves_to_a_site_or_is_deliberately_siteless() -
     servers = list(generate_servers(seed=42, count=300))
     sited = 0
     for s in servers:
-        site = parse_site_code(s.name)
+        site = parse_site_code(s.name, SITES)
         if site is None:
             # Only the deliberate unclassified family has no site token.
             assert s.name.startswith("random-server-"), s.name
         else:
-            assert site.value in {m.value for m in SiteCode}
+            assert site in SITES
             sited += 1
     # The siteless family is a minority, not the bulk of the fixture.
     assert sited > len(servers) * 0.6
@@ -254,8 +260,8 @@ def test_every_generated_name_resolves_to_a_site_or_is_deliberately_siteless() -
 
 def test_generated_names_cover_every_site() -> None:
     names = [s.name for s in generate_servers(seed=42, count=300)]
-    seen = {parse_site_code(n) for n in names} - {None}
-    assert seen == set(SiteCode)
+    seen = {parse_site_code(n, SITES) for n in names} - {None}
+    assert seen == set(SITES.codes)
 
 
 def test_list_sites_and_managers_have_unique_names_and_ids() -> None:
@@ -327,7 +333,7 @@ def test_site_documents_are_ided_by_their_bare_site_code() -> None:
     """A `Site` document's id must be exactly what `parse_site_code`
     yields, or a server's `site_id` would never join to its site.
     """
-    assert {s.id for s in list_sites()} == {m.value for m in SiteCode}
+    assert {s.id for s in list_sites()} == set(SITES.codes)
 
 
 def test_some_servers_have_a_profile_template_and_some_do_not() -> None:

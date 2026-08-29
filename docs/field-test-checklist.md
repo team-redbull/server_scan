@@ -21,17 +21,16 @@ export INVENTORY_INTERSIGHT_API_KEY_PEM="$(cat ~/intersight-key.pem)"
 uv run python -m tools.verify_intersight --show-names 15 | tee intersight-verify.txt
 ```
 
-Send back `intersight-verify.txt`. That is the whole errand.
+Send back `intersight-verify.txt`. That is the whole errand, and it is
+safe to run repeatedly.
 
-If you want the fuller capture in one shot — same probe, plus a
-three-server dry run, plus the environment facts that explain a confusing
-result — run this instead and send back the file it names:
+If the probe passes and you want to see the actual server records it
+would ingest — still writing nothing — add:
 
 ```bash
-scripts/field-report.sh
+uv run python -m tools.run_collector --manager-type INTERSIGHT \
+  --dry-run --limit 3 | tee intersight-dryrun.txt
 ```
-
-Both are safe to run repeatedly.
 
 ---
 
@@ -70,7 +69,7 @@ CA instead.
 
 ### a. The `TotalMemory` unit — the single most important line
 
-Report section **"4. THE TotalMemory UNIT"**.
+Output section **"4. THE TotalMemory UNIT"**.
 
 This is the highest-risk unknown in the collector. Cisco documents no
 unit for `TotalMemory` anywhere — not on the summary, not on `Blade`, not
@@ -90,7 +89,7 @@ The probe settles it by summing one real server's DIMMs, whose capacity
 
 ### b. Do server names come out right
 
-Report section **"3. THE SERVER NAME"**.
+Output section **"3. THE SERVER NAME"**.
 
 The platform parses a server's **site** out of its name (`ocp4-prod-tlv-…`
 → `tlv`) and only collects servers matching `INVENTORY_COLLECTOR_NAME_PATTERN`.
@@ -108,7 +107,7 @@ resolved names are printed so you can sanity-check them by eye.
 
 ### c. What Intersight actually manages there
 
-Report section **"2. WHAT THIS TENANT HOLDS"**, the `ManagementMode`
+Output section **"2. WHAT THIS TENANT HOLDS"**, the `ManagementMode`
 counts.
 
 - Servers in `Intersight` or `IntersightStandalone` mode are machines
@@ -140,30 +139,32 @@ the message tells you which of three situations you are in:
 
 ## Optional, and genuinely worth it while you are in there
 
-If UCS Central is configured in that environment, `scripts/field-report.sh`
-also runs a read-only probe and a three-server dry run against it.
+If UCS Central is reachable from the same machine, one dry run against it
+answers a question open since ADR-0009:
 
-**The one question worth answering from that half:** in the UCS Central
-dry-run output, compare a server's reported `memory` line against what
-that machine really has. ADR-0009 could never settle whether UCS reports
-total memory in MB against real hardware — the emulator gave one
-synthetic value for every model — and **the Intersight collector now
-carries the same assumption**. Confirming it on real Cisco hardware
-settles it for both collectors at once.
+```bash
+uv run python -m tools.run_collector --manager-type UCS_CENTRAL \
+  --dry-run --limit 3 | tee ucs-dryrun.txt
+```
+
+**Compare a server's reported `memory` line against what that machine
+really has.** ADR-0009 could never settle whether UCS reports total
+memory in MB against real hardware — the emulator gave one synthetic
+value for every model — and **the Intersight collector now carries the
+same assumption**. Confirming it on real Cisco hardware settles it for
+both collectors at once.
 
 ---
 
 ## What to send back, and what is in it
 
-Either `intersight-verify.txt` or the `field-report-<timestamp>.txt` the
-script names.
+`intersight-verify.txt`, plus either dry-run file if you ran one.
 
 **Skim it before it leaves the secure environment.** It deliberately
 contains server names, models, serial numbers and management IP
-addresses — those are the point of the exercise. It deliberately contains
-**no** credential: any variable whose name ends in `_PASSWORD` or `_PEM`
-is reported as "set (N chars)", never echoed, and the API key's private
-half never appears anywhere in the output.
+addresses — those are the point of the exercise. It contains **no**
+credential: the API key's private half is never printed, and there is no
+debug flag anywhere that would print it.
 
 If your site's rules do not allow hostnames or serials out, redact them
 and say so. The memory comparison and the counts are still worth having

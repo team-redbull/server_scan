@@ -23,6 +23,27 @@ db:
   secretName: server-inventory-db
 
 config:
+  # The sites this deployment has, as `code:Display Name` pairs. The code
+  # is the token that appears inside a hostname (`ocp4-prod-tlv-infra-01`
+  # -> `tlv`), so it must be lowercase letters, digits and single hyphens.
+  #
+  # This is the only place sites are defined: changing this list renames or
+  # adds a site across the API, the UI's site cards, the inventory filter,
+  # the policy editors and the seeded classification rules at once, with no
+  # code change and no image rebuild. It reaches both the API and every
+  # collector, because a collector derives each server's site at ingest.
+  #
+  # Empty uses the shipped default
+  # ("nyc:New York City,tlv:Tel Aviv,bat-yam:Bat Yam,five:Site Five").
+  # A malformed entry fails the pod at startup rather than silently
+  # producing a site no server can ever be assigned to.
+  # See docs/adr/0018-sites-from-configuration.md.
+  #
+  # Set it here, or in a values file. NOT with a bare `--set`: helm reads
+  # the commas as its own separators and silently splits the list into
+  # several keys. From the command line it has to be
+  #     --set-string 'config.sites=nyc:New York City\,tlv:Tel Aviv'
+  sites: ""
   logLevel: INFO
   metricsEnabled: "true"
   defaultPageSize: "50"

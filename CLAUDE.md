@@ -147,7 +147,8 @@ always zero, and servers named after their chassis slot rather than
 their service profile (which silently defeated both site parsing and
 classification).
 
-Also since: sites and vendors are closed enums, a server's site is parsed
+Also since: vendors are a closed enum and sites a closed set loaded
+from configuration, a server's site is parsed
 from its own name, vendor manager connections come from environment
 configuration rather than MongoDB documents plus mounted secrets, and the
 UI was rebuilt around a per-site overview as the landing page.
@@ -258,8 +259,9 @@ air-gapped environment (not the flavour Cisco brands a "Private Virtual
 Appliance" — the product ships under several names). **So this collector
 is testable there, and its first real run is the outstanding action**:
 `docs/field-test-checklist.md` says exactly what to run and what to bring
-back, and `scripts/field-report.sh` does it in one command. The
-`TotalMemory` unit is the answer to look for.
+back — three exported variables and `uv run python -m
+tools.verify_intersight`. The `TotalMemory` unit is the answer to look
+for.
 
 ### What's explicitly NOT done yet (in rough priority order the user has confirmed)
 
@@ -309,9 +311,22 @@ non-obvious enough to bite you.
   configuration — `ocp4-prod-tlv-infra-01` -> `tlv`. Token-based, not a
   substring search (`ocp4-tlvx-01` contains "tlv" but names no site),
   and an ambiguous name yields `None` rather than a guess. `None` is a
-  real state the UI shows as "Unassigned". The sites are `nyc`, `tlv`,
-  `bat-yam` and `five`; a code spelled with a separator (`bat-yam`)
-  matches consecutive tokens. **A Cisco server whose name carries no site
+  real state the UI shows as "Unassigned". A code spelled with a
+  separator (`bat-yam`) matches consecutive tokens.
+
+  **Which sites exist is `INVENTORY_SITES`, not code** (ADR-0018).
+  `SiteCode` is gone; the set is a `SiteCatalog` parsed from
+  `"nyc:New York City,tlv:Tel Aviv,bat-yam:Bat Yam,five:Site Five"` —
+  that string is the shipped default, and an estate sets its own. The
+  set is still *closed*, just closed at runtime, and it is still the
+  server's own name that picks from it. Three things follow. The catalog
+  is threaded explicitly (`IngestService(sites=...)`,
+  `parse_site_code(name, catalog)`, `default_system_rules(catalog)`) —
+  the domain never reads `Settings`. `Server.site_id` is a plain `str`,
+  deliberately, so a document written before a site was renamed away
+  still loads. And `INVENTORY_SITES` lives in the shared `api-config`
+  ConfigMap because the API *and* every collector must agree on it — a
+  collector derives each server's site at ingest. **A Cisco server whose name carries no site
   token falls back to its service profile's org DN**
   (`org-root/org_tlv/ls-worker-01` -> `tlv`) — the name is still the
   authority, the org path is only consulted when it says nothing.
@@ -365,6 +380,8 @@ non-obvious enough to bite you.
   Redis a hard dependency for correctness.
 - Pagination is keyset (HMAC-signed cursor for `/servers`), never
   `skip`/`offset`.
+- Sites from configuration rather than an enum is `docs/adr/0018`,
+  which supersedes part of `0011`.
 - Sites/vendors as closed sets, name-derived sites and the UI rebuild are
   `docs/adr/0011`; env-based manager connections and the single manifest
   set are `docs/adr/0012`; CI action pinning, the removed Dependabot and

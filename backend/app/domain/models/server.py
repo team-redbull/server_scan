@@ -17,7 +17,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
-from app.domain.enums import SiteCode, Vendor
+from app.domain.enums import Vendor
 from app.domain.models.classification import Classification
 from app.domain.models.connectivity import Connectivity
 from app.domain.models.hardware import Hardware
@@ -100,7 +100,14 @@ class Server(BaseModel):
     # Derived from `name` at ingest (`app.domain.value_objects.site`), not
     # taken from the collector's config. `None` means the name carries no
     # site token — surfaced as "Unassigned", never defaulted to a site.
-    site_id: SiteCode | None = None
+    #
+    # A plain `str`, not an enum: the set of sites is deployment
+    # configuration (`INVENTORY_SITES`), and a document written when a
+    # site existed must still load after it has been renamed away. The
+    # closed set is enforced where it can be — at ingest, which only ever
+    # produces a configured code — rather than by a type that would make
+    # yesterday's data unreadable. See docs/adr/0018.
+    site_id: str | None = None
     manager_id: str | None = None
 
     tags: list[str] = Field(default_factory=list)

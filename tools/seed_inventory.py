@@ -26,6 +26,7 @@ from app.application.services.ingest import IngestService
 from app.config import get_settings
 from app.domain.services.health.metrics import build_default_registry
 from app.domain.services.regex_engine import RegexModuleEngine
+from app.domain.value_objects.site import site_catalog
 from app.infrastructure.logging import configure_logging
 from app.infrastructure.mongodb import MongoClientHolder
 from app.infrastructure.mongodb.audit_event_repository import MongoAuditEventRepository
@@ -72,7 +73,8 @@ async def _run(*, count: int, seed: int) -> None:
         # ever having run against it.
         rule_repo = MongoClassificationRuleRepository(mongo)
         policy_repo = MongoHealthPolicyRepository(mongo)
-        await ensure_default_classification_rules(rule_repo)
+        sites = site_catalog(settings.sites)
+        await ensure_default_classification_rules(rule_repo, sites)
         await ensure_default_health_policies(policy_repo)
 
         regex_engine = RegexModuleEngine(
@@ -83,6 +85,7 @@ async def _run(*, count: int, seed: int) -> None:
             server_repo=MongoServerRepository(mongo, cursor_secret=settings.cursor_secret),
             site_repo=MongoSiteRepository(mongo),
             manager_repo=MongoManagerRepository(mongo),
+            sites=sites,
             classification_service=ClassificationService(
                 rule_repo=rule_repo, engine=regex_engine, mongo=mongo
             ),
@@ -97,9 +100,9 @@ async def _run(*, count: int, seed: int) -> None:
         # the provider, so a single pass would label the whole fake fleet
         # with one collector that never found most of it.
         fetched = created = updated = errors = 0
-        for provider in fake_providers(seed=seed, count=count):
+        for provider in fake_providers(seed=seed, count=count, sites=sites):
             summary = await ingest_service.ingest(
-                provider, sites=list_sites(), managers=list_managers()
+                provider, sites=list_sites(sites), managers=list_managers()
             )
             fetched += summary.fetched
             created += summary.created

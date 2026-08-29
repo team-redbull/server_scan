@@ -48,6 +48,8 @@ playwright-report/
 test-results/
 
 **/.claude-flow/
-# Field reports carried back from a site: they hold server names,
-# serials and management addresses, and are never committed.
-field-report-*.txt
+# Probe output carried back from a site (docs/field-test-checklist.md):
+# holds server names, serials and management addresses, never committed.
+intersight-verify.txt
+intersight-dryrun.txt
+ucs-dryrun.txt

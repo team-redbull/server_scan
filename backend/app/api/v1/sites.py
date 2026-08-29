@@ -27,9 +27,9 @@ from app.api.v1.sites_schemas import (
 )
 from app.config import Settings, get_settings
 from app.dependencies import get_mongo_holder, get_redis_holder
-from app.domain.enums import HealthSeverity, SiteCode, Vendor
+from app.domain.enums import HealthSeverity, Vendor
 from app.domain.ports.repository import SiteBreakdownRow
-from app.domain.value_objects.site import SITE_DISPLAY_NAMES
+from app.domain.value_objects.site import SiteCatalog, site_catalog
 from app.infrastructure.mongodb.client import MongoClientHolder
 from app.infrastructure.mongodb.server_repository import MongoServerRepository
 from app.infrastructure.redis.cache import CacheClient
@@ -82,16 +82,28 @@ def _empty_stats(site_id: str, *, name: str) -> SiteStats:
     )
 
 
-def _pivot(rows: list[SiteBreakdownRow]) -> list[SiteStats]:
+def _pivot(rows: list[SiteBreakdownRow], sites: SiteCatalog) -> list[SiteStats]:
     """Fold the flat `$group` buckets into one record per site.
 
-    Every site in the enum is seeded first so the shape of the response
+    Every configured site is seeded first so the shape of the response
     does not depend on what happens to be in the database — the UI can
-    render a card per site without null-checking each one.
+    render a card per site without null-checking each one, and a site
+    with no servers yet still appears.
+
+    This endpoint is also the *only* place the frontend learns which
+    sites exist, so reconfiguring `INVENTORY_SITES` reaches the UI with
+    no frontend change at all.
+
+    Args:
+        rows (list[SiteBreakdownRow]): The aggregation's flat buckets.
+        sites (SiteCatalog): The configured sites.
+
+    Returns:
+        list[SiteStats]: One record per site, plus "Unassigned".
     """
     stats: dict[str, SiteStats] = {
-        member.value: _empty_stats(member.value, name=SITE_DISPLAY_NAMES[member])
-        for member in SiteCode
+        definition.code: _empty_stats(definition.code, name=definition.name)
+        for definition in sites.definitions
     }
     stats[UNASSIGNED_SITE_ID] = _empty_stats(UNASSIGNED_SITE_ID, name="Unassigned")
 
@@ -126,12 +138,15 @@ def _pivot(rows: list[SiteBreakdownRow]) -> list[SiteStats]:
 async def list_sites(
     repo: Annotated[MongoServerRepository, Depends(_server_repo)],
     cache: Annotated[CacheClient, Depends(_cache)],
+    settings: Annotated[Settings, Depends(get_settings)],
 ) -> SiteStatsListResponse:
     cached = await cache.get(_STATS_CACHE_KEY)
     if cached is not None:
         return SiteStatsListResponse.model_validate(cached)
 
-    response = SiteStatsListResponse(items=_pivot(await repo.site_breakdown()))
+    response = SiteStatsListResponse(
+        items=_pivot(await repo.site_breakdown(), site_catalog(settings.sites))
+    )
     await cache.set(
         _STATS_CACHE_KEY, response.model_dump(mode="json"), ttl_seconds=_STATS_TTL_SECONDS
     )

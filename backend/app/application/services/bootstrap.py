@@ -23,6 +23,7 @@ import structlog
 
 from app.domain.models.classification_rule import ClassificationRule
 from app.domain.services.health.health_policy_defaults import default_system_policies
+from app.domain.value_objects.site import SiteCatalog
 from app.infrastructure.mongodb.classification_rule_repository import (
     MongoClassificationRuleRepository,
     default_system_rules,
@@ -73,7 +74,9 @@ def _definition_of(rule: ClassificationRule) -> dict[str, object]:
     )
 
 
-async def ensure_default_classification_rules(repo: MongoClassificationRuleRepository) -> int:
+async def ensure_default_classification_rules(
+    repo: MongoClassificationRuleRepository, sites: SiteCatalog
+) -> int:
     """Seed the system-default rules, and re-sync any whose definition has
     drifted from what code now generates.
 
@@ -86,7 +89,7 @@ async def ensure_default_classification_rules(repo: MongoClassificationRuleRepos
             changes in code.
     """
     written = 0
-    for rule in default_system_rules():
+    for rule in default_system_rules(sites):
         stored = await repo.get_by_name(rule.name)
         if stored is None:
             await repo.upsert(rule)

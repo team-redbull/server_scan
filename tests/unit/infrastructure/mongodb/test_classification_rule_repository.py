@@ -16,7 +16,13 @@ import pytest
 
 from app.domain.enums import InstallationType
 from app.domain.models.classification_rule import PRIORITY_BANDS
+from app.domain.value_objects.site import site_catalog
 from app.infrastructure.mongodb.classification_rule_repository import default_system_rules
+
+# The shipped default catalog. The seeded rules interpolate the
+# configured site codes now, so these fixtures pin which set they
+# were written against.
+SITES = site_catalog("")
 
 
 def _classify(name: str) -> set[InstallationType]:
@@ -25,19 +31,19 @@ def _classify(name: str) -> set[InstallationType]:
     """
     return {
         rule.installation_type
-        for rule in default_system_rules()
+        for rule in default_system_rules(SITES)
         if re.compile(rule.pattern, re.IGNORECASE).match(name)
     }
 
 
 def test_rules_have_unique_ids_and_names() -> None:
-    rules = default_system_rules()
+    rules = default_system_rules(SITES)
     assert len({r.id for r in rules}) == len(rules)
     assert len({r.name for r in rules}) == len(rules)
 
 
 def test_every_default_rule_is_a_locked_unscoped_system_rule() -> None:
-    for rule in default_system_rules():
+    for rule in default_system_rules(SITES):
         assert rule.source == "SYSTEM_DEFAULT"
         assert rule.system is True
         assert rule.enabled is True
@@ -107,5 +113,7 @@ def test_hosted_cluster_and_upi_patterns_are_mutually_exclusive() -> None:
         "ocp4-prod-tlv-infra-01",
     ]
     for name in names:
-        matched = [r for r in default_system_rules() if re.compile(r.pattern, re.I).match(name)]
+        matched = [
+            r for r in default_system_rules(SITES) if re.compile(r.pattern, re.I).match(name)
+        ]
         assert len(matched) == 1, f"{name} matched {[r.name for r in matched]}"

@@ -31,7 +31,7 @@ from typing import Any
 from app.config import get_settings
 from app.domain.enums import ManagerType
 from app.domain.ports.credentials import ManagerNotConfiguredError
-from app.domain.value_objects.site import parse_site_code
+from app.domain.value_objects.site import parse_site_code, site_catalog
 from app.infrastructure.credentials import EnvConnectionResolver
 from app.infrastructure.providers.intersight import mapping
 from app.infrastructure.providers.intersight.client import (
@@ -242,7 +242,7 @@ async def _inspect(client: IntersightClient, *, show_names: int, sample: int) ->
         names.append(name)
         if profile is not None:
             named += 1
-        if parse_site_code(name) is not None:
+        if parse_site_code(name, site_catalog(settings.sites)) is not None:
             sited += 1
 
     _p(f"servers with an assigned server.Profile : {named} / {len(collected)}")

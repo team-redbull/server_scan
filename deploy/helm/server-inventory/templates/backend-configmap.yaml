@@ -7,6 +7,11 @@ metadata:
     app.kubernetes.io/component: backend
     app.kubernetes.io/part-of: server-inventory
 data:
+  {{- /* Read by the API *and* by every collector CronJob, which
+         envFrom this same ConfigMap — a collector derives each
+         server's site from its name at ingest, so both halves must
+         agree on the site list or servers land unassigned. */}}
+  INVENTORY_SITES: {{ .Values.config.sites | quote }}
   INVENTORY_LOG_LEVEL: {{ .Values.config.logLevel | quote }}
   INVENTORY_METRICS_ENABLED: {{ .Values.config.metricsEnabled | quote }}
   INVENTORY_DEFAULT_PAGE_SIZE: {{ .Values.config.defaultPageSize | quote }}

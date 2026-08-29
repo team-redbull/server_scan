@@ -9,12 +9,15 @@ import pytest
 
 from app.application.services.ingest import IngestService
 from app.domain.enums import Vendor
+from app.domain.value_objects.site import site_catalog
 from app.infrastructure.mongodb import MongoClientHolder
 from app.infrastructure.mongodb.manager_repository import MongoManagerRepository
 from app.infrastructure.mongodb.server_repository import MongoServerRepository
 from app.infrastructure.mongodb.site_repository import MongoSiteRepository
 from app.infrastructure.providers.fake.generator import list_managers, list_sites
 from app.infrastructure.providers.fake.provider import fake_providers
+
+SITES = site_catalog("")
 
 pytestmark = pytest.mark.integration
 
@@ -23,6 +26,7 @@ _CURSOR_SECRET = "test-cursor-secret"
 
 def _service(mongo_holder: MongoClientHolder) -> IngestService:
     return IngestService(
+        sites=SITES,
         server_repo=MongoServerRepository(mongo_holder, cursor_secret=_CURSOR_SECRET),
         site_repo=MongoSiteRepository(mongo_holder),
         manager_repo=MongoManagerRepository(mongo_holder),

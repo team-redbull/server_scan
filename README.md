@@ -66,10 +66,27 @@ physical manager. On a schedule, a CronJob's pod:
    (`app.application.services.ingest.IngestService`) — classify, health-
    evaluate, audit, and upsert into MongoDB, all in one write per server.
 
-A server's **site** is not configured anywhere: it is parsed from the
-server's own name (`ocp4-prod-tlv-infra-01` -> site `tlv`), so a
+A server's **site** is not configured *per manager*: it is parsed from
+the server's own name (`ocp4-prod-tlv-infra-01` -> site `tlv`), so a
 misconfigured manager cannot mislabel everything it collects. A name with
 no site token is surfaced as "Unassigned" rather than defaulted.
+
+**Which sites exist is one environment variable**, because a site code is
+a property of your hostname convention rather than of this code:
+
+```bash
+INVENTORY_SITES="nyc:New York City,tlv:Tel Aviv,bat-yam:Bat Yam,five:Site Five"
+```
+
+`code:Display Name`, comma-separated; the display half is optional.
+Changing it renames or adds a site across the API, the site cards, the
+inventory filter, both policy editors and the seeded classification rules
+at once — no code change, no image rebuild, which matters when the images
+have to cross an air gap. In Helm it is `config.sites`, which lands in
+the ConfigMap the API *and* every collector read, because a collector
+derives each server's site at ingest and the two halves must agree. A
+malformed value fails at startup rather than producing a site no server
+could ever match. See `docs/adr/0018-sites-from-configuration.md`.
 
 **Not every machine has a manager, and those are collected too.** The
 `REDFISH_STANDALONE` collector reaches a BMC directly over DMTF Redfish —

@@ -18,10 +18,13 @@ from app.application.services.ingest import IngestService
 from app.domain.enums import HealthSeverity, MediaType
 from app.domain.models.health import Health
 from app.domain.ports.provider import ProviderServer
+from app.domain.value_objects.site import site_catalog
 from app.infrastructure.mongodb import MongoClientHolder
 from app.infrastructure.mongodb.manager_repository import MongoManagerRepository
 from app.infrastructure.mongodb.server_repository import MongoServerRepository
 from app.infrastructure.mongodb.site_repository import MongoSiteRepository
+
+SITES = site_catalog("")
 
 pytestmark = pytest.mark.integration
 
@@ -50,6 +53,7 @@ class _OneShotProvider:
 
 def _service(mongo: MongoClientHolder) -> IngestService:
     return IngestService(
+        sites=SITES,
         server_repo=MongoServerRepository(mongo, cursor_secret=_CURSOR_SECRET),
         site_repo=MongoSiteRepository(mongo),
         manager_repo=MongoManagerRepository(mongo),
