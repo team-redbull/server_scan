@@ -3,8 +3,10 @@
 This file orients a Claude Code session picking up this repository —
 whether that's a fresh session or one resuming after a break. Read this
 before making changes. `README.md` is the human-facing quickstart;
-`docs/architecture.md` and `docs/adr/*` are the technical deep-dives this
-file points into rather than duplicates.
+`docs/arc42.md` is the structured architecture overview (goals,
+constraints, context, deployment, quality scenarios, and the risk and
+technical-debt register); `docs/architecture.md` and `docs/adr/*` are the
+technical deep-dives both of those point into rather than duplicate.
 
 ## What this is
 
@@ -62,8 +64,12 @@ is a real mistake, not a style preference.
    gitignored** and is what you actually edit for local dev — don't
    recreate `.env.example` as if it were the working config.
 6. **Real authentication is deliberately deferred to the very last
-   slice.** The `AuthProvider`/RBAC scaffolding exists now (permissive,
-   not enforcing), but do not wire up real auth unless the user
+   slice.** Be precise about what that means, because an earlier version
+   of this file was not: there is **no** `AuthProvider` class and no RBAC
+   scaffolding. What exists is `app.dependencies.get_current_actor`,
+   which returns a fixed `unauthenticated` `Actor` so audit events have
+   an actor to record. Every endpoint, writes included, is open to anyone
+   who can reach the Route. Do not wire up real auth unless the user
    explicitly asks for it — they've confirmed this deferral more than
    once, most recently mid-collector-work ("lets leave the auth for now
    what else is there to make this production and really run?").

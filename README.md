@@ -35,8 +35,10 @@ collectors. Built so far, in order:
     aggregator owns — a Cisco CIMC that Intersight cannot manage, an
     iDRAC, a current iLO. One BMC at a time, from an inventory file.
 
-See `docs/architecture.md` for the full per-slice writeup and
-`docs/adr/` for the individual design decisions.
+`docs/arc42.md` is the structured architecture overview — goals,
+constraints, context, deployment view, quality scenarios, and an honest
+risk/technical-debt register. See `docs/architecture.md` for the full
+per-slice writeup and `docs/adr/` for the individual design decisions.
 
 ## How data actually gets in
 

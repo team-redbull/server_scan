@@ -561,6 +561,11 @@ as done.
 
 ## Further reading
 
+- `docs/arc42.md` — the structured architecture overview (arc42): goals,
+  constraints, context, deployment view, quality scenarios, and the
+  risk/technical-debt register. It links *into* this document for the
+  subsystem detail rather than restating it, so start there for the shape
+  of the system and come back here for how a part works.
 - `docs/adr/` — architecture decision records, added as decisions are made
   (not written speculatively ahead of the code).
 - `deploy/` — OpenShift and Helm deployment manifests.
