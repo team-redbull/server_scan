@@ -1,12 +1,16 @@
 # Testing the Cisco Intersight collector against real hardware
 
-**Read this first: no live Intersight API call has ever been made
-against this collector.** It was built entirely against Cisco's published
-contract, because the DevNet Intersight sandbox went offline on
-2026-08-01 with no committed return before ~Q1 2027 and there is no
-downloadable emulator equivalent to the UCS Platform Emulator. Every
-step below therefore does double duty — it commissions the collector for
-your estate *and* it is the first real test this code has ever had.
+**Read this first: no server inventory has ever been mapped from real
+Intersight data by this collector.** Its transport and authentication
+path have been exercised against the real `intersight.com` service (see
+ADR-0017's validation section), but every field mapping below is built
+from the published contract alone — the DevNet Intersight sandbox went
+offline on 2026-08-01 with no committed return before ~Q1 2027, and there
+is no downloadable emulator equivalent to the UCS Platform Emulator.
+
+Every step below therefore does double duty: it commissions the collector
+for your estate, **and** it is the first time this code has seen real
+inventory.
 
 `docs/adr/0017-intersight-collector.md` records what is proven, what is
 assumed, and what only a live run can settle. Section 4 here settles the
@@ -133,7 +137,8 @@ GOOD — every collectable server resolved a profile name, and
 | `could not be parsed` | Truncated or mangled PEM | Re-copy including the BEGIN/END lines. |
 | `passphrase-protected` | Encrypted key | Supply an unencrypted PEM. |
 | `HTTP 401 ... clock is +N s` | Node clock drift | Fix NTP on the node, then retry. |
-| `HTTP 401` with no clock note | Expired, revoked, wrong id, or mismatched key | Intersight answers all four identically. Check in that order. |
+| `HTTP 401` with no clock note | Expired, revoked, wrong id, or mismatched key | Intersight answers all four identically. Check in that order. The message now quotes Intersight's own text and a `traceId` — that id is what Cisco TAC needs to find the request. |
+| `401` mentioning **account region** | Tenant may not be in the default region | Try the regional hostname in `INVENTORY_INTERSIGHT_IP`. Untested; report what works. |
 | `HTTP 403 ... Read-Only` | Key's role cannot read inventory | Grant read on `compute` and friends. |
 | `unreachable` | No route, DNS, or TLS failure | Air-gapped? You need a Private Virtual Appliance. |
 | `BAD — no server's name matches` | Wrong pattern, or names not where we look | **Stop.** See section 5. |

@@ -302,11 +302,12 @@ class IntersightClient:
                 raise IntersightForbiddenError(
                     f"Intersight rejected the API key's permissions reading {resource} "
                     "(HTTP 403). The key's role needs read access to server inventory — "
-                    "a Read-Only role is enough."
+                    "a Read-Only role is enough." + self._api_error(response)
                 )
             if response.status_code not in _RETRY_STATUSES:
                 raise IntersightProtocolError(
                     f"Intersight returned HTTP {response.status_code} for {resource}."
+                    + self._api_error(response)
                 )
             if attempt == self._max_retries:
                 break
@@ -322,6 +323,36 @@ class IntersightClient:
             f"Intersight returned HTTP {last_status} for {resource} after "
             f"{self._max_retries + 1} attempts."
         )
+
+    @staticmethod
+    def _api_error(response: httpx.Response) -> str:
+        """
+        Intersight's own description of a failure, if it sent one.
+
+        Confirmed against the live service on 2026-08-29: an error body is
+        a JSON object carrying `code`, `message`, `messageId` and
+        `traceId`. The `traceId` is the one thing that lets Cisco find
+        this exact request, so it is worth surfacing even though nothing
+        here can interpret it.
+
+        Args:
+            response (httpx.Response): The failed response.
+
+        Returns:
+            str: A parenthesised summary, or an empty string when the body
+                was not the documented shape.
+        """
+        try:
+            body = response.json()
+        except ValueError:
+            return ""
+        if not isinstance(body, dict):
+            return ""
+        message = str(body.get("message") or "").strip()
+        trace = str(body.get("traceId") or "").strip()
+        if not message:
+            return ""
+        return f' Intersight said: "{message}"' + (f" (traceId {trace})" if trace else "")
 
     def _auth_message(self, response: httpx.Response) -> str:
         """
@@ -346,6 +377,7 @@ class IntersightClient:
                 f"Intersight rejected the request signature (HTTP 401), and this host's "
                 f"clock is {skew:+.0f}s from Intersight's. A signature is only valid "
                 "briefly, so fix the clock (NTP on the node) before suspecting the key."
+                + self._api_error(response)
             )
         return (
             "Intersight rejected the request signature (HTTP 401). Intersight answers an "
@@ -353,7 +385,7 @@ class IntersightClient:
             "that id identically, so check in that order: that "
             "INVENTORY_INTERSIGHT_USERNAME is the API Key ID shown in Settings > API Keys, "
             "that INVENTORY_INTERSIGHT_PASSWORD is that same key's private PEM, and that "
-            "the key is still listed and unexpired."
+            "the key is still listed and unexpired." + self._api_error(response)
         )
 
     @staticmethod

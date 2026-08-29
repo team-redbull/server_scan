@@ -352,3 +352,44 @@ async def test_debug_tracing_logs_no_header_body_or_key() -> None:
     assert "BEGIN" not in rendered
     assert "Authorization" not in rendered
     assert "/api/v1/compute/PhysicalSummaries" in rendered
+
+
+# --- the API's own error document ------------------------------------
+#
+# Shape confirmed against the live intersight.com service on 2026-08-29:
+# {"code","message","messageId","traceId"}. The research notes had marked
+# this schema UNVERIFIED.
+
+
+@pytest.mark.asyncio
+async def test_an_error_surfaces_intersights_own_message_and_trace_id() -> None:
+    """The `traceId` is the only handle Cisco can use to find this exact
+    request, so discarding it costs an operator their support case.
+    """
+    body = {
+        "code": "UnauthorizedOperation",
+        "message": "Cannot process the request. The authorization header is invalid.",
+        "messageId": "iam_apikey_authheader_invalid",
+        "traceId": "gYSrkd4GlTKLsQjg6vDZ",
+    }
+    client = _client(lambda request: httpx.Response(401, json=body))
+    with pytest.raises(IntersightAuthError) as excinfo:
+        await client.health_check()
+    await client.aclose()
+
+    message = str(excinfo.value)
+    assert "authorization header is invalid" in message
+    assert "gYSrkd4GlTKLsQjg6vDZ" in message
+    # Our own guidance survives alongside it.
+    assert "INVENTORY_INTERSIGHT_USERNAME" in message
+
+
+@pytest.mark.asyncio
+async def test_an_error_without_a_body_still_produces_our_guidance() -> None:
+    """Not every failure carries a document, and a missing one must not
+    swallow the part of the message that says what to do.
+    """
+    client = _client(lambda request: httpx.Response(403, text="nope"))
+    with pytest.raises(IntersightForbiddenError, match="Read-Only"):
+        await client.health_check()
+    await client.aclose()

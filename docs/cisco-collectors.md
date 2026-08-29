@@ -860,3 +860,15 @@ equivalent.
   partition inventory between collectors, which is why the UCS Central
   overlap is resolved by `ManagementMode` instead.
 - `Results` is `null`, not `[]`, for an empty result set.
+- **An error body is a JSON object with `code`, `message`, `messageId`
+  and `traceId`.** *Provenance: a live probe against `intersight.com` on
+  2026-08-29 with an unregistered key, which returned `code:
+  "UnauthorizedOperation"`, `messageId: "iam_apikey_authheader_invalid"`.*
+  This is the one Intersight fact in this file confirmed against the
+  running service rather than the contract. The client surfaces
+  `message` and `traceId` in its own error text; `traceId` is what Cisco
+  needs to find a specific request.
+- **Region may matter.** Intersight's 401 text asks the operator to
+  "verify the API key and associated account region". Nothing here models
+  a region; a tenant in a non-default region would presumably need a
+  regional hostname in `INVENTORY_INTERSIGHT_IP`. *Untested.*

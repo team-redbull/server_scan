@@ -1,8 +1,9 @@
 # ADR-0017: Cisco Intersight collector
 
-**Status:** Accepted, and implemented — but **never run against a live
-Intersight**. Read "Validation: what this has and has not been tested
-against" before trusting any field it produces.
+**Status:** Accepted and implemented. The transport and auth path have
+been exercised against the **real `intersight.com` service**; no field
+mapping has ever seen real data. Read "Validation: what this has and has
+not been tested against" before trusting any field it produces.
 
 **Date:** 2026-08-29
 
@@ -381,6 +382,13 @@ reachable today can play that role for Intersight (see below).
 7. `ether.PhysicalPort.oper_speed` string format.
 8. Whether the Private Virtual Appliance serves an identical MO surface
    to SaaS (see below).
+9. **Account region.** Intersight's own 401 message asks the operator to
+   "verify the API key and associated account region", which implies a
+   tenant can live in a region other than the one `intersight.com`
+   resolves to. Nothing in this collector models a region. If a tenant
+   turns out to need a regional hostname, it goes in
+   `INVENTORY_INTERSIGHT_IP` and needs no code change — but that it
+   *works* is unverified.
 
 ---
 
@@ -414,14 +422,49 @@ settles the open items in minutes rather than over a debugging session.
 
 ## Validation: what this has and has not been tested against
 
-**No live Intersight API call has ever been made against this code.**
-Not one. The DevNet Intersight sandbox — the closest equivalent to the
-UCS Platform Emulator that found five real defects in ADR-0009 — went
-offline on 2026-08-01 for a rebuild with no committed return date before
-~Q1 2027, and Cisco's API reference publishes response *schemas* without
-example *values*. Schema-shaped fixtures cannot catch the class of bug
-UCSPE caught: a field that is empty in practice, a unit that is not what
-the name implies, a parent relationship that is null on real hardware.
+**No server inventory has ever been mapped from real data.** The DevNet
+Intersight sandbox — the closest equivalent to the UCS Platform Emulator
+that found five real defects in ADR-0009 — went offline on 2026-08-01 for
+a rebuild with no committed return date before ~Q1 2027, and Cisco's API
+reference publishes response *schemas* without example *values*.
+Schema-shaped fixtures cannot catch the class of bug UCSPE caught: a
+field that is empty in practice, a unit that is not what the name
+implies, a parent relationship that is null on real hardware.
+
+### What a live probe against `intersight.com` did prove (2026-08-29)
+
+The collector was pointed at the real service with a locally-generated
+RSA key and a syntactically valid but unregistered API Key ID. That is
+the one live test available without a tenant, and it settled more than
+expected:
+
+- **The request reaches Intersight's IAM and is processed**, not rejected
+  at the edge. The response is `HTTP 401` with
+  `code: "UnauthorizedOperation"`,
+  `messageId: "iam_apikey_authheader_invalid"` — a key-lookup failure, in
+  the shape the collector's 401 handling expects. TLS, the request line,
+  the query encoding and the `Authorization` header shape all survive
+  the round trip.
+- **The error body schema is now verified**, where the research had it
+  marked UNVERIFIED: a JSON object with `code`, `message`, `messageId`
+  and `traceId`. The client was changed as a result — it now surfaces
+  Intersight's own `message` and the `traceId` alongside our guidance,
+  because the `traceId` is the only handle Cisco can use to find that
+  exact request and discarding it costs an operator their support case.
+- **The clock-skew check works against the real service.** Measured skew
+  was 0.9s against Intersight's own `Date` header, so the message
+  correctly omitted the clock note rather than firing spuriously.
+- **A hint worth keeping:** Intersight's own message says "Verify the API
+  key and associated **account region**." Region is not currently modelled
+  anywhere in this collector. For SaaS tenants outside the default region
+  the endpoint may need to be a regional hostname rather than
+  `intersight.com` — untested, and listed under UNVERIFIED below.
+
+What this does **not** prove: that any signature is *accepted*. A
+registered key is required for that, and the distinction between "header
+malformed" and "key unknown" cannot be drawn from an unregistered key's
+401. The offline byte-identical comparison against Cisco's own SDK
+(below) is what carries that weight.
 
 What *has* been proved offline:
 
