@@ -204,11 +204,57 @@ vendor manager. MongoDB is the only thing connecting them. See
 validation sections record what a live UCS Platform Emulator proved,
 disproved and could not settle.
 
-**Two collectors exist: `UCS_CENTRAL` (the whole Cisco managed fleet)
-and `REDFISH_STANDALONE` (every machine no aggregator owns).**
-`OPENMANAGE`, `INTERSIGHT` and `ONEVIEW` have configuration slots but no
-implementation — `tools/run_collector.py`'s `_PROVIDER_FACTORIES` raises
-a clear `NotImplementedError` for them, not a silent no-op.
+**Three collectors exist: `UCS_CENTRAL` (the UCS-managed Cisco fleet),
+`INTERSIGHT` (Cisco servers no UCS domain owns) and `REDFISH_STANDALONE`
+(every machine no aggregator owns).** `OPENMANAGE` and `ONEVIEW` have
+configuration slots but no implementation — `tools/run_collector.py`'s
+`_PROVIDER_FACTORIES` raises a clear `NotImplementedError` for them, not
+a silent no-op.
+
+**`INTERSIGHT` is the first collector that actually reaches the 10,000
+target**, and the first with three properties nothing else here has —
+read `docs/adr/0017-intersight-collector.md` before touching it:
+
+1. **It is not a login.** Intersight has no username/password path for
+   its REST API at all; every request is signed (HTTP Signature
+   `hs2019`). `INVENTORY_INTERSIGHT_USERNAME` is the API Key ID and
+   `_PASSWORD` is that key's PEM private half. The PEM rides in the
+   environment variable — the signing library takes the key as a string,
+   so there is **no key file to mount** and ADR-0012's rule holds.
+   Signing is hand-rolled on `httpx` + `cryptography` rather than using
+   the official SDK, which is a 57.6 MB wheel of 10,112 generated model
+   modules for the eight we would touch. The RSA construction was
+   verified byte-identical against that SDK.
+2. **Its cost is flat in fleet size.** Every child managed object carries
+   an inverse reference to its owner, so each sub-resource is listed once
+   for the whole estate and joined in memory — ~120 requests for 10,000
+   servers. The trade is memory: the join tables are held for the length
+   of the run and scale with the fleet, which no other collector's do.
+   `$select` on every query is what keeps that affordable, not a
+   micro-optimisation.
+3. **It deliberately does not collect `ManagementMode == UCSM`.** Those
+   are exactly the servers `UCS_CENTRAL` already owns, and since
+   `IngestService` correlates on `(vendor, serial_normalized)`,
+   collecting both would make one document's `source_provider` and every
+   mapped field flip on whichever CronJob ran last.
+   `INVENTORY_INTERSIGHT_MANAGEMENT_MODES` overrides it, for an estate
+   whose UCS domains are not registered with Central at all.
+
+**It has never been run against a live Intersight.** The DevNet sandbox
+went offline 2026-08-01 with no committed return before ~Q1 2027, and
+there is no downloadable emulator equivalent to UCSPE, so everything was
+built against the OpenAPI contract as rendered by the installed SDK's
+generated models. `TotalMemory` carries **no documented unit anywhere**
+and is assumed MiB; if that is wrong every server's memory is 4.86% high,
+silently. `uv run python -m tools.verify_intersight` settles it in one
+query by summing a real server's DIMMs — run it before scheduling
+anything, and record the result in ADR-0017.
+
+An air-gapped site reaches Intersight **only** through an on-prem Private
+Virtual Appliance; `intersight.com` is public internet and a *Connected*
+Virtual Appliance still calls home. The user has confirmed a PVA exists
+or is planned, which is the premise this collector's deployability rests
+on.
 
 **`REDFISH_STANDALONE` breaks three assumptions the rest of this file
 states, deliberately and with an ADR each time — read
@@ -292,7 +338,9 @@ ADR-0014 with the result. At runtime the provider also logs
 
 **Shared Cisco logic lives in `app.infrastructure.providers.ucs_common`**
 (`is_equipped`, `group_by_owning_server_dn`, `bmc_interface`,
-`partition_profiles`), and `ucs_manager.mapping` serves both providers.
+`partition_profiles`, plus `normalize_oper_state`/`normalize_admin_state`
+— the interface-state vocabulary Intersight shares with both UCS SDKs),
+and `ucs_manager.mapping` serves both UCS providers.
 `ucscsdk` and `ucsmsdk` describe the same object model with the same
 attribute names — only the DN root differs — so duplicating any of it
 means the next emulator-found fix lands in one copy only. Everything
@@ -307,8 +355,8 @@ there works on relative DN structure, never an absolute root.
    MongoDB's `last_seen_at` (written on every ingest, currently read by
    nothing). Until that lands, staleness is the manual query in
    `docs/test-redfish-standalone-collector.md` §6.
-1. **Dell OpenManage / Cisco Intersight / HPE OneView collectors.** Not
-   started. Before picking one: research each vendor's *current* API
+1. **Dell OpenManage / HPE OneView collectors.** Not started. (Cisco
+   Intersight is done — see above.) Before picking one: research each vendor's *current* API
    docs directly (don't trust this file's or any older research's
    specifics without reconfirming) — UCS Manager's build researched
    Cisco's official XML API guide and cross-checked every attribute name
@@ -500,11 +548,17 @@ in the order the user has been steering toward:
    of a boot policy, vNICs and a UUID pool), and the original scope cuts
    — CPU model string, per-drive storage detail, fabric interconnect
    identity. Real hardware settles those.
-2. Build the next vendor collector. Ask the user which one before
-   assuming — their last stated preference was "easiest to actually
-   test," which favored UCS's real emulator; re-evaluate that tradeoff
-   fresh for whichever vendor comes next rather than assuming the same
-   research still holds.
-3. Once collectors are further along (or if the user redirects), the
+2. ~~Build the Cisco Intersight collector~~ — **done** (ADR-0017), but
+   **unvalidated against live hardware**, which is a different state from
+   every collector before it. The highest-value next action on it is not
+   more code: it is running `tools/verify_intersight.py` against the real
+   appliance and recording what it settles.
+3. Build the next vendor collector — Dell OpenManage or HPE OneView. Ask
+   the user which one before assuming. Their earlier preference was
+   "easiest to actually test," which favored UCS's real emulator;
+   Intersight was then built with *no* test target at all, so that
+   criterion is no longer the only one in play. Re-evaluate the tradeoff
+   fresh rather than assuming the same research still holds.
+4. Once collectors are further along (or if the user redirects), the
    deployment/CD and auth gaps above are the rest of what "production
    and really run" means for this platform.

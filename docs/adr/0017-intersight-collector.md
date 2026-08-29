@@ -1,8 +1,8 @@
 # ADR-0017: Cisco Intersight collector
 
-**Status:** Proposed — **blocked on two deployment questions for the user**
-(see "Blocking questions" below; they change the recommendation, not just
-the detail).
+**Status:** Accepted, and implemented — but **never run against a live
+Intersight**. Read "Validation: what this has and has not been tested
+against" before trusting any field it produces.
 
 **Date:** 2026-08-29
 
@@ -46,7 +46,7 @@ public internet, which an air-gapped site by definition cannot reach.
 
 ## Decision 1 — Thin `httpx` client, not the official SDK
 
-**Recommendation: write a small signing client on the `httpx` already in
+**Decision: write a small signing client on the `httpx` already in
 `pyproject.toml`, and add exactly one new dependency (`cryptography`) for
 the signature.**
 
@@ -97,17 +97,20 @@ to Intersight's accepted signature scheme. Mitigated by the unit tests
 above and by the fact that `hs2019` is a published draft standard, not a
 Cisco-private construction.
 
-> **This needs the user's mirror to be checked.** Neither `cryptography`
-> nor `pycryptodome` is in the current dependency tree, so *either*
-> option adds a crypto dependency to the air-gapped mirror. If the mirror
-> carries `pycryptodome` but not `cryptography`, that flips which library
-> the thin client uses — not the decision itself.
+**Outcome:** `cryptography==46.0.3` added, and `requirements.txt` /
+`pylock.toml` regenerated for the air-gapped mirror. Neither
+`cryptography` nor `pycryptodome` was previously in the tree, so *either*
+option added a crypto dependency; this one adds the smaller of the two
+and no generated model layer. **If the deployment's mirror carries
+`pycryptodome` but not `cryptography`, swapping the library is a
+contained change to `signing.py` alone** — the decision does not
+change.
 
 ---
 
 ## Decision 2 — The API secret is a PEM in an env var, and the field names stay
 
-**Recommendation: keep `INVENTORY_INTERSIGHT_USERNAME`/`_PASSWORD`
+**Decision: keep `INVENTORY_INTERSIGHT_USERNAME`/`_PASSWORD`
 carrying (API Key ID, PEM private key). No mounted volume. Fix the
 wording everywhere it is described as a password.**
 
@@ -155,9 +158,10 @@ entirely. Nothing in this collector may ever wire a flag to that.
 
 ## Decision 3 — Overlap with UCS Central is resolved by `ManagementMode`
 
-**This is the highest-risk decision in the task. Recommendation: collect
-only `ManagementMode in ('Intersight', 'IntersightStandalone')` by
-default; make it operator-overridable; never collect `UCSM` by
+**This is the highest-risk decision here. Decision: collect only
+`ManagementMode in ('Intersight', 'IntersightStandalone')` by default,
+operator-overridable through
+`INVENTORY_INTERSIGHT_MANAGEMENT_MODES`; never collect `UCSM` by
 default.**
 
 `IngestService` correlates on `(vendor, serial_normalized)`. A Cisco
@@ -380,10 +384,102 @@ reachable today can play that role for Intersight (see below).
 
 ---
 
-## Blocking questions for the user
+## The three questions that gated this, and their answers
 
-Two of the prompt's own stop-and-ask conditions fired. Both change the
-recommendation rather than the detail, so this ADR stays **Proposed**.
+All three were put to the user before any code was written, because each
+one could have made the collector not worth building. Their answers are
+recorded here as the premises the design rests on — if any of them stops
+being true, this ADR needs revisiting rather than the code needing a
+patch.
+
+**1. Air-gap → there is, or will be, a Private Virtual Appliance.**
+So `INVENTORY_INTERSIGHT_IP` points at an on-prem appliance FQDN, not at
+`intersight.com`, and the collector is deployable in the target site.
+`INVENTORY_INTERSIGHT_CA_BUNDLE` exists for exactly this: an appliance
+with an internal CA. Note the standing dependency this creates — the
+appliance is a licensed commercial SKU that this platform does not
+control, which no other collector here requires.
+
+**2. What it manages → IMM and standalone-claimed servers.**
+Which is precisely the set UCS Central cannot see, so Decision 3's
+default (`Intersight,IntersightStandalone`) collects real inventory
+rather than nothing, and the two Cisco collectors partition the fleet.
+
+**3. Validation → build it, and document what is unproven.**
+Hence the "Validation" section below, and
+`tools/verify_intersight.py`, which exists so the first real tenant
+settles the open items in minutes rather than over a debugging session.
+
+---
+
+## Validation: what this has and has not been tested against
+
+**No live Intersight API call has ever been made against this code.**
+Not one. The DevNet Intersight sandbox — the closest equivalent to the
+UCS Platform Emulator that found five real defects in ADR-0009 — went
+offline on 2026-08-01 for a rebuild with no committed return date before
+~Q1 2027, and Cisco's API reference publishes response *schemas* without
+example *values*. Schema-shaped fixtures cannot catch the class of bug
+UCSPE caught: a field that is empty in practice, a unit that is not what
+the name implies, a parent relationship that is null on real hardware.
+
+What *has* been proved offline:
+
+- **The signature is byte-identical to Cisco's own SDK.** The `hs2019`
+  construction was run side by side against `intersight==1.0.11`'s
+  `signing.py` with a fixed key and a frozen clock: for an RSA (v2) key
+  the `Authorization` header matches character for character. For an EC
+  (v3) key it necessarily differs — the SDK derives its nonce per
+  RFC 6979 and `cryptography` draws one randomly — so that half was
+  proved instead by verifying the signature against its own public key.
+  Both properties are locked into
+  `tests/unit/infrastructure/providers/test_intersight_signing.py`.
+- **Every attribute name, type and relationship** used by the mapping was
+  read out of the installed SDK's generated models, which are the OpenAPI
+  contract rendered as Python — not from prose documentation, and not
+  from recall.
+- **The join topology** — that each sub-resource can reach its owning
+  server — was verified field by field in those models, and is what
+  Decision "The request plan" rests on.
+
+What remains unproven is listed under UNVERIFIED below. The first item
+is a live-data risk, not a theoretical one.
+
+---
+
+## Corrections made during implementation
+
+Two claims in this ADR's own first draft turned out to be wrong when
+checked against the SDK models. Recorded rather than quietly fixed,
+because both were the kind of plausible assumption that ships a defect.
+
+1. **`server.Profile` has no `Dn` field at all.** The draft planned to
+   read `profile.Dn` for `profile_dn`, and `_PROFILE_FIELDS` selected it.
+   Selecting a field the schema does not define risks failing the whole
+   `server/Profiles` query — which would have cost *every server its
+   name*, silently, exactly the failure mode ADR-0009 hit with a
+   nonexistent MO class. `profile_dn` now comes only from a UCSM-mode
+   summary's `ServiceProfile`, and is `None` for an IMM server.
+   **Consequence worth stating: an Intersight server whose name carries
+   no site token has no org path to fall back to, so it resolves to no
+   site.** UCS Central's servers do; these do not.
+2. **The `^ocp` name filter cannot be pushed server-side.** The draft
+   said `startswith(Name,'ocp')` would be used as a bandwidth
+   optimisation. It cannot be: `compute.PhysicalSummary.Name` is *not*
+   the operator's hostname (see "The name trap"), so filtering on it
+   server-side would discard the whole fleet. The only filter pushed to
+   the API is `ManagementMode`, which is a genuine field on the summary.
+   `_NameFilteredProvider` remains the sole name filter, client-side.
+
+A third detail, not a correction but a hedge: `server.Profile` carries
+**both** `AssignedServer` and `AssociatedServer`, and nothing documents
+their precedence. The join consults `AssociatedServer` first — the
+machine actually running the configuration — and falls back to
+`AssignedServer`.
+
+---
+
+## Superseded: the questions as they were asked
 
 **1. Air-gap: is there a Private Virtual Appliance?**
 An air-gapped site can reach Intersight **only** via the on-prem Private
@@ -418,5 +514,34 @@ Intersight is claiming the *same* UCS domains that UCS Central already
 collects, then under Decision 3 this collector correctly collects
 **nothing** — every one of those servers is `ManagementMode == 'UCSM'`.
 It earns its place only if there are Intersight-managed (IMM) or
-standalone-claimed servers that UCS Central cannot see. Worth confirming
-before building rather than discovering on the first dry run.
+standalone-claimed servers that UCS Central cannot see.
+
+All three were answered before implementation; see "The three questions
+that gated this" above.
+
+---
+
+## What was built
+
+| | |
+|---|---|
+| `..providers.intersight.signing` | `hs2019` request signing, pure and clock-injectable |
+| `..providers.intersight.client` | Paged OData over `httpx`, 429 backoff, actionable errors |
+| `..providers.intersight.mapping` | Managed objects -> `ProviderServer`, pure |
+| `..providers.intersight.provider` | The fleet-wide join and the streamed run |
+| `tools/verify_intersight.py` | Read-only pre-flight; GOOD / PARTIAL / BAD |
+| `deploy/.../intersight-collector-cronjob.yaml` | One CronJob, hourly, values-only config |
+
+`INTERSIGHT` is registered in `_PROVIDER_FACTORIES` and is in **neither**
+`_ENDPOINTLESS_TYPES` nor `_UNFILTERED_TYPES`.
+
+Two pieces of shared behaviour moved rather than being duplicated: the
+Cisco interface-state vocabulary (`operable`/`link-up`/... ->
+`UP`/`DOWN`/`DISABLED`) now lives in `..providers.ucs_common` and is used
+by both Cisco collectors, so a value a live fleet turns up is mapped once
+rather than in one collector only.
+
+The fake generator models all three collectors, splitting Cisco blades
+(UCS Central) from Cisco rack units (Intersight) the way the real
+`ManagementMode` partition does, and reproducing each collector's
+different GPU ceiling.

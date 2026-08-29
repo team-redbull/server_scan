@@ -42,19 +42,22 @@ See `docs/architecture.md` for the full per-slice writeup and
 
 This is the one idea worth understanding before anything else: **there is
 no single "sync" process.** Each hardware vendor's manager (Cisco UCS
-Manager, and eventually Dell OpenManage Enterprise, Cisco Intersight, HPE
-OneView) gets its own small collector program, and each collector runs as
+Central, Cisco Intersight, and eventually Dell OpenManage Enterprise and
+HPE OneView) gets its own small collector program, and each collector runs as
 its own **Kubernetes `CronJob`** — one CronJob per manager *type*, not per
 physical manager. On a schedule, a CronJob's pod:
 
 1. Reads that vendor's endpoint and login from configuration — one set
    per manager type (`INVENTORY_UCS_CENTRAL_IP` / `_USERNAME` /
-   `_PASSWORD`, and the same shape for OneView, OME and Intersight). No
+   `_PASSWORD`, and the same shape for Intersight, OneView and OME). No
    `Manager` document to create, no secret volume to mount; in Kubernetes
-   these arrive from a `Secret` via `envFrom`. (The Cisco collector needs
-   one thing more, and one thing less: `INVENTORY_UCS_MANAGER_USERNAME` /
+   these arrive from a `Secret` via `envFrom`. (The UCS Central collector
+   needs one thing more, and one thing less: `INVENTORY_UCS_MANAGER_USERNAME` /
    `_PASSWORD` to log into each domain, and no UCS Manager endpoint,
-   because Central reports every domain's address itself.)
+   because Central reports every domain's address itself. Intersight's two
+   credential variables are not a login at all: it signs every request
+   with an API key, so `_USERNAME` is the API Key ID and `_PASSWORD` is
+   that key's PEM private half.)
 2. Talks to that vendor's real API and normalizes what it reports into
    the platform's vendor-neutral `ProviderServer` shape
    (`app.domain.ports.provider`).
@@ -116,8 +119,25 @@ manager-collector.md` is the detailed writeup of how the first provider
 was built and validated, and `docs/adr/0014-ucs-central-multi-domain-
 collector.md` of how the Cisco collector drives it once per domain.
 
-Right now one collector exists, `UCS_CENTRAL`, and it covers the whole
-Cisco fleet. It asks UCS Central which domains are registered and what
+Three collectors exist today: `UCS_CENTRAL`, `INTERSIGHT` and
+`REDFISH_STANDALONE`.
+
+**`INTERSIGHT` is the only one that reaches this platform's 10,000-server
+target without qualification.** Every child object in Intersight's model
+carries a reference back to its owner, so each sub-resource is listed
+once for the whole estate and joined in memory — one run costs on the
+order of a hundred requests whether the tenant holds fifty servers or ten
+thousand, against the Redfish collector's ~25 *per BMC*. It excludes
+servers reporting `ManagementMode == UCSM` by default, because those are
+exactly the ones `UCS_CENTRAL` already collects; the two partition the
+Cisco fleet rather than fighting over it. **It has never been run against
+a live Intersight** — the DevNet sandbox is offline until ~2027 — so read
+`docs/adr/0017-intersight-collector.md` and follow
+`docs/test-intersight-collector.md` before trusting it in production.
+An air-gapped site needs an on-prem Private Virtual Appliance; it cannot
+reach `intersight.com`.
+
+`UCS_CENTRAL` covers the UCS-managed Cisco fleet. It asks UCS Central which domains are registered and what
 their addresses are, then reads each domain's inventory live from that
 domain's own UCS Manager — the data path validated end to end against a
 live Cisco UCS Platform Emulator (see `docs/adr/0009`'s validation
@@ -126,7 +146,7 @@ names; the servers themselves come from the domains. `docs/adr/0014`
 covers the design, its costs, and what is still unproven — including that
 a domain not registered with Central cannot be collected at all.
 
-The other manager types have configuration slots but no provider —
+`OPENMANAGE` and `ONEVIEW` have configuration slots but no provider —
 `tools/run_collector.py` raises a clear `NotImplementedError` for them
 rather than silently doing nothing.
 
@@ -164,6 +184,27 @@ ingestion pipeline reshapes it, including which site each name resolves
 to — so a naming problem is visible without a write. `--debug-xml` turns
 on `ucsmsdk`'s own request/response dump (passwords are masked by the
 SDK); it is very verbose, so pair it with `--limit`.
+
+Intersight takes an API key rather than a login, and has its own
+read-only pre-flight:
+
+```bash
+export INVENTORY_INTERSIGHT_IP=intersight.com          # or an appliance FQDN
+export INVENTORY_INTERSIGHT_USERNAME='<API Key ID>'    # NOT a username
+export INVENTORY_INTERSIGHT_PASSWORD="$(cat ~/intersight-key.pem)"
+
+# Signs one GET, reports what the tenant holds, and checks TotalMemory
+# against the sum of a real server's DIMMs. Writes nothing:
+uv run python -m tools.verify_intersight
+
+uv run python -m tools.run_collector --manager-type INTERSIGHT --dry-run
+uv run python -m tools.run_collector --manager-type INTERSIGHT
+```
+
+Run the verifier first. This collector has never been run against a live
+Intersight, and it settles the one assumption that would otherwise
+silently mis-report every server's memory —
+`docs/test-intersight-collector.md` is the full runbook.
 
 ## Local development
 
@@ -210,12 +251,17 @@ uv run python -m tools.seed_inventory --count 1000 --seed 42
 `--count` defaults to 1000 and `--seed` to 42; the same pair always
 produces the same fleet, field for field.
 
-What you get mirrors the two collectors that exist: Cisco servers arrive
-as `source_provider=UCS_CENTRAL` with Central-rooted DNs, service-profile
-org paths and fabric attachments, and everything else — Dell, HPE, and
-`standalone` whiteboxes — arrives as `REDFISH_STANDALONE` with
-`redfish://` addresses and GPUs. Both filters in the UI therefore have
-real data behind them. Names span the estate's real shapes, including a
+What you get mirrors the three collectors that exist. Cisco blades
+arrive as `source_provider=UCS_CENTRAL` with Central-rooted DNs,
+service-profile org paths and fabric attachments; Cisco rack units arrive
+as `INTERSIGHT` with `intersight/<moid>` ids, no org path, and GPUs whose
+identity is real but whose telemetry is `None` — the same ceiling the
+real API has; and everything else — Dell, HPE, and `standalone`
+whiteboxes — arrives as `REDFISH_STANDALONE` with `redfish://` addresses
+and fully-populated GPUs. All three filters in the UI therefore have real
+data behind them, and each collector's *absences* are reproduced too,
+because a fixture richer than the real thing hides the gaps worth
+seeing. Names span the estate's real shapes, including a
 deliberate minority carrying no site token, so "Unassigned" is reachable.
 
 **Re-seeding needs an empty database.** Servers correlate on

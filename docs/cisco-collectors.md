@@ -2,11 +2,12 @@
 
 This is the technical reference behind
 `app.infrastructure.providers.ucs_common`,
-`app.infrastructure.providers.ucs_manager` and
-`app.infrastructure.providers.ucs_central`. Every docstring in those
+`app.infrastructure.providers.ucs_manager`,
+`app.infrastructure.providers.ucs_central` and
+`app.infrastructure.providers.intersight`. Every docstring in those
 modules points here rather than carrying its own explanation, so the
-seven `##` headings below are load-bearing: renaming one breaks the
-cross-references in six source files.
+`##` headings below are load-bearing: renaming one breaks the
+cross-references in several source files.
 
 It is for whoever is about to change a Cisco collector. Almost nothing
 here is inferrable from the code — most of it was established by reading
@@ -17,7 +18,7 @@ without a source becomes folklore nobody dares change.
 **Relationship to the ADRs.** `docs/adr/0009-ucs-manager-collector.md` is
 the UCS Manager collector's decision record and holds its UCSPE
 validation; `docs/adr/0014-ucs-central-multi-domain-collector.md` is the
-UCS Central one. Those are dated decisions and are not maintained — they
+UCS Central one; `docs/adr/0017-intersight-collector.md` is Intersight's. Those are dated decisions and are not maintained — they
 record what was decided and why, at a moment. **This document describes
 current behaviour and must be updated when the code changes.** Where a
 fact is already recorded in an ADR it is cited here in one line rather
@@ -712,3 +713,150 @@ when Central reports profiles whose `domain` matches no registered
 `computeSystem` — inventory we were told about but cannot reach, and the
 one case the per-domain loop cannot surface since it iterates registered
 domains.
+
+
+## Intersight managed objects
+
+**Provenance for this whole section: the generated models in the
+installed `intersight==1.0.11.2026072720` wheel**, which are the OpenAPI
+contract rendered as Python. Nothing here has been confirmed against a
+live tenant — see ADR-0017's "Validation" section, which states plainly
+that no live Intersight call has ever been made. Facts below are
+therefore *contract-verified*, not *fleet-verified*, and that is a weaker
+claim than anything in the sections above. Anything a real run settles
+should be moved here with its own provenance line.
+
+### The server anchor
+
+`compute.PhysicalSummary` is the consolidated blade-and-rack view and is
+the only anchor query. It carries `Moid`, `Dn`, `Name`, `UserLabel`,
+`Model`, `Serial`, `Uuid`, `Vendor`, `TotalMemory`, `NumCpus`,
+`NumCpuCores`, `NumThreads`, `MgmtIpAddress`, `ManagementMode`,
+`ServiceProfile`, `AlarmSummary`, `ChassisId` and `Presence`.
+
+It carries **no** typed relationship lists — `compute.Blade` and
+`compute.RackUnit` have `adapters`, `storage_controllers`, `bmc` and so
+on, and the summary has none of them. That does *not* mean per-server
+queries are needed: every child object carries an **inverse** reference
+back up, which is what the fleet-wide join uses.
+
+`ManagementMode` is one of `IntersightStandalone`, `UCSM` or `Intersight`
+(`compute_physical_summary.py:471`), and the schema's declared default is
+`IntersightStandalone`.
+
+### The join topology
+
+Each sub-resource is listed once for the whole estate and attached
+client-side. Two of the joins are two-hop, because the object does not
+reference the server directly:
+
+| Object | Reaches its server via |
+|---|---|
+| `server.Profile` | `AssociatedServer`, else `AssignedServer` |
+| `adapter.Unit` | `ComputeBlade` / `ComputeRackUnit` |
+| `adapter.ExtEthInterface` | `AdapterUnit` -> `adapter.Unit` |
+| `adapter.HostEthInterface` | `AdapterUnit` -> `adapter.Unit` |
+| `storage.Controller` | `ComputeBlade` / `ComputeRackUnit` |
+| `storage.PhysicalDisk` | `StorageController` -> `storage.Controller` |
+| `graphics.Card` | `ComputeBlade` / `ComputeRackUnit` |
+| `management.Controller` | `ComputeBlade` / `ComputeRackUnit` |
+| `management.Interface` | `ManagementController` -> `management.Controller` |
+
+Exactly one of `ComputeBlade`/`ComputeRackUnit` is set on any given
+object, depending on whether the server is a blade or a rack unit.
+
+### The server's name
+
+The same trap UCS Manager has, and the contract is explicit about it.
+`compute.PhysicalSummary.Name` is **never** an operator hostname: it is
+the fabric-interconnect cluster name plus a chassis/slot when
+UCSM-attached, the CIMC's own name in standalone mode, and model plus
+chassis/server id under Intersight management. The real name is
+`server.Profile.Name`, reached through the *inverse* relationship.
+
+**`server.Profile` has no `Dn` field at all** (verified: absent from its
+`attribute_map`). This matters twice — selecting one would risk failing
+the whole profiles query, and it means an Intersight server has **no org
+path to fall back to** when its name carries no site token. UCS Central's
+servers do; these do not, and they resolve to no site. The only DN
+available is `ServiceProfile` on the summary, which the contract says is
+populated *only* in UCSM mode.
+
+`server.Profile` carries both `AssignedServer` and `AssociatedServer`,
+both typed `ComputePhysicalRelationship`, with no documented precedence.
+The collector prefers `AssociatedServer` — the machine actually running
+the configuration — and falls back to `AssignedServer`.
+
+### PHYSICAL versus VNIC
+
+Settled by the SDK's own docstrings, and it is the inverse-looking pair
+of names that makes this worth writing down:
+
+- **`adapter.ExtEthInterface`** is the *physical* cabled uplink. It has
+  `SwitchId`, `ExtEthInterfaceId`, `PeerDn`, `PeerPortId`, `MacAddress`.
+- **`adapter.HostEthInterface`** is the *vNIC* — its own docstring uses
+  the word "vNIC". It has `Name`, `HostEthInterfaceId`, `VnicDn`,
+  `MacAddress`, and **no `SwitchId`**.
+
+`vnic.EthIf` is a **design-time policy object** (LAN Connectivity Policy
+configuration), not live state. Do not use it for attachments.
+
+Neither interface class carries a numeric speed. Only the switch-side
+`ether.PhysicalPort`/`ether.HostPort` have `OperSpeed`/`AdminSpeed`, as
+free-form strings of unverified format, so `speed_mbps` is `None`.
+
+### Units — the one that can silently corrupt data
+
+- **`TotalMemory` has NO documented unit**, on `compute.PhysicalSummary`,
+  `compute.Blade` or `compute.RackUnit` — all three carry the identical
+  unit-less docstring "The total memory available on the server.". Its
+  sibling `AvailableMemory` *is* documented "in MB", and per-DIMM
+  `memory.Unit.Capacity` is documented "in MiB". The collector assumes
+  MiB, matching `ucs_manager.mapping`'s assumption for the same hardware.
+  **If that is wrong, memory is over-reported by 4.86% on every server,
+  silently.** `tools/verify_intersight.py` section 4 settles it against a
+  real server's DIMM sum in one query. **Unresolved as of 2026-08-29.**
+- **`storage.PhysicalDisk.Size` and `.RawSize` are documented "in MB"**,
+  and are **strings**, needing parsing.
+- **`storage.PhysicalDisk.NonCoercedSizeBytes` is documented in bytes**
+  and is an int. The collector prefers it precisely because it names its
+  own unit, and falls back to `Size` only when it is absent.
+
+### GPUs — a capability ceiling, not a gap
+
+`graphics.Card` carries `Model`, `Pid`, `Vendor`, `Serial`, `PciAddress`,
+`GpuId`, `OperState`, `FirmwareVersion`. It carries **no memory,
+temperature, power draw, or ECC field**, and neither does `pci.Device`
+or `graphics.Controller` — grepped across every model in the wheel. The
+collector therefore reports GPU identity with every telemetry field
+`None`. Reporting zeros would read as a healthy idle GPU.
+
+The Redfish collector gets this data because it reads `ProcessorMetrics`
+and `EnvironmentMetrics` off the BMC directly. Intersight exposes no
+equivalent.
+
+### Transport
+
+- Auth is HTTP Signature `hs2019`. The signed header set is
+  `(request-target)`, `Host`, `Date`, `Digest` — **not** `(created)`,
+  which is what the draft standard and the SDK default to and which
+  Intersight rejects. Taken from Cisco's own canonical example, embedded
+  in the wheel's `METADATA`.
+- The signing algorithm is chosen by key type, not configured: RSA keys
+  (API key v2) sign `RSASSA-PKCS1-v1_5`; EC keys (v3) sign ECDSA.
+  **Relying on a library default signs RSA-PSS**, which Intersight
+  rejects for a v2 key.
+- `$top` maxes at 1000 and `$top`/`$skip` is the only paging mechanism —
+  there is no continuation token. Nothing documents the result set as
+  stable across pages, so the collector orders every query by `Moid`.
+  That is our own prudence, not a documented requirement.
+- **Cisco publishes no rate limit anywhere reachable**, and the official
+  SDK has no retry or backoff for HTTP status codes at all
+  (`rest.py` raises on any non-2xx; `Configuration.retries` falls through
+  to urllib3's connection-level `Retry(3)`, which does not cover 429).
+  The collector implements its own 429 handling, honouring `Retry-After`.
+- **No inventory MO has an `Organization` field** — only policy and
+  profile MOs do. Organization scoping therefore cannot be used to
+  partition inventory between collectors, which is why the UCS Central
+  overlap is resolved by `ManagementMode` instead.
+- `Results` is `null`, not `[]`, for an empty result set.
