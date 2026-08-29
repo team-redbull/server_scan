@@ -1,5 +1,7 @@
-"""Logic shared by the two Cisco SDKs — `ucsmsdk` (UCS Manager, one domain)
-and `ucscsdk` (UCS Central, every registered domain).
+"""Logic shared by the Cisco collectors — `ucsmsdk` (UCS Manager, one
+domain), `ucscsdk` (UCS Central, every registered domain) and the
+Intersight REST API, which describes the same hardware with the same
+state vocabulary.
 
 See docs/cisco-collectors.md, "Shared object model and DN joins".
 """
@@ -15,6 +17,53 @@ _NON_PRIMARY_PRESENCE = frozenset({"equipped-slave", "equipped-not-primary"})
 TEMPLATE_TYPES = frozenset({"initial-template", "updating-template"})
 
 _NON_BMC_ACCESS = frozenset({"in-band", "internal", "virtual"})
+
+# Cisco reports interface state with one vocabulary across UCS Manager,
+# UCS Central and Intersight, so the translation to the platform's own
+# lives here rather than in any one provider. Duplicating it would mean
+# the next value a live fleet turns up gets mapped in one collector and
+# left as UNKNOWN in the other.
+_OPER_STATE_MAP = {
+    "operable": "UP",
+    "up": "UP",
+    "link-up": "UP",
+    "admin-down": "DISABLED",
+    "disabled": "DISABLED",
+    "inoperable": "DOWN",
+    "down": "DOWN",
+    "link-down": "DOWN",
+    "failed": "DOWN",
+    "sfp-not-present": "DOWN",
+}
+
+_ADMIN_STATE_MAP = {"enabled": "ENABLED", "disabled": "DISABLED"}
+
+
+def normalize_oper_state(value: object) -> str:
+    """
+    Map Cisco's operational-state vocabulary onto the platform's.
+
+    Args:
+        value (object): The raw `operState`/`OperState` value, in
+            whatever form the SDK or the REST API reported it.
+
+    Returns:
+        str: UP, DOWN, DISABLED, or UNKNOWN for an unrecognized value.
+    """
+    return _OPER_STATE_MAP.get(str(value or "").lower(), "UNKNOWN")
+
+
+def normalize_admin_state(value: object) -> str:
+    """
+    Map Cisco's administrative-state vocabulary onto the platform's.
+
+    Args:
+        value (object): The raw `adminState`/`AdminState` value.
+
+    Returns:
+        str: ENABLED, DISABLED, or UNKNOWN for an unrecognized value.
+    """
+    return _ADMIN_STATE_MAP.get(str(value or "").lower(), "UNKNOWN")
 
 
 def is_equipped(server_mo: Any) -> bool:

@@ -13,7 +13,11 @@ from collections.abc import Iterable
 from typing import Any
 
 from app.domain.ports.provider import ProviderAttachment, ProviderServer
-from app.infrastructure.providers.ucs_common import is_equipped
+from app.infrastructure.providers.ucs_common import (
+    is_equipped,
+    normalize_admin_state,
+    normalize_oper_state,
+)
 
 _BYTES_PER_MB = 1024 * 1024
 _NOT_APPLICABLE = "not-applicable"
@@ -164,24 +168,10 @@ def _nic_macs(*, host_eth_ifs: list[Any], ext_eth_ifs: list[Any]) -> tuple[str, 
     return host_macs if host_macs else _extract_macs(ext_eth_ifs)
 
 
+# The vocabulary itself lives in `..ucs_common`: Intersight reports the
+# same values, and one fleet-found mapping must reach both collectors.
 # See docs/cisco-collectors.md, "Adapter interfaces, MACs and fabric
 # attachments".
-_OPER_STATE_MAP = {
-    "operable": "UP",
-    "up": "UP",
-    "link-up": "UP",
-    "admin-down": "DISABLED",
-    "disabled": "DISABLED",
-    "inoperable": "DOWN",
-    "down": "DOWN",
-    "link-down": "DOWN",
-    "failed": "DOWN",
-    "sfp-not-present": "DOWN",
-}
-
-_ADMIN_STATE_MAP = {"enabled": "ENABLED", "disabled": "DISABLED"}
-
-
 def _oper_state(mo: Any) -> str:
     """
     Map UCS's operational-state vocabulary onto the platform's.
@@ -192,7 +182,7 @@ def _oper_state(mo: Any) -> str:
     Returns:
         str: UP, DOWN, DISABLED, or UNKNOWN for an unrecognized value.
     """
-    return _OPER_STATE_MAP.get(str(getattr(mo, "oper_state", "") or "").lower(), "UNKNOWN")
+    return normalize_oper_state(getattr(mo, "oper_state", None))
 
 
 def _admin_state(mo: Any) -> str:
@@ -205,7 +195,7 @@ def _admin_state(mo: Any) -> str:
     Returns:
         str: ENABLED, DISABLED, or UNKNOWN for an unrecognized value.
     """
-    return _ADMIN_STATE_MAP.get(str(getattr(mo, "admin_state", "") or "").lower(), "UNKNOWN")
+    return normalize_admin_state(getattr(mo, "admin_state", None))
 
 
 def _attachments(

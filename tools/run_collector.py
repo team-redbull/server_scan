@@ -58,6 +58,7 @@ from app.infrastructure.mongodb.indexes import ensure_indexes
 from app.infrastructure.mongodb.manager_repository import MongoManagerRepository
 from app.infrastructure.mongodb.server_repository import MongoServerRepository
 from app.infrastructure.mongodb.site_repository import MongoSiteRepository
+from app.infrastructure.providers.intersight.provider import IntersightProvider
 from app.infrastructure.providers.redfish.provider import RedfishStandaloneProvider
 from app.infrastructure.providers.redfish.targets import load_targets
 from app.infrastructure.providers.ucs_central.provider import UcsCentralProvider
@@ -177,6 +178,36 @@ def _redfish_provider(
     )
 
 
+def _intersight_provider(
+    *,
+    manager: Manager,
+    credentials: ManagerConnection,
+    timeout_seconds: float,
+    settings: Settings,
+) -> ServerInventoryProvider:
+    """The Intersight collector — one endpoint, fleet-wide list queries.
+
+    `timeout_seconds` is the connect timeout only. Reading one page of a
+    fleet-wide query is a different question from reaching the endpoint
+    at all, so it has its own setting, the same split the Redfish
+    collector makes.
+    """
+    modes = tuple(
+        mode.strip() for mode in settings.intersight_management_modes.split(",") if mode.strip()
+    )
+    return IntersightProvider(
+        manager=manager,
+        credentials=credentials,
+        connect_timeout=timeout_seconds,
+        read_timeout=settings.intersight_read_timeout_seconds,
+        ca_bundle=settings.intersight_ca_bundle or None,
+        page_size=settings.intersight_page_size,
+        management_modes=modes,
+        run_budget_seconds=settings.intersight_run_budget_seconds,
+        debug_http=_debug_http_enabled(),
+    )
+
+
 def _optional_login(settings: Settings, manager_type: ManagerType) -> tuple[str, str] | None:
     """A type's fleet-wide login, or None when it has none configured.
 
@@ -209,6 +240,12 @@ _UNFILTERED_TYPES = frozenset({ManagerType.REDFISH_STANDALONE})
 _PROVIDER_FACTORIES: dict[ManagerType, Callable[..., ServerInventoryProvider]] = {
     ManagerType.UCS_CENTRAL: _ucs_central_provider,
     ManagerType.REDFISH_STANDALONE: _redfish_provider,
+    # INTERSIGHT is in neither `_ENDPOINTLESS_TYPES` nor
+    # `_UNFILTERED_TYPES`, deliberately: it has a real configured
+    # endpoint, and the servers it reports carry the `ocp4-...` names
+    # `INVENTORY_COLLECTOR_NAME_PATTERN` exists to filter. See
+    # docs/adr/0017-intersight-collector.md.
+    ManagerType.INTERSIGHT: _intersight_provider,
 }
 
 

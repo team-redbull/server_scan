@@ -18,6 +18,13 @@ dependencies = [
     # difference within 8.x carries negligible risk.
     "redis==8.0.1",
     "httpx==0.28.1",
+    # Signs Cisco Intersight API requests (HTTP Signature hs2019). It is
+    # the only way to talk to Intersight at all — there is no password
+    # login for its REST API — and the alternative was the official
+    # `intersight` SDK, a 57.6 MB wheel carrying 10,112 generated model
+    # modules of which this collector would use about eight. See
+    # docs/adr/0017-intersight-collector.md, "Decision 1".
+    "cryptography==46.0.3",
     "structlog==26.1.0",
     "prometheus-client==0.26.0",
     "regex==2026.7.19",

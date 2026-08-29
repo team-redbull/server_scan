@@ -128,10 +128,42 @@ class Settings(BaseSettings):
     ome_username: str = ""
     ome_password: str = ""
 
-    # username = API Key ID, password = secret key — see the note above.
+    # username = API Key ID, password = the key's PEM private half — see
+    # the note above and docs/adr/0017-intersight-collector.md. The PEM is
+    # multi-line and rides in the environment like any other value; there
+    # is no key file to mount, because the signing library accepts the key
+    # as a string.
     intersight_ip: str = ""
     intersight_username: str = ""
     intersight_password: str = ""
+
+    # Which `ManagementMode` values the Intersight collector ingests, as
+    # a comma-separated list. `UCSM` is excluded by default and that is
+    # the whole point: those servers are exactly the ones the UCS Central
+    # collector already owns, and collecting both makes one document's
+    # fields flip on whichever CronJob ran last. Add `UCSM` only for an
+    # estate whose UCS domains are not registered with Central at all.
+    intersight_management_modes: str = "Intersight,IntersightStandalone"
+
+    # PEM bundle trusted in addition to the system store, for an on-prem
+    # Intersight appliance with an internal CA. Empty uses the system
+    # store alone, which is correct for the public SaaS endpoint.
+    intersight_ca_bundle: str = ""
+
+    # `$top`. 1000 is the API's documented maximum and the default
+    # because every query here is a fleet-wide list — lower it only if a
+    # tenant turns out to throttle, since Cisco publishes no rate limit.
+    intersight_page_size: int = 1000
+
+    # A fleet-wide page is a large response, so reading one is bounded
+    # separately from establishing the connection — the same split, for
+    # the same reason, as the Redfish collector's two timeouts.
+    intersight_read_timeout_seconds: float = 60.0
+
+    # Wall clock for one run, enforced in-process so a throttled run ends
+    # with a summary naming what it never reached. A hard kill by the
+    # CronJob's `activeDeadlineSeconds` reports nothing.
+    intersight_run_budget_seconds: float = 1800.0
 
     collector_connect_timeout_seconds: float = 15.0
 

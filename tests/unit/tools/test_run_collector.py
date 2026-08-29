@@ -101,7 +101,7 @@ class FakeCredentialResolver:
 class TestBuildProvider:
     @pytest.mark.parametrize(
         "manager_type",
-        [ManagerType.OPENMANAGE, ManagerType.INTERSIGHT, ManagerType.ONEVIEW],
+        [ManagerType.OPENMANAGE, ManagerType.ONEVIEW],
     )
     async def test_unimplemented_vendors_fail_loudly(self, manager_type: ManagerType) -> None:
         """A missing collector must be an explicit error, never a silent
