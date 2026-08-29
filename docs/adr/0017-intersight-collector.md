@@ -1,0 +1,422 @@
+# ADR-0017: Cisco Intersight collector
+
+**Status:** Proposed — **blocked on two deployment questions for the user**
+(see "Blocking questions" below; they change the recommendation, not just
+the detail).
+
+**Date:** 2026-08-29
+
+Research behind every claim here: `docs/notes/intersight-auth.md`,
+`docs/notes/intersight-inventory-model.md`,
+`docs/notes/intersight-query-and-scale.md`,
+`docs/notes/intersight-testability.md`. Facts cited below as
+`signing.py:236` are file:line in the installed SDK wheel
+(`intersight==1.0.11.2026072720`), which is the contract — the generated
+models are the OpenAPI spec rendered as Python, and they beat prose docs
+wherever the two disagree.
+
+---
+
+## Context
+
+`INTERSIGHT` has had configuration slots since ADR-0012 —
+`INVENTORY_INTERSIGHT_IP`/`_USERNAME`/`_PASSWORD`, a `ManagerType`
+member, entries in both `_LOGIN_FIELDS` and `_ENDPOINT_FIELD`, a
+`values.yaml` block and a Secret-template block — and no implementation.
+`tools/run_collector.py`'s `_PROVIDER_FACTORIES` has no entry, so
+`--manager-type INTERSIGHT` raises `NotImplementedError`. This ADR
+decides how to close that gap.
+
+Two things make this collector different from every one that came before
+it, and both are decided here rather than discovered later.
+
+**It is the first collector that actually reaches the platform's 10,000
+server target.** UCS Central costs ~11 round trips for a whole Cisco
+fleet but is bounded by Central's domain registry; the Redfish collector
+costs ~25 round trips *per BMC* and ADR-0016 states plainly that it does
+not reach 10k. Intersight's OData API answers fleet-wide list queries
+whose cost is a function of page count, not server count.
+
+**And it is the first collector with a deployment dependency this
+platform cannot satisfy on its own.** Every other collector talks to
+something the customer already owns. Intersight's SaaS endpoint is on the
+public internet, which an air-gapped site by definition cannot reach.
+
+---
+
+## Decision 1 — Thin `httpx` client, not the official SDK
+
+**Recommendation: write a small signing client on the `httpx` already in
+`pyproject.toml`, and add exactly one new dependency (`cryptography`) for
+the signature.**
+
+| | Official `intersight` SDK | Thin `httpx` client |
+|---|---|---|
+| Wheel size | **57.6 MB** | 0 (httpx already present) |
+| Unpacked | **328 MB** | — |
+| Generated modules | **10,112 under `intersight/model/`** | — |
+| New dependencies | `pycryptodome`, `pem`, `urllib3`, `python-dateutil` | `cryptography` |
+| Code we would write | ~0 for transport, all of the mapping | ~60 lines signing, ~30 paging |
+| 429 handling | **none — `rest.py` raises on any non-2xx** | ours, deliberately |
+| `mypy` | generated, dynamically-typed `model_utils` machinery | ours, typed |
+
+Evidence for the SDK column: `Requires-Dist` in the wheel's `METADATA`;
+`ls intersight/model | wc -l` → 10112; the scale research confirmed
+`rest.py` has no retry/backoff for HTTP status codes and
+`Configuration.retries` defaults to `None`, which falls through to
+urllib3's connection-level `Retry(3)` — that does **not** cover 429
+unless `status_forcelist` is passed explicitly. So the SDK does not save
+us the one piece of transport work that actually matters here.
+
+The case for the SDK is that it saves us from hand-rolling HTTP Signature
+crypto. That is a real risk and it is why this is a decision rather than
+an obvious call. Three things reduce it to acceptable:
+
+1. The scheme is small and fully specified: `hs2019`, sign
+   `(request-target)`, `Host`, `Date`, `Digest`, base64 the signature,
+   emit an `Authorization: Signature ...` header. This is composing a
+   documented string and calling a library's `sign()`; it is not
+   inventing a construction.
+2. It is directly unit-testable against a fixed key and a frozen clock —
+   deterministic output, no network. The SDK's own `signing.py` is the
+   reference implementation to test against, and it is on disk.
+3. **We would use roughly 8 of the SDK's 10,112 models.** We map raw JSON
+   into `ProviderServer` at the port boundary regardless — that is what
+   every provider in this repo does. The generated model layer is not
+   value we would consume; it is 328 MB of mirror we would carry to throw
+   away.
+
+Air-gap weight (`docs/air-gap.md`): `requirements.txt` and `pylock.toml`
+are generated exports for mirroring, and ADR-0013's precedent is that the
+right answer to a heavy dependency is often deletion rather than a bump.
+Pinning `ucsmsdk`/`ucscsdk` to whatever the mirror happens to carry is
+already a documented friction; a 57.6 MB wheel is materially more of it.
+
+**Cost accepted:** we own the signing code, including any future change
+to Intersight's accepted signature scheme. Mitigated by the unit tests
+above and by the fact that `hs2019` is a published draft standard, not a
+Cisco-private construction.
+
+> **This needs the user's mirror to be checked.** Neither `cryptography`
+> nor `pycryptodome` is in the current dependency tree, so *either*
+> option adds a crypto dependency to the air-gapped mirror. If the mirror
+> carries `pycryptodome` but not `cryptography`, that flips which library
+> the thin client uses — not the decision itself.
+
+---
+
+## Decision 2 — The API secret is a PEM in an env var, and the field names stay
+
+**Recommendation: keep `INVENTORY_INTERSIGHT_USERNAME`/`_PASSWORD`
+carrying (API Key ID, PEM private key). No mounted volume. Fix the
+wording everywhere it is described as a password.**
+
+Intersight has **no username/password path for the REST API at all**. It
+is strictly `(API Key ID, PEM private key)`, and every request is signed;
+`Configuration.auth_settings()` only ever builds cookie / http_signature
+/ oAuth2-bearer, and Cisco's own example uses only http_signature.
+
+The decisive fact for this platform:
+`HttpSigningConfiguration(key_id, signing_scheme, private_key_path=None,
+private_key_string=None, private_key_passphrase=None)` — `signing.py:126`
+— and `_load_private_key` reads `private_key_string` **first**, touching
+the filesystem only when it is `None` (`signing.py:236`). A PEM can
+therefore live in an ordinary environment variable. ADR-0012's "no secret
+volume to mount" holds, and ADR-0016's deviation is not repeated.
+
+Multi-line values survive the whole chain: Helm renders a block scalar
+from `values.yaml` into the Secret's `stringData`, Kubernetes injects it
+with `envFrom`, and pydantic-settings reads it verbatim. **This satisfies
+the requirement that a deployment be configured entirely from
+`values.yaml` with no pre-existing Secret** — `collectors.existingSecret`
+stays opt-in and empty, exactly as it is for every other vendor today.
+
+Not renaming the settings fields is deliberate laziness with a reason:
+the `username`/`password` shape is already load-bearing in five files
+(`settings.py`, `credentials/env.py`, `.env.example`, `values.yaml`,
+`collector-credentials-secret.yaml`), `_LOGIN_FIELDS` is keyed on it, and
+one uniform shape per vendor is what makes the Secret template uniform.
+The confusion is a documentation problem and gets a documentation fix.
+
+**We do not support a passphrase-encrypted key in v1.** The SDK supports
+one (`private_key_passphrase`), but a passphrase would need a fourth
+value with nowhere uniform to put it, and it protects a secret that is
+already sitting next to it in the same Secret. Unencrypted PEM only,
+stated in `.env.example`.
+
+**Never logged:** the PEM, the signature, the `Authorization` header. One
+concrete hazard found in the SDK and worth recording even though we are
+not using it: `Configuration.debug = True` sets
+`http.client.HTTPConnection.debuglevel = 1`, which `print()`s raw request
+headers — `Authorization` included — to stdout, bypassing the logger
+entirely. Nothing in this collector may ever wire a flag to that.
+
+---
+
+## Decision 3 — Overlap with UCS Central is resolved by `ManagementMode`
+
+**This is the highest-risk decision in the task. Recommendation: collect
+only `ManagementMode in ('Intersight', 'IntersightStandalone')` by
+default; make it operator-overridable; never collect `UCSM` by
+default.**
+
+`IngestService` correlates on `(vendor, serial_normalized)`. A Cisco
+server collected by *both* `UCS_CENTRAL` and `INTERSIGHT` is therefore
+**one document whose `source_provider`, `external_id`, `manager_id` and
+every mapped field flip on every run**, depending on which CronJob fired
+last. That is not a cosmetic race: it churns the audit trail, and two
+collectors disagreeing about a field (say memory, if the unit question
+below lands wrong) would look like real hardware change.
+
+The clean discriminator comes from the contract itself:
+
+- `compute.PhysicalSummary.ManagementMode` enumerates exactly
+  `IntersightStandalone` | `UCSM` | `Intersight`
+  (`compute_physical_summary.py:471`).
+- `ServiceProfile` is documented "The distinguished name of the service
+  profile to which the server is associated to. **It is applicable only
+  for servers which are managed via UCSM**" (`:496`).
+
+So `ManagementMode == 'UCSM'` is *precisely* the set UCS Central already
+owns, by Cisco's own definition. Excluding it makes the two Cisco
+collectors partition the fleet rather than race over it.
+
+Rejected alternatives:
+
+- **Scope by Organization.** Does not work: no inventory MO
+  (`compute.PhysicalSummary`/`Blade`/`RackUnit`) has an `Organization`
+  field — only policy and profile MOs do. Verified in the SDK models.
+- **Accept the overlap.** Rejected: silent, continuous field churn on
+  shared servers, with no operator-visible symptom until someone reads
+  the audit trail and asks why a server keeps changing collector.
+- **Retire the UCS Central collector.** Not on the table: it is validated
+  against a live Central with 152 domains, and Intersight cannot see a
+  UCS domain that was never claimed into it.
+
+**Cost accepted:** a server that Intersight genuinely manages in `UCSM`
+mode and that is *not* registered with UCS Central falls through the gap
+and is collected by nobody. The override exists for exactly that estate.
+
+---
+
+## Decision 4 — `external_id` is `intersight/<Moid>`
+
+`Moid` is a stable 24-hex identifier, unique within the tenant, and is
+the join key the whole request plan already depends on. Prefixed rather
+than bare so it is self-describing next to a UCS Central
+`compute/sys-1009/...` DN and a Redfish `redfish://.../Systems/1`.
+
+**What happens to history when a machine changes collector** — the
+question worth answering explicitly, because Decision 3 does not make it
+impossible, only unlikely. Correlation is on `(vendor,
+serial_normalized)`, and Intersight servers are `cisco` like UCS
+Central's. So the *document survives*: the same server is found, and its
+`external_id` and `source_provider` are overwritten in place. No
+duplicate, no lost history, one audit event recording the change. That is
+the correct outcome; it is only pathological if it happens on *every*
+run, which is what Decision 3 prevents.
+
+---
+
+## Decision 5 — Scope cuts, stated honestly
+
+What v1 deliberately will not collect, and why:
+
+- **GPU memory, temperature, power draw, ECC state and error counts.**
+  Not a cut — **a capability ceiling of the API**. `pci.Device`,
+  `graphics.Card` and `graphics.Controller` carry model/vendor/serial/PCI
+  address and *no* memory, thermal, power or ECC field anywhere in this
+  SDK version. These report `None`, never `0`. The Redfish collector gets
+  this data because it reads `ProcessorMetrics`/`EnvironmentMetrics` off
+  the BMC directly; Intersight does not expose an equivalent.
+- **`speed_mbps` on attachments.** Neither `adapter.ExtEthInterface` nor
+  `adapter.HostEthInterface` has a numeric speed field. Only the
+  switch-side `ether.PhysicalPort`/`ether.HostPort` do, as *free-form
+  strings* whose format is unverified. `None`, not a guess.
+- **`cpu_model`.** Needs a per-server processor query; the summary
+  carries counts only. Cut for the same reason ADR-0009 cut it.
+- **Fabric interconnect identity** (`fabric_model`, `fabric_serial`).
+  Same cut ADR-0009 made, same reason: another MO class for a field
+  nothing currently reads.
+- **Per-drive detail is *kept*.** Unlike ADR-0009, this one is cheap
+  here: `storage.PhysicalDisk` is one more fleet-wide list call, and
+  `docs/adr/0016`'s `storage.failed_drive` policy depends on it.
+
+---
+
+## Decision 6 — No concurrency knob; a 429 policy and a memory bound instead
+
+`INVENTORY_UCS_CENTRAL_DOMAIN_CONCURRENCY` exists because domains are
+independent endpoints. Intersight is **one** endpoint answering
+sequential paged list queries, so a concurrency knob would only add
+throttling risk against a rate limit Cisco does not publish. Not added.
+
+What is needed instead:
+
+1. **Our own 429 backoff.** The SDK has none, and Cisco publishes no
+   limit numbers — which means the limit will be discovered in
+   production. Honour `Retry-After` when present, exponential backoff
+   with jitter otherwise, bounded retries, and a run budget so a
+   throttled run ends with a summary rather than hanging.
+2. **`$orderby=Moid` on every paged query.** `$top`/`$skip` is the only
+   paging mechanism (no next-page token), and no vendor documentation
+   states the result set is stable across pages. Ordering on an immutable
+   key is our own prudence, recorded as such and not as a documented
+   fact.
+3. **A stated memory ceiling.** This is the honest cost of the fleet-wide
+   join: the collector holds join tables (adapter units, interfaces,
+   controllers, disks, profiles) in memory while it streams servers out.
+   `list_servers()` still streams `ProviderServer`s — it never
+   materialises 10k of them — but the *join tables* are proportional to
+   fleet size, which no previous collector's memory was. `$select` is
+   used on every query to keep only mapped fields, and the CronJob gets a
+   memory limit sized for it.
+
+---
+
+## The request plan (the thing that makes this scale)
+
+Every child MO carries an **inverse** reference back to its owner, so
+sub-resources are listed once fleet-wide and joined client-side. Verified
+directly in the SDK models:
+
+| Query | Joins to owner via |
+|---|---|
+| `compute/PhysicalSummaries` | (the anchor; `Moid`) |
+| `server/Profiles` | `assigned_server` → `ComputePhysical` |
+| `adapter/Units` | `compute_blade` / `compute_rack_unit` |
+| `adapter/ExtEthInterfaces` → `PHYSICAL` | `adapter_unit` → `adapter.Unit` |
+| `adapter/HostEthInterfaces` → `VNIC` | `adapter_unit` → `adapter.Unit` |
+| `storage/Controllers` | `compute_blade` / `compute_rack_unit` |
+| `storage/PhysicalDisks` | `parent` → `storage.Controller` |
+| `management/Controllers` | `compute_blade` / `compute_rack_unit` |
+
+At `$top=1000` (the documented maximum) that is on the order of **~120
+requests for 10,000 servers**, flat in fleet size — against the Redfish
+collector's ~250,000 at the same scale. This is the first collector in
+the repo that meets the platform's stated target without qualification.
+
+`adapter.ExtEthInterface` is `PHYSICAL` and `adapter.HostEthInterface` is
+`VNIC` — the latter's own docstring uses the word "vNIC". Getting this
+backwards is exactly the ADR-0009 defect that made physical port counts
+always zero. `vnic.EthIf` is a *design-time policy* object and must not
+be used for live state.
+
+Server-side `startswith(Name,'ocp')` is available and will be used as a
+**bandwidth optimisation only** — `_NameFilteredProvider` remains the
+correctness boundary, unchanged, exactly as for UCS Central.
+
+`INTERSIGHT` belongs in **neither** `_ENDPOINTLESS_TYPES` (it has a real
+configured endpoint) **nor** `_UNFILTERED_TYPES` (its servers carry the
+`ocp4-...` names the pattern exists to filter). Stated here so it is a
+decision rather than an inference.
+
+---
+
+## The name trap — worse than UCS Manager's, and not fully settled
+
+ADR-0009's most expensive defect was naming every server after its
+chassis slot because a UCS server's name lives on its *service profile*,
+not on `computeBlade.name`. Intersight has the same trap, and the
+contract is explicit about it: `compute.PhysicalSummary.Name` is
+documented as **never** an operator hostname — it is
+FI-cluster-name + chassis/slot when UCSM-attached, the CIMC's own name in
+standalone mode, or model + chassis/server id in IMM mode.
+
+Since the platform parses the **site** out of this name and matches it
+against `^ocp`, sourcing it wrong does not fail loudly — it collects
+nothing, or labels the whole fleet "Unassigned".
+
+Planned resolution, by mode:
+
+- **`Intersight` (IMM):** `server.Profile.name`, joined via
+  `assigned_server`. Also yields `profile_template_*` through
+  `src_template`.
+- **`IntersightStandalone`:** no profile exists. Fall back to
+  `compute.PhysicalSummary.Name` (the CIMC's own name), then
+  `UserLabel`.
+- **`UCSM`:** excluded by Decision 3, so moot by default. If an operator
+  overrides that, parse the `ServiceProfile` DN the way
+  `ucs_manager/mapping.py` already does.
+
+**UNVERIFIED, highest priority to settle:** `server.Profile.ManagementMode`
+enumerates only two values, omitting `UCSM`, while
+`compute.PhysicalSummary.ManagementMode` enumerates three. That suggests
+UCSM-mode servers may get no `server.Profile` MO at all — consistent with
+Decision 3, but it is an inference from an enum mismatch, not a
+confirmed fact. One live tenant call settles it.
+
+---
+
+## UNVERIFIED — what only live hardware can settle
+
+Recorded here rather than buried, because ADR-0009's validation found
+five defects that were invisible without real hardware, and nothing
+reachable today can play that role for Intersight (see below).
+
+1. **`TotalMemory`'s unit.** The single most dangerous open item. The
+   docstring is `total_memory (int): The total memory available on the
+   server.` — **no unit**, identical on `PhysicalSummary`, `Blade` and
+   `RackUnit`. Its sibling `available_memory` *is* documented "in MB";
+   per-DIMM `memory.Unit.capacity` is documented "in MiB". MB vs MiB is a
+   4.86% silent error on every server. Settle by comparing one live
+   `TotalMemory` against the sum of that server's DIMM capacities before
+   trusting the mapping. (Storage is *not* ambiguous:
+   `storage.PhysicalDisk.size`/`raw_size` are explicitly "in MB", as
+   strings needing parsing.)
+2. Whether UCSM-mode servers have a `server.Profile` at all (above).
+3. `assigned_server` vs `associated_server` precedence on `server.Profile`.
+4. `mgmt_ip_address` vs `ipv4_address` as the authoritative BMC address,
+   and where the BMC MAC actually lives.
+5. Clock-skew tolerance and its exact failure signature. The SDK raises a
+   generic 401 `UnauthorizedException` for skew, expiry, revocation and a
+   wrong key id alike — four causes, one symptom. `health_check()` will
+   have to guess between them, so it will proactively sanity-check the
+   pod clock rather than pretend it can tell.
+6. Cisco publishes no rate-limit numbers anywhere reachable.
+7. `ether.PhysicalPort.oper_speed` string format.
+8. Whether the Private Virtual Appliance serves an identical MO surface
+   to SaaS (see below).
+
+---
+
+## Blocking questions for the user
+
+Two of the prompt's own stop-and-ask conditions fired. Both change the
+recommendation rather than the detail, so this ADR stays **Proposed**.
+
+**1. Air-gap: is there a Private Virtual Appliance?**
+An air-gapped site can reach Intersight **only** via the on-prem Private
+Virtual Appliance — never `intersight.com`, and not the *Connected*
+Virtual Appliance either, which still calls home to public SaaS by
+design. A PVA is a commercial SKU (no free or evaluation tier found),
+16–48 vCPU / 32–96 GB / 2 TB. That is a deployment dependency no other
+collector in this repo carries. If this platform's air-gapped target site
+has no PVA, this collector cannot run there at all, and it is worth
+knowing that before it is built rather than after.
+
+**2. Testability: there is no emulator, and there will not be one soon.**
+CLAUDE.md records that testability without real hardware was *the
+deciding factor* for building UCS first — Cisco's free UCSPE answers real
+API calls, and validating against it found five real defects. The
+Intersight equivalent, the DevNet Sandbox, is **offline**: Cisco took the
+entire sandbox catalog down on 2026-08-01 for a rebuild, targeting "early
+2027" with no committed date. The best reachable substitute today is a
+free SaaS account with no claimed devices, which proves signing, paging
+and empty-result handling — and proves **nothing** about field
+population, units or nullability, which is precisely the class of bug
+UCSPE caught. Schema-only fixtures from the OpenAPI spec cannot catch it
+either; the API reference publishes types, not example values.
+
+So: this collector can be built to a good standard against the contract,
+with honest unit tests, and it will be **unvalidated** in a way UCS
+Manager's never was — with `TotalMemory`'s unit as a live, silent,
+4.86%-wrong-on-every-server risk sitting in the middle of it.
+
+**A third question, which is really the first one:** if this deployment's
+Intersight is claiming the *same* UCS domains that UCS Central already
+collects, then under Decision 3 this collector correctly collects
+**nothing** — every one of those servers is `ManagementMode == 'UCSM'`.
+It earns its place only if there are Intersight-managed (IMM) or
+standalone-claimed servers that UCS Central cannot see. Worth confirming
+before building rather than discovering on the first dry run.
