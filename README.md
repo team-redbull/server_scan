@@ -35,6 +35,7 @@ collectors. Built so far, in order:
     aggregator owns — a Cisco CIMC that Intersight cannot manage, an
     iDRAC, a current iLO. One BMC at a time, from an inventory file.
 
+`CHANGELOG.md` records what changed and what is new in each release.
 `docs/arc42.md` is the structured architecture overview — goals,
 constraints, context, deployment view, quality scenarios, and an honest
 risk/technical-debt register. See `docs/architecture.md` for the full

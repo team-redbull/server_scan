@@ -132,6 +132,44 @@ is a real mistake, not a style preference.
    reads in the older style; convert a file when you are already
    changing it, not as a sweep of its own.
 
+9. **Every release says what changed and what is new — keep
+   `CHANGELOG.md`'s `## Unreleased` section current as you work.**
+   Added 2026-08-30 at the user's request.
+
+   Releases are automatic: every push to `main` that passes CI tags the
+   commit and publishes both images, with the version derived from
+   Conventional Commits (ADR-0010). That gives a correct version number
+   and says nothing about *why* the release matters, which is what this
+   file supplies.
+
+   The rule is not "write release notes at release time" — by then the
+   reasoning is gone and it degrades into a `git log` dump. **Add the
+   line in the same commit as the change**, in the same pass as the
+   quality gate (convention 7):
+
+   - Anything that changes behaviour, configuration or the operational
+     contract gets a line. Pure internals — a refactor, a test, a doc
+     typo — get nothing. If nobody outside the repo could notice it,
+     leave it out.
+   - Write for whoever deploys it, not whoever wrote it: name the
+     environment variable, the endpoint, the exit code, the Helm value.
+   - **Breaking changes lead**, under `### Breaking`, and say what an
+     operator has to *do* — including "nothing, the default is
+     unchanged" when that is true, since that is the most useful thing
+     to know.
+   - Group under `### Breaking` / `### New features` / `### Fixed` /
+     `### Documentation`. State the version the range will produce when
+     it is knowable (a `feat!:` in the range means the next tag is a
+     major).
+   - When a tag is cut, the `## Unreleased` heading becomes that
+     version with its date, and a fresh empty `## Unreleased` goes above
+     it.
+
+   Entries below the reconstructed history line in `CHANGELOG.md` were
+   generated from tag history and read as commit subjects. Do not treat
+   them as the standard — the `Unreleased` section written on 2026-08-30
+   is the standard.
+
 ## Current status
 
 Phase 1 slices 0–7 are done (see `docs/architecture.md`'s "What's
