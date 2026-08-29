@@ -4,12 +4,18 @@ no database, safe for `tests/unit`.
 
 from __future__ import annotations
 
-from app.domain.enums import ManagerType, SiteCode
+from tools.run_collector import manager_for
+
+from app.domain.enums import HealthSeverity, ManagerType, SiteCode, Vendor
+from app.domain.models.hardware import Gpu
+from app.domain.ports.credentials import ManagerConnection
 from app.domain.value_objects.site import parse_site_code
 from app.infrastructure.providers.fake.generator import (
     generate_servers,
     list_managers,
     list_sites,
+    manager_id_for,
+    provider_type_for,
 )
 
 
@@ -54,22 +60,95 @@ def test_system_uuids_are_unique() -> None:
 def test_vendors_are_from_the_known_set() -> None:
     servers = list(generate_servers(seed=42, count=200))
     vendors = {s.vendor for s in servers}
-    assert vendors <= {"dell", "cisco", "hp"}
+    assert vendors <= {v.value for v in Vendor}
+    # `standalone` is a real Redfish-collected vendor, not a fallback, and
+    # the UI filters on it — so it needs fixtures like any other.
+    assert "standalone" in vendors
 
 
-def test_bmc_address_forms_match_vendor() -> None:
+def test_bmc_address_forms_match_the_collector_that_reported_them() -> None:
+    """The address shape is the collector's, not the vendor's: UCS reports
+    `ipmi://host:623`, Redfish composes a `redfish://` system URL.
+    """
     servers = list(generate_servers(seed=42, count=300))
     for s in servers:
         assert s.bmc_address_raw is not None
-        if s.vendor == "dell":
-            assert s.bmc_address_raw.startswith("idrac-virtualmedia://")
-            assert s.bmc_address_raw.endswith("/redfish/v1/Systems/System.Embedded.1")
-        elif s.vendor == "hp":
-            assert s.bmc_address_raw.startswith("redfish-virtualmedia://")
-            assert s.bmc_address_raw.endswith("/redfish/v1/Systems/1")
-        elif s.vendor == "cisco":
+        if s.vendor == "cisco":
             assert s.bmc_address_raw.startswith("ipmi://")
             assert s.bmc_address_raw.endswith(":623")
+        else:
+            assert s.bmc_address_raw.startswith("redfish://")
+            assert s.bmc_address_raw.endswith("/redfish/v1/Systems/1")
+
+
+def test_external_ids_match_the_collector_that_reported_them() -> None:
+    """A Cisco server is identified by its Central-rooted DN, a standalone
+    one by the Redfish system URL — the same strings the real collectors
+    correlate on.
+    """
+    for s in generate_servers(seed=42, count=300):
+        if s.vendor == "cisco":
+            assert s.external_id.startswith("compute/sys-")
+            assert "/blade-" in s.external_id or "/rack-unit-" in s.external_id
+        else:
+            assert s.external_id.startswith("redfish://")
+
+
+def test_only_cisco_servers_carry_a_service_profile_dn() -> None:
+    """A BMC knows nothing about service profiles, so `profile_dn` is the
+    UCS collector's alone — and its org segment is what the site falls
+    back to when a name carries no site token.
+    """
+    for s in generate_servers(seed=42, count=300):
+        if s.vendor != "cisco":
+            assert s.profile_dn is None
+            continue
+        assert s.profile_dn is not None
+        assert s.profile_dn.startswith("org-root/org-")
+        assert parse_site_code(s.profile_dn) is not None
+
+
+def test_a_siteless_cisco_name_still_resolves_through_its_org_dn() -> None:
+    siteless = [
+        s
+        for s in generate_servers(seed=42, count=300)
+        if s.vendor == "cisco" and parse_site_code(s.name) is None
+    ]
+    assert siteless, "the siteless name family should reach Cisco servers too"
+    for s in siteless:
+        assert parse_site_code(s.profile_dn) is not None
+
+
+def test_gpus_are_reported_by_redfish_and_unread_by_ucs() -> None:
+    """`None` and `()` are different claims: UCS never reads GPUs, while a
+    Redfish server with none discoverable reports an empty tuple.
+    """
+    servers = list(generate_servers(seed=42, count=300))
+    assert all(s.gpus is None for s in servers if s.vendor == "cisco")
+    assert all(s.gpus is not None for s in servers if s.vendor != "cisco")
+    with_gpus = [s for s in servers if s.gpus]
+    assert with_gpus
+    for s in with_gpus:
+        assert s.gpus is not None
+        for gpu in s.gpus:
+            assert set(gpu) == set(Gpu.model_fields)
+            Gpu.model_validate(gpu)
+
+
+def test_drive_health_uses_the_health_severity_vocabulary() -> None:
+    """Both collectors normalize drive health onto `HealthSeverity` at the
+    provider boundary, and `storage.failed_drive_count` counts CRITICAL —
+    fixtures speaking any other vocabulary would make the seeded storage
+    policy fire in dev and never in production.
+    """
+    allowed = {s.value for s in HealthSeverity}
+    healths = {
+        drive["health"]
+        for s in generate_servers(seed=42, count=300)
+        for drive in s.storage_drives or ()
+    }
+    assert healths <= allowed
+    assert HealthSeverity.CRITICAL.value in healths
 
 
 def test_only_cisco_servers_have_attachments() -> None:
@@ -77,8 +156,25 @@ def test_only_cisco_servers_have_attachments() -> None:
     non_cisco_with_attachments = [s for s in servers if s.vendor != "cisco" and s.attachments]
     assert non_cisco_with_attachments == []
     # And at least some Cisco servers do have attachments, at varying counts.
-    cisco_attachment_counts = {len(s.attachments) for s in servers if s.vendor == "cisco"}
-    assert cisco_attachment_counts & {0, 1, 2, 4}
+    physical_counts = {
+        sum(1 for a in s.attachments if a.interface_kind == "PHYSICAL")
+        for s in servers
+        if s.vendor == "cisco"
+    }
+    assert physical_counts & {0, 1, 2, 4}
+
+
+def test_cisco_attachments_report_both_physical_ports_and_vnics() -> None:
+    """The UCS collector reports `adaptorExtEthIf` and `adaptorHostEthIf`
+    together, told apart only by `interface_kind`. A fixture with just one
+    kind would never catch code that conflates them.
+    """
+    attached = [s for s in generate_servers(seed=42, count=300) if s.attachments]
+    assert attached
+    for s in attached:
+        kinds = {a.interface_kind for a in s.attachments}
+        assert kinds == {"PHYSICAL", "VNIC"}
+        assert all(a.provider == ManagerType.UCS_CENTRAL.value for a in s.attachments)
 
 
 def test_fabric_names_follow_fi_a_b_convention() -> None:
@@ -141,14 +237,34 @@ def test_list_sites_and_managers_have_unique_names_and_ids() -> None:
     assert len(manager_ids) == len(set(manager_ids))
 
 
-def test_at_least_one_ucs_central_ucs_manager_pair() -> None:
-    managers = list_managers()
-    centrals = [m for m in managers if m.type == ManagerType.UCS_CENTRAL]
-    assert centrals
-    central_ids = {m.id for m in centrals}
-    children = [m for m in managers if m.type == ManagerType.UCS_MANAGER]
-    assert children
-    assert any(m.parent_manager_id in central_ids for m in children)
+def test_managers_are_exactly_the_implemented_collectors() -> None:
+    """Seeding a manager type with no collector would invent a data path
+    that cannot exist — and `--manager-type UCS_MANAGER` was removed, so
+    there is no Central/Manager pair to model any more.
+    """
+    assert {m.type for m in list_managers()} == {
+        ManagerType.UCS_CENTRAL,
+        ManagerType.REDFISH_STANDALONE,
+    }
+
+
+def test_manager_ids_match_what_a_real_collector_writes() -> None:
+    """`tools.run_collector.manager_for` builds the same id, so a seeded
+    fleet and a collected one share one manager document rather than two.
+    """
+    assert {m.id for m in list_managers()} == {
+        manager_for(t, ManagerConnection(endpoint="e", username="u", password="p")).id
+        for t in (ManagerType.UCS_CENTRAL, ManagerType.REDFISH_STANDALONE)
+    }
+
+
+def test_every_server_is_owned_by_the_collector_that_could_find_it() -> None:
+    for s in generate_servers(seed=42, count=300):
+        expected = (
+            ManagerType.UCS_CENTRAL if s.vendor == "cisco" else ManagerType.REDFISH_STANDALONE
+        )
+        assert provider_type_for(s.vendor) == expected.value
+        assert s.manager_id == manager_id_for(expected)
 
 
 def test_servers_reference_known_managers() -> None:
@@ -183,17 +299,15 @@ def test_profile_template_name_and_external_id_are_both_set_or_both_none() -> No
         assert (s.profile_template_name is None) == (s.profile_template_external_id is None)
 
 
-def test_profile_template_external_id_form_matches_vendor() -> None:
-    servers = list(generate_servers(seed=42, count=300))
-    for s in servers:
-        if s.profile_template_name is None:
+def test_only_cisco_reports_a_profile_template() -> None:
+    """Of the two implemented collectors only UCS reads a profile template:
+    a BMC has none, and the OME/OneView collectors that would report their
+    own do not exist.
+    """
+    for s in generate_servers(seed=42, count=300):
+        if s.vendor != "cisco":
+            assert s.profile_template_name is None
             continue
-        if s.vendor == "cisco":
+        if s.profile_template_name is not None:
             # UCS Manager references its Service Profile Template by name.
             assert s.profile_template_external_id == s.profile_template_name
-        elif s.vendor == "hp":
-            assert s.profile_template_external_id is not None
-            assert s.profile_template_external_id.startswith("/rest/server-profile-templates/")
-        elif s.vendor == "dell":
-            assert s.profile_template_external_id is not None
-            assert s.profile_template_external_id.isdigit()

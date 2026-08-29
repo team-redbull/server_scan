@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.domain.enums import HealthSeverity
 from app.domain.models.server import Server
 
 
@@ -24,7 +25,12 @@ def extract_facts(server: Server) -> dict[str, Any]:
         "memory.total_bytes": server.hardware.memory.total_bytes,
         "storage.drive_count": len(server.hardware.storage.drives),
         "storage.drive_healths": drive_healths,
-        "storage.failed_drive_count": sum(1 for h in drive_healths if h == "FAILED"),
+        # CRITICAL, not "FAILED": both collectors normalize a dead drive
+        # onto `HealthSeverity` at the provider boundary, so a policy
+        # counting "FAILED" counted nothing outside fake data.
+        "storage.failed_drive_count": sum(
+            1 for h in drive_healths if h == HealthSeverity.CRITICAL.value
+        ),
         "network.interface_link_states": link_states,
         "connectivity.fabric_paths_total": server.connectivity.facts.fabric_paths_total,
         "connectivity.fabric_paths_up": server.connectivity.facts.fabric_paths_up,

@@ -454,6 +454,7 @@ class IngestService:
                 admin_state=a.admin_state,
                 oper_state=a.oper_state,
                 speed_mbps=a.speed_mbps,
+                interface_kind=a.interface_kind,
                 last_seen=now,
             )
             for a in ps.attachments

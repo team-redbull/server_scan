@@ -1,7 +1,7 @@
 """`GET /api/v1/sites` — the fixed site list and per-site statistics.
 
 Sites are a closed enum (`app.domain.enums.SiteCode`), not rows a user
-creates, so this endpoint always returns all five in a stable order
+creates, so this endpoint always returns every one in a stable order
 whether or not any server currently reports one. A site with zero servers
 renders as an empty site, never as a missing card — "site four has
 nothing in it" and "site four does not exist" are different facts and the
@@ -29,6 +29,7 @@ from app.config import Settings, get_settings
 from app.dependencies import get_mongo_holder, get_redis_holder
 from app.domain.enums import HealthSeverity, SiteCode, Vendor
 from app.domain.ports.repository import SiteBreakdownRow
+from app.domain.value_objects.site import SITE_DISPLAY_NAMES
 from app.infrastructure.mongodb.client import MongoClientHolder
 from app.infrastructure.mongodb.server_repository import MongoServerRepository
 from app.infrastructure.redis.cache import CacheClient
@@ -86,10 +87,10 @@ def _pivot(rows: list[SiteBreakdownRow]) -> list[SiteStats]:
 
     Every site in the enum is seeded first so the shape of the response
     does not depend on what happens to be in the database — the UI can
-    render five cards without null-checking each one.
+    render a card per site without null-checking each one.
     """
     stats: dict[str, SiteStats] = {
-        member.value: _empty_stats(member.value, name=f"Site {member.value.capitalize()}")
+        member.value: _empty_stats(member.value, name=SITE_DISPLAY_NAMES[member])
         for member in SiteCode
     }
     stats[UNASSIGNED_SITE_ID] = _empty_stats(UNASSIGNED_SITE_ID, name="Unassigned")

@@ -38,7 +38,7 @@ from app.infrastructure.mongodb.manager_repository import MongoManagerRepository
 from app.infrastructure.mongodb.server_repository import MongoServerRepository
 from app.infrastructure.mongodb.site_repository import MongoSiteRepository
 from app.infrastructure.providers.fake.generator import list_managers, list_sites
-from app.infrastructure.providers.fake.provider import FakeProvider
+from app.infrastructure.providers.fake.provider import fake_providers
 
 logger = structlog.get_logger(__name__)
 
@@ -93,22 +93,28 @@ async def _run(*, count: int, seed: int) -> None:
             ),
             audit=AuditService(repo=MongoAuditEventRepository(mongo)),
         )
-        provider = FakeProvider(seed=seed, count=count)
-
-        summary = await ingest_service.ingest(
-            provider, sites=list_sites(), managers=list_managers()
-        )
+        # One pass per collector: `Server.source_provider` is stamped from
+        # the provider, so a single pass would label the whole fake fleet
+        # with one collector that never found most of it.
+        fetched = created = updated = errors = 0
+        for provider in fake_providers(seed=seed, count=count):
+            summary = await ingest_service.ingest(
+                provider, sites=list_sites(), managers=list_managers()
+            )
+            fetched += summary.fetched
+            created += summary.created
+            updated += summary.updated
+            errors += summary.errors
 
         logger.info(
             "seed.completed",
-            fetched=summary.fetched,
-            created=summary.created,
-            updated=summary.updated,
-            errors=summary.errors,
+            fetched=fetched,
+            created=created,
+            updated=updated,
+            errors=errors,
         )
         print(  # CLI output, distinct from the structured log line above
-            f"fetched={summary.fetched} created={summary.created} "
-            f"updated={summary.updated} errors={summary.errors}"
+            f"fetched={fetched} created={created} updated={updated} errors={errors}"
         )
     finally:
         await mongo.close()

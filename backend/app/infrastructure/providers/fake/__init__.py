@@ -1,3 +1,3 @@
-from app.infrastructure.providers.fake.provider import FakeProvider
+from app.infrastructure.providers.fake.provider import FakeProvider, fake_providers
 
-__all__ = ["FakeProvider"]
+__all__ = ["FakeProvider", "fake_providers"]

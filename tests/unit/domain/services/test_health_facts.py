@@ -22,6 +22,9 @@ def test_extract_facts_on_empty_server_returns_zeroed_facts() -> None:
 
 
 def test_extract_facts_counts_failed_drives() -> None:
+    """CRITICAL is the vocabulary both collectors normalize a dead drive
+    onto — counting anything else counts nothing outside fake data.
+    """
     server = Server(
         _id="srv_x",
         name="x",
@@ -31,9 +34,9 @@ def test_extract_facts_counts_failed_drives() -> None:
         hardware=Hardware(
             storage=Storage(
                 drives=[
-                    StorageDrive(id="d1", health="FAILED"),
-                    StorageDrive(id="d2", health="OK"),
-                    StorageDrive(id="d3", health="FAILED"),
+                    StorageDrive(id="d1", health="CRITICAL"),
+                    StorageDrive(id="d2", health="HEALTHY"),
+                    StorageDrive(id="d3", health="CRITICAL"),
                 ]
             )
         ),
@@ -41,7 +44,7 @@ def test_extract_facts_counts_failed_drives() -> None:
     facts = extract_facts(server)
     assert facts["storage.drive_count"] == 3
     assert facts["storage.failed_drive_count"] == 2
-    assert facts["storage.drive_healths"] == ["FAILED", "OK", "FAILED"]
+    assert facts["storage.drive_healths"] == ["CRITICAL", "HEALTHY", "CRITICAL"]
 
 
 def test_extract_facts_reads_connectivity_facts_directly() -> None:

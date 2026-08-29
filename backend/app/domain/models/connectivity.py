@@ -36,6 +36,10 @@ class ConnectivityAttachment(BaseModel):
     admin_state: str = "UNKNOWN"
     oper_state: str = "UNKNOWN"  # UP | DOWN | UNKNOWN
     speed_mbps: int | None = None
+    # "PHYSICAL" (a cabled uplink) or "VNIC" (an OS-facing NIC carved out
+    # of one). Both report the same fabric, so only the physical ones are
+    # fabric *paths* — see `compute_connectivity_facts`.
+    interface_kind: str = "PHYSICAL"
     last_seen: datetime | None = None
 
 
@@ -62,12 +66,26 @@ def compute_connectivity_facts(attachments: list[ConnectivityAttachment]) -> Con
     attachments. Called by the ingestion pipeline immediately after
     normalizing attachments, so the stored facts are never allowed to
     drift from the attachments they were derived from.
+
+    Only `PHYSICAL` attachments count. A UCS server reports its vNICs
+    alongside the ports they ride on, and counting both would report a
+    2-up server as having six fabric paths and, when a port drops, six
+    down — which the seeded `connectivity.fabric_paths_down` policies
+    would read as a far worse outage than happened.
+
+    Args:
+        attachments (list[ConnectivityAttachment]): Every attachment
+            reported for one server, of both kinds.
+
+    Returns:
+        ConnectivityFacts: The derived scalars health policies evaluate.
     """
-    up = sum(1 for a in attachments if a.oper_state == "UP")
-    down = sum(1 for a in attachments if a.oper_state == "DOWN")
-    fabrics_present = sorted({a.fabric for a in attachments if a.fabric is not None})
+    physical = [a for a in attachments if a.interface_kind == "PHYSICAL"]
+    up = sum(1 for a in physical if a.oper_state == "UP")
+    down = sum(1 for a in physical if a.oper_state == "DOWN")
+    fabrics_present = sorted({a.fabric for a in physical if a.fabric is not None})
     return ConnectivityFacts(
-        fabric_paths_total=len(attachments),
+        fabric_paths_total=len(physical),
         fabric_paths_up=up,
         fabric_paths_down=down,
         fabrics_present=fabrics_present,

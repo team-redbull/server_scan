@@ -26,10 +26,13 @@ test.describe("Sites overview", () => {
     // Every row on a site-filtered list must belong to that site. The site
     // is not a column any more — it is inside the hostname — so this is
     // also what proves the name-derived site actually agrees with the
-    // stored value the filter queries on.
+    // stored value the filter queries on. The exception is the seeded
+    // siteless family: on a Cisco server the site comes from its service
+    // profile's org instead, and its hostname carries no token at all.
     const names = await page.locator("tbody tr td:first-child").allInnerTexts();
     expect(names.length).toBeGreaterThan(0);
     for (const name of names) {
+      if (name.toLowerCase().startsWith("random-server-")) continue;
       expect(name.toLowerCase()).toContain("five");
     }
   });

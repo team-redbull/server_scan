@@ -49,6 +49,17 @@ _BY_VALUE = {member.value: member for member in SiteCode}
 
 _MAX_TOKENS = max(len(_SEPARATORS.split(value)) for value in _BY_VALUE)
 
+# What a site is called in the UI. Lives beside the enum rather than in
+# the API, because the fake seeder writes `Site` documents with the same
+# names and the two drifting apart is exactly the sort of thing nothing
+# fails on until a human notices the wrong label.
+SITE_DISPLAY_NAMES: dict[SiteCode, str] = {
+    SiteCode.NYC: "New York City",
+    SiteCode.TLV: "Tel Aviv",
+    SiteCode.BAT_YAM: "Bat Yam",
+    SiteCode.FIVE: "Site Five",
+}
+
 
 def parse_site_code(name: str | None) -> SiteCode | None:
     """The `SiteCode` embedded in `name`, or `None` if it holds none.

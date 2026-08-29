@@ -8,7 +8,7 @@ from __future__ import annotations
 import pytest
 
 from app.domain.enums import SiteCode
-from app.domain.value_objects.site import parse_site_code
+from app.domain.value_objects.site import SITE_DISPLAY_NAMES, parse_site_code
 
 pytestmark = pytest.mark.unit
 
@@ -83,3 +83,10 @@ def test_every_site_code_is_parseable_from_a_realistic_name() -> None:
     """
     for member in SiteCode:
         assert parse_site_code(f"ocp4-prod-{member.value}-infra-01") is member
+
+
+def test_every_site_has_a_display_name() -> None:
+    """`GET /api/v1/sites` indexes this map by every `SiteCode`, so a site
+    added without a name here is a 500 on the landing page.
+    """
+    assert set(SITE_DISPLAY_NAMES) == set(SiteCode)
