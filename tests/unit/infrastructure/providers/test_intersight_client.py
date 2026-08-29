@@ -251,7 +251,7 @@ async def test_a_401_names_every_cause_it_cannot_distinguish() -> None:
     await client.aclose()
 
     message = str(excinfo.value)
-    assert "INVENTORY_INTERSIGHT_USERNAME" in message
+    assert "INVENTORY_INTERSIGHT_API_KEY_ID" in message
     assert "expired" in message and "revoked" in message
 
 
@@ -381,7 +381,7 @@ async def test_an_error_surfaces_intersights_own_message_and_trace_id() -> None:
     assert "authorization header is invalid" in message
     assert "gYSrkd4GlTKLsQjg6vDZ" in message
     # Our own guidance survives alongside it.
-    assert "INVENTORY_INTERSIGHT_USERNAME" in message
+    assert "INVENTORY_INTERSIGHT_API_KEY_ID" in message
 
 
 @pytest.mark.asyncio
@@ -393,3 +393,60 @@ async def test_an_error_without_a_body_still_produces_our_guidance() -> None:
     with pytest.raises(IntersightForbiddenError, match="Read-Only"):
         await client.health_check()
     await client.aclose()
+
+
+# --- messageId tells apart faults that share a status code ------------
+#
+# Confirmed against the live intersight.com service on 2026-08-29 by
+# sending deliberately broken headers: a malformed Authorization answers
+# `iam_apikey_signature_invalid`, a well-formed one whose key cannot be
+# verified answers `iam_apikey_authheader_invalid`, and sending none at
+# all answers `iam_cookie_invalid`. All three are HTTP 401.
+
+
+@pytest.mark.asyncio
+async def test_a_malformed_header_blames_the_collector_not_the_key() -> None:
+    """`iam_apikey_signature_invalid` means Intersight could not parse
+    what we sent, so the operator's key is very likely fine and sending
+    them to check it wastes their time.
+    """
+    client = _client(
+        lambda request: httpx.Response(
+            401, json={"messageId": "iam_apikey_signature_invalid", "message": "bad header"}
+        )
+    )
+    with pytest.raises(IntersightAuthError) as excinfo:
+        await client.health_check()
+    await client.aclose()
+
+    message = str(excinfo.value)
+    assert "collector's request signing" in message
+    assert "not in your API key" in message
+    # It must NOT send them off checking credentials.
+    assert "INVENTORY_INTERSIGHT_API_KEY_ID" not in message
+
+
+@pytest.mark.asyncio
+async def test_a_missing_header_points_at_something_stripping_it() -> None:
+    """`iam_cookie_invalid` means no credential arrived at all — the
+    fault is in transit, not in the key or the signing.
+    """
+    client = _client(lambda request: httpx.Response(401, json={"messageId": "iam_cookie_invalid"}))
+    with pytest.raises(IntersightAuthError, match="stripped the Authorization header"):
+        await client.health_check()
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_an_unverifiable_key_still_gets_the_credential_checklist() -> None:
+    """`iam_apikey_authheader_invalid` is the one that really does mean
+    "check your key" — the header parsed, the key did not verify.
+    """
+    client = _client(
+        lambda request: httpx.Response(401, json={"messageId": "iam_apikey_authheader_invalid"})
+    )
+    with pytest.raises(IntersightAuthError) as excinfo:
+        await client.health_check()
+    await client.aclose()
+
+    assert "INVENTORY_INTERSIGHT_API_KEY_ID" in str(excinfo.value)

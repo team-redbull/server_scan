@@ -868,6 +868,18 @@ equivalent.
   running service rather than the contract. The client surfaces
   `message` and `traceId` in its own error text; `traceId` is what Cisco
   needs to find a specific request.
+- **`messageId` tells three 401s apart.** *Provenance: deliberately
+  broken requests against the live `intersight.com` on 2026-08-29.*
+  `iam_cookie_invalid` = no `Authorization` header arrived at all;
+  `iam_apikey_signature_invalid` = the header could not be parsed;
+  `iam_apikey_authheader_invalid` = the header parsed but the key could
+  not be verified. Our own well-formed header always produces the third,
+  even with corrupted signature bytes, a two-hour-stale `Date`, or a
+  signature covering a different path — which is what proves the header
+  construction itself is accepted. The client branches on these.
+- **Authentication is checked before routing.** A nonsense resource path
+  returns the same 401 as a real one, so resource paths cannot be
+  validated without a working key. *Same provenance.*
 - **Region may matter.** Intersight's 401 text asks the operator to
   "verify the API key and associated account region". Nothing here models
   a region; a tenant in a non-default region would presumably need a

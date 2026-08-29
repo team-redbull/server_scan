@@ -84,8 +84,8 @@ not verify, import the CA — do not look for a flag.
 
 ```bash
 export INVENTORY_INTERSIGHT_IP=...
-export INVENTORY_INTERSIGHT_USERNAME='<API Key ID>'
-export INVENTORY_INTERSIGHT_PASSWORD="$(cat ~/intersight-key.pem)"
+export INVENTORY_INTERSIGHT_API_KEY_ID='<API Key ID>'
+export INVENTORY_INTERSIGHT_API_KEY_PEM="$(cat ~/intersight-key.pem)"
 
 uv run python -m tools.verify_intersight
 ```
@@ -133,7 +133,7 @@ GOOD — every collectable server resolved a profile name, and
 
 | Output | Cause | Fix |
 |---|---|---|
-| `not a PEM private key` | `_PASSWORD` holds a password | It is a PEM. See section 1. |
+| `not a PEM private key` | `_API_KEY_PEM` holds something else | It is a PEM. See section 1. |
 | `could not be parsed` | Truncated or mangled PEM | Re-copy including the BEGIN/END lines. |
 | `passphrase-protected` | Encrypted key | Supply an unencrypted PEM. |
 | `HTTP 401 ... clock is +N s` | Node clock drift | Fix NTP on the node, then retry. |
@@ -266,12 +266,12 @@ collectors:
     enabled: true
     ip: "isight.corp.example.com"
     apiKeyId: "..."
-    privateKey: ""   # pass with --set-file, not in a committed file
+    apiKeyPem: ""    # pass with --set-file, not in a committed file
 ```
 
 ```bash
 helm upgrade --install inventory ./deploy/helm/server-inventory \
-  --set-file collectors.intersight.privateKey=/path/to/intersight-key.pem
+  --set-file collectors.intersight.apiKeyPem=/path/to/intersight-key.pem
 ```
 
 Everything the collector needs comes from `values.yaml`; the chart

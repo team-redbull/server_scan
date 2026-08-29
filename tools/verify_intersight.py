@@ -16,8 +16,8 @@ verdict, and exits.
 
     uv run python -m tools.verify_intersight
 
-Reads the same `INVENTORY_INTERSIGHT_IP`/`_USERNAME`/`_PASSWORD` the
-collector does, so if this works the collector can connect too.
+Reads the same `INVENTORY_INTERSIGHT_IP`/`_API_KEY_ID`/`_API_KEY_PEM`
+the collector does, so if this works the collector can connect too.
 """
 
 from __future__ import annotations
@@ -135,15 +135,16 @@ async def _run(*, show_names: int, sample: int) -> int:
         return 1
 
     _header("1. CONNECTION")
+    api_key_id, api_key_pem = connection.username, connection.password
     _p(f"endpoint : {connection.endpoint}")
-    _p(f"key id   : {connection.username}")
-    _p(f"key      : {'PEM supplied' if '-----BEGIN' in connection.password else 'NOT A PEM'}")
+    _p(f"key id   : {api_key_id}")
+    _p(f"key      : {'PEM supplied' if '-----BEGIN' in api_key_pem else 'NOT A PEM'}")
 
     try:
         client = IntersightClient(
             endpoint=connection.endpoint,
-            key_id=connection.username,
-            private_key_pem=connection.password,
+            key_id=api_key_id,
+            private_key_pem=api_key_pem,
             ca_bundle=settings.intersight_ca_bundle or None,
             page_size=min(sample, settings.intersight_page_size),
         )

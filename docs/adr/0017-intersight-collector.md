@@ -109,11 +109,33 @@ change.
 
 ---
 
-## Decision 2 — The API secret is a PEM in an env var, and the field names stay
+## Decision 2 — The API secret is a PEM in an env var, named for what it is
 
-**Decision: keep `INVENTORY_INTERSIGHT_USERNAME`/`_PASSWORD`
-carrying (API Key ID, PEM private key). No mounted volume. Fix the
-wording everywhere it is described as a password.**
+**Decision: `INVENTORY_INTERSIGHT_API_KEY_ID` and
+`INVENTORY_INTERSIGHT_API_KEY_PEM`. No mounted volume.**
+
+> **Revised 2026-08-29, after the user reviewed it.** This decision
+> originally kept the `_USERNAME`/`_PASSWORD` names every other vendor
+> uses, on the grounds that one uniform shape per vendor is what keeps
+> the Secret template uniform, and that the confusion was "a
+> documentation problem". That reasoning was wrong in a specific way:
+> the *shape* is what the Secret template needs (a pair of values), not
+> the *names*, and the pair is still a pair. Calling an API key a
+> password made the wrong action — pasting an account password — the
+> obvious first guess, and no amount of surrounding documentation fixes a
+> variable whose name asserts something false at the point of use. The
+> original text is kept below the line for the record.
+>
+> `_LOGIN_FIELDS` still maps `INTERSIGHT` to a two-field tuple, so
+> `ManagerConnection` and the Secret template are untouched; only which
+> settings fields that tuple names has changed, which is what makes
+> `ManagerNotConfiguredError` print the right variable. `IntersightProvider`
+> now takes `api_key_id`/`api_key_pem` explicitly rather than a
+> `ManagerConnection`, so the word "username" survives at exactly one
+> adaptation point in `run_collector`, with a comment saying why.
+>
+> Breaking for anyone who had configured it — nobody has, since the
+> collector did not exist until this ADR.
 
 Intersight has **no username/password path for the REST API at all**. It
 is strictly `(API Key ID, PEM private key)`, and every request is signed;
@@ -135,12 +157,13 @@ the requirement that a deployment be configured entirely from
 `values.yaml` with no pre-existing Secret** — `collectors.existingSecret`
 stays opt-in and empty, exactly as it is for every other vendor today.
 
-Not renaming the settings fields is deliberate laziness with a reason:
-the `username`/`password` shape is already load-bearing in five files
-(`settings.py`, `credentials/env.py`, `.env.example`, `values.yaml`,
-`collector-credentials-secret.yaml`), `_LOGIN_FIELDS` is keyed on it, and
-one uniform shape per vendor is what makes the Secret template uniform.
-The confusion is a documentation problem and gets a documentation fix.
+*(Superseded, kept for the record.)* ~~Not renaming the settings fields
+is deliberate laziness with a reason: the `username`/`password` shape is
+already load-bearing in five files (`settings.py`, `credentials/env.py`,
+`.env.example`, `values.yaml`, `collector-credentials-secret.yaml`),
+`_LOGIN_FIELDS` is keyed on it, and one uniform shape per vendor is what
+makes the Secret template uniform. The confusion is a documentation
+problem and gets a documentation fix.~~ See the revision note above.
 
 **We do not support a passphrase-encrypted key in v1.** The SDK supports
 one (`private_key_passphrase`), but a passphrase would need a fourth
@@ -460,11 +483,47 @@ expected:
   the endpoint may need to be a regional hostname rather than
   `intersight.com` — untested, and listed under UNVERIFIED below.
 
-What this does **not** prove: that any signature is *accepted*. A
-registered key is required for that, and the distinction between "header
-malformed" and "key unknown" cannot be drawn from an unregistered key's
-401. The offline byte-identical comparison against Cisco's own SDK
-(below) is what carries that weight.
+### A second probe settled the "is our header even parsed" question
+
+Six deliberately-broken requests, same day, same unregistered key. All
+answered HTTP 401, but **`messageId` distinguishes them**:
+
+| What was sent | `messageId` |
+|---|---|
+| No `Authorization` header at all | `iam_cookie_invalid` |
+| `Authorization: total garbage` | `iam_apikey_signature_invalid` |
+| `Signature keyId="..."` and nothing else | `iam_apikey_signature_invalid` |
+| **Our header**, unknown key | `iam_apikey_authheader_invalid` |
+| **Our header**, signature bytes zeroed | `iam_apikey_authheader_invalid` |
+| **Our header**, `Date` back-dated 2 hours | `iam_apikey_authheader_invalid` |
+| **Our header**, signed for a different path | `iam_apikey_authheader_invalid` |
+
+A structurally malformed header is rejected with a *different* code than
+ours. **Intersight therefore parses our `Authorization` header
+successfully** and fails at key lookup — which is live evidence that the
+`hs2019` construction is structurally correct, independent of the offline
+SDK comparison.
+
+The client was changed again as a result: those three `messageId` values
+mean three different things to an operator, and it now says so. A
+malformed header is a bug in *this collector* and the message says the
+key is probably fine; `iam_cookie_invalid` means something in transit
+stripped the header; only `iam_apikey_authheader_invalid` warrants the
+check-your-credentials list.
+
+What this still does **not** prove: that any signature is *accepted*. A
+registered key is required for that — with an unknown key id, a wrong
+signature and an unknown key are indistinguishable, as the zeroed-signature
+and back-dated rows above show. The offline byte-identical comparison
+against Cisco's own SDK is what carries that weight.
+
+**Also learned, and a limit on what any keyless probe can do:
+authentication is checked before routing.** A request to
+`/api/v1/compute/NotARealThing` returns exactly the same 401 as a real
+path, so **resource paths cannot be validated against the live service
+without a tenant**. They are verified against the SDK's own
+`endpoint_path` definitions instead, and remain unproven until a real
+run.
 
 What *has* been proved offline:
 

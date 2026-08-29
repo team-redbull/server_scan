@@ -106,13 +106,13 @@ class Settings(BaseSettings):
     # `INVENTORY_UCS_MANAGER_IP`. In Kubernetes these arrive from a
     # Secret via `envFrom` — see `deploy/helm/server-inventory/values.yaml`.
     #
-    # Cisco Intersight keeps the same three fields for a uniform values
-    # file, but they mean something different there: it signs requests
-    # with an API key rather than logging in, so `username` carries the
-    # API Key ID and `password` the secret key. `ip` is `intersight.com`
-    # for the SaaS tenant, or the appliance FQDN for Connected Virtual
-    # Appliance. Called out here and in values.yaml because handing
-    # Intersight an account password would look plausible and never work.
+    # Cisco Intersight does not have a login at all, and its settings say
+    # so rather than reusing the username/password shape every other
+    # vendor here uses: it signs each request with an API key, so it needs
+    # a key id and a PEM, and calling those a username and a password
+    # made an operator's first guess — an account password — look
+    # plausible. `ip` is `intersight.com` for the SaaS tenant, or the
+    # appliance FQDN for an on-prem appliance.
     ucs_manager_username: str = ""
     ucs_manager_password: str = ""
 
@@ -128,14 +128,15 @@ class Settings(BaseSettings):
     ome_username: str = ""
     ome_password: str = ""
 
-    # username = API Key ID, password = the key's PEM private half — see
-    # the note above and docs/adr/0017-intersight-collector.md. The PEM is
-    # multi-line and rides in the environment like any other value; there
-    # is no key file to mount, because the signing library accepts the key
-    # as a string.
     intersight_ip: str = ""
-    intersight_username: str = ""
-    intersight_password: str = ""
+    # The API Key ID exactly as Intersight shows it beside the key: a
+    # `/`-joined string, not a username.
+    intersight_api_key_id: str = ""
+    # That key's PEM private half, unencrypted. Multi-line, and it rides
+    # in the environment like any other value — there is no key file to
+    # mount, because the signer accepts the key as a string. See
+    # docs/adr/0017-intersight-collector.md, "Decision 2".
+    intersight_api_key_pem: str = ""
 
     # Which `ManagementMode` values the Intersight collector ingests, as
     # a comma-separated list. `UCSM` is excluded by default and that is

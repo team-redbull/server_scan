@@ -248,10 +248,10 @@ collectors:
   # site must point `ip` at an on-prem Private Virtual Appliance instead;
   # the Connected Virtual Appliance still calls home and does not help.
   #
-  # AUTHENTICATION IS NOT A PASSWORD. Intersight has no password login
-  # for its API: it signs every request with an API key. Mint one under
-  # Settings > API Keys with a Read-Only role, and paste the two halves
-  # below. Everything the collector needs is in this file — no
+  # THERE IS NO LOGIN HERE. Intersight signs every request with an API
+  # key, so the credential is `apiKeyId` + `apiKeyPem`, not a username
+  # and a password. Mint the key under Settings > API Keys with a
+  # Read-Only role. Everything the collector needs is in this file — no
   # pre-existing Secret, and no key file to mount.
   intersight:
     enabled: false
@@ -261,19 +261,20 @@ collectors:
     ip: ""
 
     # The API Key ID exactly as Intersight displays it beside the key.
+    # A `/`-joined string, not a username.
     apiKeyId: ""
 
-    # The key's PEM private half, unencrypted, as a YAML literal block
-    # (`privateKey: |`, then the whole PEM including its BEGIN and END
+    # That key's PEM private half, unencrypted, as a YAML literal block
+    # (`apiKeyPem: |`, then the whole PEM including its BEGIN and END
     # lines, indented). Both API key generations work — v2 keys are RSA,
     # v3 keys are EC — and the collector picks the signing algorithm from
     # the PEM header itself, so there is nothing else to configure.
     #
     # Prefer NOT pasting the key here at all: pass it at install time
-    # with `--set-file collectors.intersight.privateKey=/path/to/key.pem`,
+    # with `--set-file collectors.intersight.apiKeyPem=/path/to/key.pem`,
     # or from a `-f secrets.yaml` that is not in git. A committed PEM
     # fails `tests/unit/test_no_committed_secrets.py`, deliberately.
-    privateKey: ""
+    apiKeyPem: ""
 
     # Which servers to collect, by how Intersight manages them. `UCSM` is
     # deliberately absent: those servers are exactly the ones the

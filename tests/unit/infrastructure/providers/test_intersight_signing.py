@@ -201,7 +201,7 @@ def test_an_rsa_signature_is_reproducible_for_a_fixed_key_and_clock() -> None:
 
 def test_a_password_instead_of_a_pem_says_so() -> None:
     """The single most likely misconfiguration, given the field is called
-    `INVENTORY_INTERSIGHT_PASSWORD`.
+    `INVENTORY_INTERSIGHT_API_KEY_PEM`.
     """
     with pytest.raises(IntersightKeyError, match="not a PEM private key"):
         IntersightSigner(key_id=_KEY_ID, private_key_pem="hunter2")
@@ -209,7 +209,7 @@ def test_a_password_instead_of_a_pem_says_so() -> None:
 
 def test_a_missing_key_id_says_which_variable_to_set() -> None:
     """An operator who set the PEM but not the id gets told which."""
-    with pytest.raises(IntersightKeyError, match="INVENTORY_INTERSIGHT_USERNAME"):
+    with pytest.raises(IntersightKeyError, match="INVENTORY_INTERSIGHT_API_KEY_ID"):
         IntersightSigner(key_id="   ", private_key_pem=_rsa_pem())
 
 

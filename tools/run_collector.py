@@ -195,9 +195,15 @@ def _intersight_provider(
     modes = tuple(
         mode.strip() for mode in settings.intersight_management_modes.split(",") if mode.strip()
     )
+    # `ManagerConnection` carries a username/password pair because most
+    # vendors have one. Intersight does not: the resolver filled those two
+    # slots from INVENTORY_INTERSIGHT_API_KEY_ID/_PEM, and they are named
+    # for what they are from here on.
     return IntersightProvider(
         manager=manager,
-        credentials=credentials,
+        endpoint=credentials.endpoint,
+        api_key_id=credentials.username,
+        api_key_pem=credentials.password,
         connect_timeout=timeout_seconds,
         read_timeout=settings.intersight_read_timeout_seconds,
         ca_bundle=settings.intersight_ca_bundle or None,

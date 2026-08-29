@@ -354,6 +354,23 @@ class IntersightClient:
             return ""
         return f' Intersight said: "{message}"' + (f" (traceId {trace})" if trace else "")
 
+    @staticmethod
+    def _message_id(response: httpx.Response) -> str:
+        """
+        Intersight's own machine-readable reason for a failure.
+
+        Args:
+            response (httpx.Response): The failed response.
+
+        Returns:
+            str: The `messageId`, or `""` when the body had none.
+        """
+        try:
+            body = response.json()
+        except ValueError:
+            return ""
+        return str(body.get("messageId") or "") if isinstance(body, dict) else ""
+
     def _auth_message(self, response: httpx.Response) -> str:
         """
         Explain a 401 as far as a 401 can be explained.
@@ -371,6 +388,30 @@ class IntersightClient:
         Returns:
             str: The message for the raised error.
         """
+        # Intersight distinguishes these two in `messageId`, which is worth
+        # more than anything this collector could infer. Confirmed against
+        # the live service on 2026-08-29: a structurally malformed
+        # `Authorization` header answers `iam_apikey_signature_invalid`,
+        # while a well-formed one whose key cannot be verified answers
+        # `iam_apikey_authheader_invalid` — so the first means the fault is
+        # in this collector, and the second means it is in the credential.
+        message_id = self._message_id(response)
+        if message_id == "iam_apikey_signature_invalid":
+            return (
+                "Intersight could not parse this request's Authorization header "
+                "(HTTP 401, iam_apikey_signature_invalid). That is a fault in the "
+                "collector's request signing, not in your API key — the key and its id "
+                "are very likely fine. Please report it with the traceId below."
+                + self._api_error(response)
+            )
+        if message_id == "iam_cookie_invalid":
+            return (
+                "Intersight received no API key credentials at all (HTTP 401, "
+                "iam_cookie_invalid) — it fell back to looking for a session cookie. "
+                "Something stripped the Authorization header in transit, such as a proxy."
+                + self._api_error(response)
+            )
+
         skew = self._clock_skew_seconds(response)
         if skew is not None and abs(skew) > _MAX_CLOCK_SKEW_SECONDS:
             return (
@@ -383,9 +424,9 @@ class IntersightClient:
             "Intersight rejected the request signature (HTTP 401). Intersight answers an "
             "expired key, a revoked key, a wrong API Key ID and a key that does not match "
             "that id identically, so check in that order: that "
-            "INVENTORY_INTERSIGHT_USERNAME is the API Key ID shown in Settings > API Keys, "
-            "that INVENTORY_INTERSIGHT_PASSWORD is that same key's private PEM, and that "
-            "the key is still listed and unexpired." + self._api_error(response)
+            "INVENTORY_INTERSIGHT_API_KEY_ID is the API Key ID shown in Settings > API "
+            "Keys, that INVENTORY_INTERSIGHT_API_KEY_PEM is that same key's private PEM, "
+            "and that the key is still listed and unexpired." + self._api_error(response)
         )
 
     @staticmethod

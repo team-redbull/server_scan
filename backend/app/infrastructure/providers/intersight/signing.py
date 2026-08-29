@@ -75,9 +75,9 @@ def load_private_key(pem: str) -> PrivateKey:
     text = pem.strip()
     if not text.startswith("-----BEGIN"):
         raise IntersightKeyError(
-            "INVENTORY_INTERSIGHT_PASSWORD is not a PEM private key — it must hold the "
-            "whole key including its '-----BEGIN ... PRIVATE KEY-----' line, not an "
-            "account password. Intersight has no password login for its API."
+            "INVENTORY_INTERSIGHT_API_KEY_PEM is not a PEM private key — it must hold "
+            "the whole key including its '-----BEGIN ... PRIVATE KEY-----' line. "
+            "Intersight has no password login for its API; the credential is an API key."
         )
     try:
         key = serialization.load_pem_private_key(text.encode(), password=None)
@@ -140,7 +140,7 @@ class IntersightSigner:
         """
         if not key_id.strip():
             raise IntersightKeyError(
-                "No Intersight API Key ID — set INVENTORY_INTERSIGHT_USERNAME to the "
+                "No Intersight API Key ID — set INVENTORY_INTERSIGHT_API_KEY_ID to the "
                 "key id shown beside the key in Intersight's Settings > API Keys."
             )
         self._key_id = key_id.strip()

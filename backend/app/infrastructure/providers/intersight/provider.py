@@ -23,7 +23,6 @@ import structlog
 
 from app.domain.enums import ManagerType
 from app.domain.models.manager import Manager
-from app.domain.ports.credentials import ManagerConnection
 from app.domain.ports.provider import ProviderServer
 from app.infrastructure.providers.intersight import mapping
 from app.infrastructure.providers.intersight.client import (
@@ -173,7 +172,9 @@ class IntersightProvider:
         self,
         *,
         manager: Manager,
-        credentials: ManagerConnection,
+        endpoint: str,
+        api_key_id: str,
+        api_key_pem: str,
         connect_timeout: float = 10.0,
         read_timeout: float = 60.0,
         ca_bundle: str | None = None,
@@ -186,9 +187,10 @@ class IntersightProvider:
         """
         Args:
             manager (Manager): The `Manager` projection this run writes.
-            credentials (ManagerConnection): `endpoint` is the host,
-                `username` the API Key ID and `password` the key's PEM —
-                Intersight signs requests rather than logging in.
+            endpoint (str): The bare host to sign requests against.
+            api_key_id (str): The API Key ID Intersight shows beside the
+                key. Not a username — Intersight has no login.
+            api_key_pem (str): That key's unencrypted PEM private half.
             connect_timeout (float): Seconds to establish a connection.
             read_timeout (float): Seconds to wait for one page.
             ca_bundle (str | None): Extra trusted PEM bundle, for an
@@ -205,7 +207,9 @@ class IntersightProvider:
             client_factory (Callable[[], Any] | None): Injected in tests.
         """
         self._manager = manager
-        self._credentials = credentials
+        self._endpoint = endpoint
+        self._api_key_id = api_key_id
+        self._api_key_pem = api_key_pem
         self._connect_timeout = connect_timeout
         self._read_timeout = read_timeout
         self._ca_bundle = ca_bundle
@@ -241,9 +245,9 @@ class IntersightProvider:
         if self._client_factory is not None:
             return self._client_factory()
         return IntersightClient(
-            endpoint=self._credentials.endpoint,
-            key_id=self._credentials.username,
-            private_key_pem=self._credentials.password,
+            endpoint=self._endpoint,
+            key_id=self._api_key_id,
+            private_key_pem=self._api_key_pem,
             connect_timeout=self._connect_timeout,
             read_timeout=self._read_timeout,
             ca_bundle=self._ca_bundle,

@@ -190,8 +190,8 @@ read-only pre-flight:
 
 ```bash
 export INVENTORY_INTERSIGHT_IP=intersight.com          # or an appliance FQDN
-export INVENTORY_INTERSIGHT_USERNAME='<API Key ID>'    # NOT a username
-export INVENTORY_INTERSIGHT_PASSWORD="$(cat ~/intersight-key.pem)"
+export INVENTORY_INTERSIGHT_API_KEY_ID='<API Key ID>'   # there is no username
+export INVENTORY_INTERSIGHT_API_KEY_PEM="$(cat ~/intersight-key.pem)"
 
 # Signs one GET, reports what the tenant holds, and checks TotalMemory
 # against the sum of a real server's DIMMs. Writes nothing:

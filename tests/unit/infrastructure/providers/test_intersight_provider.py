@@ -22,7 +22,6 @@ import pytest
 from app.domain.enums import ManagerType
 from app.domain.models.common import AuditFields
 from app.domain.models.manager import Manager
-from app.domain.ports.credentials import ManagerConnection
 from app.infrastructure.providers.intersight.client import IntersightError
 from app.infrastructure.providers.intersight.provider import IntersightProvider
 
@@ -194,7 +193,9 @@ def _provider(client: _FakeClient, **kwargs: Any) -> IntersightProvider:
             enabled=True,
             audit=AuditFields.new(),
         ),
-        credentials=ManagerConnection(endpoint="intersight.com", username="a/b/c", password="pem"),
+        endpoint="intersight.com",
+        api_key_id="a/b/c",
+        api_key_pem="pem",
         client_factory=lambda: client,
         **kwargs,
     )

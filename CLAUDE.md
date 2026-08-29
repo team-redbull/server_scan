@@ -217,8 +217,9 @@ read `docs/adr/0017-intersight-collector.md` before touching it:
 
 1. **It is not a login.** Intersight has no username/password path for
    its REST API at all; every request is signed (HTTP Signature
-   `hs2019`). `INVENTORY_INTERSIGHT_USERNAME` is the API Key ID and
-   `_PASSWORD` is that key's PEM private half. The PEM rides in the
+   `hs2019`). Its credential variables are named for what they are —
+   `INVENTORY_INTERSIGHT_API_KEY_ID` and `_API_KEY_PEM`, not the
+   USERNAME/PASSWORD pair every other vendor takes. The PEM rides in the
    environment variable — the signing library takes the key as a string,
    so there is **no key file to mount** and ADR-0012's rule holds.
    Signing is hand-rolled on `httpx` + `cryptography` rather than using
