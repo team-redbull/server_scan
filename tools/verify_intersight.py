@@ -280,16 +280,23 @@ async def _inspect(client: IntersightClient, *, show_names: int, sample: int) ->
 
 async def _check_memory_unit(client: IntersightClient, summaries: list[dict[str, Any]]) -> None:
     """
-    Settle `TotalMemory`'s undocumented unit against the DIMMs themselves.
+    Settle `TotalMemory`'s undocumented unit against two independent
+    signals.
 
     ADR-0017's highest-risk open item. `TotalMemory` carries no unit
-    anywhere in the contract, while per-DIMM `memory.Unit.Capacity` is
-    documented in MiB — so summing one server's DIMMs and comparing is
-    the one comparison that settles it, and it costs a single query.
+    anywhere in the contract, and the collector assumes MiB — if that is
+    wrong, every server's memory is over-reported by 4.86%, silently.
+
+    Two checks, cheapest first. `AvailableMemory` sits on the same object
+    and *is* documented "in MB", so comparing the two costs no extra
+    request at all. The authoritative check sums the server's DIMMs,
+    whose `memory.Unit.Capacity` is documented "in MiB" — reached through
+    `memory.Array`, because a `memory.Unit` carries no reference to its
+    server.
 
     Args:
         client (IntersightClient): A connected client.
-        summaries (list[dict]): The sampled servers.
+        summaries (list[dict[str, Any]]): The sampled servers.
     """
     _header("4. THE TotalMemory UNIT (ADR-0017's highest-risk open item)")
     candidate = next((s for s in summaries if _int(s.get("TotalMemory"))), None)
@@ -299,40 +306,79 @@ async def _check_memory_unit(client: IntersightClient, summaries: list[dict[str,
 
     moid = str(candidate.get("Moid"))
     total = _int(candidate.get("TotalMemory")) or 0
+    _p(f"server            : {candidate.get('Serial')}")
+    _p(f"TotalMemory       : {total}   (no documented unit)")
+
+    # --- signal 1: the sibling field, free.
+    available = _int(candidate.get("AvailableMemory"))
+    if available:
+        _p(f"AvailableMemory   : {available}   (documented 'in MB')")
+        if available == total:
+            _p("  -> the two agree exactly. Whatever unit AvailableMemory uses,")
+            _p("     TotalMemory uses it too. See the DIMM check below for which.")
+        else:
+            _p(f"  -> they differ (ratio {total / available:.4f}); not the same measure.")
+
+    # --- signal 2: the DIMMs, authoritative.
     try:
-        units = [
-            unit
-            async for unit in client.list_all(
-                "memory/Units",
-                select="Moid,Capacity,Presence",
-                filter_expr=f"ComputeBlade.Moid eq '{moid}' or ComputeRackUnit.Moid eq '{moid}'",
+        arrays = [
+            array
+            async for array in client.list_all(
+                "memory/Arrays",
+                select="Moid,ComputeBlade,ComputeRackUnit,CurrentCapacity",
+                filter_expr=(f"ComputeBlade.Moid eq '{moid}' or ComputeRackUnit.Moid eq '{moid}'"),
             )
         ]
     except IntersightError as exc:
-        _p(f"could not read memory/Units: {exc}")
+        _p(f"\ncould not read memory/Arrays: {exc}")
+        _p("Filtering on a relationship's Moid may not be supported here. Compare one")
+        _p("server's TotalMemory against the sum of its DIMM capacities in the Intersight")
+        _p("UI by hand, and record the answer in ADR-0017 — do not skip this.")
         return
 
-    dimm_mib = sum(_int(u.get("Capacity")) or 0 for u in units)
-    _p(f"server            : {candidate.get('Serial')}")
-    _p(f"TotalMemory       : {total}")
-    _p(f"sum of DIMM sizes : {dimm_mib} (documented MiB, across {len(units)} DIMM(s))")
+    array_moids = {str(a.get("Moid")) for a in arrays if a.get("Moid")}
+    if not array_moids:
+        _p("\nno memory.Array for this server — cannot reach its DIMMs.")
+        return
+
+    dimm_mib = 0
+    dimm_count = 0
+    try:
+        for array_moid in array_moids:
+            async for unit in client.list_all(
+                "memory/Units",
+                select="Moid,Capacity,Presence,MemoryArray",
+                filter_expr=f"MemoryArray.Moid eq '{array_moid}'",
+            ):
+                capacity = _int(unit.get("Capacity"))
+                if capacity:
+                    dimm_mib += capacity
+                    dimm_count += 1
+    except IntersightError as exc:
+        _p(f"\ncould not read memory/Units: {exc}")
+        return
+
+    _p(f"sum of DIMM sizes : {dimm_mib}   (documented MiB, across {dimm_count} DIMM(s))")
     _p()
     if not dimm_mib:
         _p("INCONCLUSIVE — no DIMM capacities came back.")
         return
     if total == dimm_mib:
         _p("SETTLED: TotalMemory is in the same unit as the DIMMs (MiB). The collector's")
-        _p("         assumption is correct — record this in ADR-0017 and delete the caveat.")
+        _p("         assumption is correct — record this in ADR-0017 and delete the")
+        _p("         caveat, and move the fact into docs/cisco-collectors.md.")
         return
     ratio = total / dimm_mib
     _p(f"MISMATCH — TotalMemory is {ratio:.4f}x the DIMM total.")
     if abs(ratio - 1.048576) < 0.01:
-        _p("           That is the MB-vs-MiB ratio: TotalMemory is in decimal MB, and the")
-        _p("           collector is over-reporting memory by 4.86%. Fix _BYTES_PER_MB in")
-        _p("           app.infrastructure.providers.intersight.mapping before running it.")
+        _p("           That is exactly the MB-vs-MiB ratio: TotalMemory is in decimal MB,")
+        _p("           and the collector is over-reporting memory by 4.86%. Change")
+        _p("           _BYTES_PER_MB to 1000 * 1000 in")
+        _p("           app.infrastructure.providers.intersight.mapping BEFORE scheduling")
+        _p("           the CronJob, and update ADR-0017.")
     else:
-        _p("           Neither unit explains this. Do not trust memory_total_bytes until it")
-        _p("           is understood; report the numbers above in ADR-0017.")
+        _p("           Neither unit explains this. Do not trust memory_total_bytes until")
+        _p("           it is understood; report the numbers above in ADR-0017.")
 
 
 def main(argv: list[str] | None = None) -> None:

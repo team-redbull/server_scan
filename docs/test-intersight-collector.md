@@ -158,18 +158,30 @@ the same hardware.
 **If that assumption is wrong, every server's memory is over-reported by
 4.86%, silently, forever.** Nothing else in the platform would notice.
 
-Section 4 of the verifier settles it by summing one real server's DIMM
-capacities and comparing:
+Section 4 of the verifier settles it with two independent signals. The
+first is free — `AvailableMemory` sits on the same object and *is*
+documented "in MB". The second is authoritative: it sums the server's
+DIMMs, whose `memory.Unit.Capacity` is documented "in MiB", reached
+through `memory.Array` because a DIMM carries no reference to its server.
 
 ```
 4. THE TotalMemory UNIT (ADR-0017's highest-risk open item)
 -----------------------------------------------------------
 server            : WZP24140ABC
-TotalMemory       : 524288
-sum of DIMM sizes : 524288 (documented MiB, across 16 DIMM(s))
+TotalMemory       : 524288   (no documented unit)
+AvailableMemory   : 524288   (documented 'in MB')
+  -> the two agree exactly. Whatever unit AvailableMemory uses,
+     TotalMemory uses it too. See the DIMM check below for which.
+sum of DIMM sizes : 524288   (documented MiB, across 16 DIMM(s))
 
 SETTLED: TotalMemory is in the same unit as the DIMMs (MiB). ...
 ```
+
+If the verifier reports it **could not read `memory/Arrays`**, filtering
+on a relationship's `Moid` is not supported by that endpoint — the
+syntax is not something this repo has been able to confirm against a
+live tenant. Do the comparison by hand in the Intersight UI instead and
+record the answer. Do not skip it.
 
 - **`SETTLED`** — record it in ADR-0017's UNVERIFIED list as resolved and
   delete the caveat. That is a real fact bought with a live run; it
