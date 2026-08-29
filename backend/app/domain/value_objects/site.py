@@ -24,8 +24,8 @@ reason.
 A token must match a `SiteCode` member *exactly* and stand alone between
 separators; a member spelled with a separator (`bat-yam`) matches a run
 of consecutive tokens. Substring matching would be actively dangerous
-here: the site names are short and common, and `ocp4-stone-01` contains
-"one" while naming no site at all.
+here: the site codes are short, and `ocp4-tlvx-01` contains "tlv" while
+naming no site at all.
 
 A name with no site token returns `None`. That is a real state the UI
 surfaces ("Unassigned"), never a silent default to some arbitrary site —

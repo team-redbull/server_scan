@@ -43,6 +43,7 @@ from app.domain.ports.credentials import (
 from app.domain.ports.provider import ProviderServer, ServerInventoryProvider
 from app.domain.services.health.metrics import build_default_registry
 from app.domain.services.regex_engine import RegexModuleEngine
+from app.domain.value_objects.bmc_address import parse_bmc_address
 from app.domain.value_objects.site import parse_site_code
 from app.infrastructure.credentials import EnvConnectionResolver
 from app.infrastructure.credentials.env import resolve_login
@@ -405,6 +406,29 @@ async def _build_provider(
 _UNREAD = "not read"
 
 
+def _bmc_host(address_raw: str | None) -> str:
+    """
+    The BMC's address as an operator reads it: host only.
+
+    The scheme, port and Redfish path a collector reports are protocol
+    detail nobody checks by eye, and they push the one thing that matters
+    — the address you would ping or open — off to the middle of a line.
+    The full URI is still what gets stored, for the Metal3 `BareMetalHost`
+    round-trip.
+
+    Args:
+        address_raw (str | None): The collector's raw BMC address.
+
+    Returns:
+        str: The host, the raw string when it cannot be parsed, or an em
+            dash when there is none.
+    """
+    parsed = parse_bmc_address(address_raw)
+    if parsed is None:
+        return "—"
+    return parsed.host or parsed.raw
+
+
 def _or_unread(value: object) -> str:
     """
     Render an optionally-reported value for the dry-run print.
@@ -498,7 +522,7 @@ async def _dry_run_one_manager(
             f" {_or_unread(ps.cpu_threads)} threads ({ps.cpu_model or 'model unknown'})"
             f"\n     memory      : {memory}"
             f"\n     storage     : {storage} total across {drive_count} drive(s)"
-            f"\n     bmc         : {ps.bmc_address_raw or '—'} (mac {ps.bmc_mac or '—'})"
+            f"\n     bmc         : {_bmc_host(ps.bmc_address_raw)} (mac {ps.bmc_mac or '—'})"
             f"\n     profile     : {ps.profile_dn or '—'}"
             f"\n     profile tmpl: {ps.profile_template_name or '—'}"
             f" [{ps.profile_template_external_id or '—'}]"

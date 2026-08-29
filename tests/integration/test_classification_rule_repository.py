@@ -14,6 +14,7 @@ import json
 import pytest
 from pymongo.errors import DuplicateKeyError
 
+from app.application.services.bootstrap import ensure_default_classification_rules
 from app.domain.enums import InstallationType
 from app.domain.models.classification_rule import ClassificationRule, RuleScope
 from app.infrastructure.mongodb import MongoClientHolder
@@ -202,3 +203,36 @@ async def test_load_enabled_rules_in_resolution_order_uses_index_scan(
     # No blocking in-memory sort stage: the index itself must already
     # produce the requested order.
     assert '"stage": "SORT"' not in explain_str
+
+
+async def test_bootstrap_resyncs_a_stale_system_rule_but_keeps_its_enabled_flag(
+    mongo_holder: MongoClientHolder,
+) -> None:
+    """A default rule's pattern is generated from `SiteCode`, so renaming a
+    site changes it. Seeding only when missing would leave every existing
+    deployment matching hostnames for sites that no longer exist.
+    """
+    repo = MongoClassificationRuleRepository(mongo_holder)
+    generated = default_system_rules()[0]
+    stale = generated.model_copy(
+        update={"pattern": r"^ocp4-(one|two|three|four|five)-\d+$", "enabled": False}
+    )
+    await repo.upsert(stale)
+
+    written = await ensure_default_classification_rules(repo)
+
+    assert written >= 1
+    stored = await repo.get_by_name(generated.name)
+    assert stored is not None
+    assert stored.pattern == generated.pattern
+    assert stored.id == stale.id  # same document, not a second one
+    assert stored.enabled is False  # the one field an admin owns survives
+    assert stored.revision == stale.revision + 1
+
+
+async def test_bootstrap_is_a_no_op_once_the_rules_match_the_code(
+    mongo_holder: MongoClientHolder,
+) -> None:
+    repo = MongoClassificationRuleRepository(mongo_holder)
+    await ensure_default_classification_rules(repo)
+    assert await ensure_default_classification_rules(repo) == 0

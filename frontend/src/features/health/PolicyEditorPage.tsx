@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 
 import { ApiError } from "@/api/client";
+import { siteOptions } from "@/api/sites";
 import { ConditionBuilder } from "@/features/health/ConditionBuilder";
 import { HistoryPanel } from "@/features/events/HistoryPanel";
 import {
@@ -14,13 +15,14 @@ import {
 } from "@/features/health/hooks";
 import { PreviewPanel } from "@/features/health/PreviewPanel";
 import { ShadowPanel } from "@/features/health/ShadowPanel";
+import { useSitesQuery } from "@/features/sites/hooks";
 import { useDebouncedValue } from "@/lib/useDebouncedValue";
-import { PRIORITY_BANDS, RULE_SOURCES_FOR_CREATE } from "@/types/classification";
-import type { ManagerType, RuleSource } from "@/types/classification";
 import {
-  POLICY_CATEGORIES,
-  emptyPolicyScope,
-} from "@/types/health";
+  PRIORITY_BANDS,
+  RULE_SOURCES_FOR_CREATE,
+} from "@/types/classification";
+import type { ManagerType, RuleSource } from "@/types/classification";
+import { POLICY_CATEGORIES, emptyPolicyScope } from "@/types/health";
 import type {
   Condition,
   EvidenceField,
@@ -34,7 +36,13 @@ import type {
 import type { HealthSeverity, Vendor } from "@/types/server";
 import { HEALTH_POLICY_EVENT_TYPES } from "@/types/events";
 
-const SEVERITIES: HealthSeverity[] = ["UNKNOWN", "HEALTHY", "INFO", "WARNING", "CRITICAL"];
+const SEVERITIES: HealthSeverity[] = [
+  "UNKNOWN",
+  "HEALTHY",
+  "INFO",
+  "WARNING",
+  "CRITICAL",
+];
 const MODES: PolicyMode[] = ["EVALUATE", "SUPPRESS"];
 const VENDORS: Vendor[] = ["dell", "cisco", "hp", "standalone"];
 const MANAGER_TYPES: ManagerType[] = [
@@ -97,14 +105,19 @@ function formStateFromPolicy(policy: HealthPolicyResponse): PolicyFormState {
   };
 }
 
-function requiredScopeField(source: RuleSource): "vendor" | "manager_type" | "site_id" | null {
+function requiredScopeField(
+  source: RuleSource,
+): "vendor" | "manager_type" | "site_id" | null {
   if (source === "SITE_CUSTOM") return "site_id";
   if (source === "MANAGER_CUSTOM") return "manager_type";
   if (source === "VENDOR_CUSTOM") return "vendor";
   return null;
 }
 
-function scopeForSource(source: RuleSource, previous: PolicyScope): PolicyScope {
+function scopeForSource(
+  source: RuleSource,
+  previous: PolicyScope,
+): PolicyScope {
   const required = requiredScopeField(source);
   return {
     vendor: required === "vendor" ? previous.vendor : null,
@@ -118,7 +131,9 @@ function formatApiError(error: unknown): string {
     const detailParts = Object.entries(error.problem.details)
       .map(([key, value]) => `${key}: ${JSON.stringify(value)}`)
       .join("; ");
-    return detailParts ? `${error.problem.detail} (${detailParts})` : error.problem.detail;
+    return detailParts
+      ? `${error.problem.detail} (${detailParts})`
+      : error.problem.detail;
   }
   if (error instanceof Error) {
     return error.message;
@@ -127,6 +142,7 @@ function formatApiError(error: unknown): string {
 }
 
 export function PolicyEditorPage() {
+  const sites = siteOptions(useSitesQuery().data?.items);
   const { id } = useParams<{ id: string }>();
   const isEdit = id !== undefined;
   const navigate = useNavigate();
@@ -137,7 +153,8 @@ export function PolicyEditorPage() {
     isError: isPolicyError,
     error: policyError,
   } = useHealthPolicyQuery(id ?? "");
-  const { data: metricsData, isPending: isLoadingMetrics } = useHealthMetricsQuery();
+  const { data: metricsData, isPending: isLoadingMetrics } =
+    useHealthMetricsQuery();
   const { data: allPoliciesData } = useHealthPoliciesQuery({});
 
   const createMutation = useCreateHealthPolicyMutation();
@@ -157,12 +174,18 @@ export function PolicyEditorPage() {
   const isSystem = existingPolicy?.system ?? false;
   const locked = isEdit && isSystem;
   const metrics = metricsData?.items ?? [];
-  const allPolicies = useMemo(() => allPoliciesData?.items ?? [], [allPoliciesData]);
+  const allPolicies = useMemo(
+    () => allPoliciesData?.items ?? [],
+    [allPoliciesData],
+  );
 
   const requiredScope = requiredScopeField(form.source);
   const band = PRIORITY_BANDS[form.source];
 
-  function updateField<K extends keyof PolicyFormState>(key: K, value: PolicyFormState[K]) {
+  function updateField<K extends keyof PolicyFormState>(
+    key: K,
+    value: PolicyFormState[K],
+  ) {
     setForm((prev) => ({ ...prev, [key]: value }));
   }
 
@@ -190,7 +213,10 @@ export function PolicyEditorPage() {
   }
 
   function removeEvidenceRow(index: number) {
-    setForm((prev) => ({ ...prev, evidence: prev.evidence.filter((_, i) => i !== index) }));
+    setForm((prev) => ({
+      ...prev,
+      evidence: prev.evidence.filter((_, i) => i !== index),
+    }));
   }
 
   const rawPreviewRequest = useMemo<HealthPolicyPreviewRequest | null>(() => {
@@ -242,7 +268,9 @@ export function PolicyEditorPage() {
     }
 
     if (condition === null) {
-      setConditionError("The condition is incomplete — fill in every leaf before saving.");
+      setConditionError(
+        "The condition is incomplete — fill in every leaf before saving.",
+      );
       return;
     }
     setConditionError(null);
@@ -266,10 +294,15 @@ export function PolicyEditorPage() {
 
     if (isEdit && id) {
       const body: HealthPolicyUpdate = basePayload;
-      updateMutation.mutate({ id, body }, { onSuccess: () => navigate("/health-policies") });
+      updateMutation.mutate(
+        { id, body },
+        { onSuccess: () => navigate("/health-policies") },
+      );
     } else {
       const body: HealthPolicyCreate = basePayload;
-      createMutation.mutate(body, { onSuccess: () => navigate("/health-policies") });
+      createMutation.mutate(body, {
+        onSuccess: () => navigate("/health-policies"),
+      });
     }
   }
 
@@ -280,7 +313,10 @@ export function PolicyEditorPage() {
 
   return (
     <main className="mx-auto max-w-5xl p-8">
-      <Link to="/health-policies" className="text-sm text-blue-600 hover:underline dark:text-blue-400">
+      <Link
+        to="/health-policies"
+        className="text-sm text-blue-600 hover:underline dark:text-blue-400"
+      >
         ← Back to health policies
       </Link>
 
@@ -288,7 +324,9 @@ export function PolicyEditorPage() {
         {isEdit ? "Edit Health Policy" : "New Health Policy"}
       </h1>
 
-      {isEdit && isLoadingPolicy && <p className="mt-4 text-gray-500">Loading policy…</p>}
+      {isEdit && isLoadingPolicy && (
+        <p className="mt-4 text-gray-500">Loading policy…</p>
+      )}
 
       {isEdit && isPolicyError && (
         <p className="mt-4 rounded border border-red-300 bg-red-50 p-3 text-red-700 dark:border-red-800 dark:bg-red-950 dark:text-red-300">
@@ -296,7 +334,9 @@ export function PolicyEditorPage() {
         </p>
       )}
 
-      {isLoadingMetrics && <p className="mt-4 text-gray-500">Loading metric registry…</p>}
+      {isLoadingMetrics && (
+        <p className="mt-4 text-gray-500">Loading metric registry…</p>
+      )}
 
       {(!isEdit || existingPolicy) && !isLoadingMetrics && (
         <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-[2fr_1fr]">
@@ -306,8 +346,8 @@ export function PolicyEditorPage() {
           >
             {locked && (
               <p className="rounded border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-300">
-                This is a system policy. Only "Enabled" can be changed — every other field is
-                locked.
+                This is a system policy. Only "Enabled" can be changed — every
+                other field is locked.
               </p>
             )}
 
@@ -459,7 +499,9 @@ export function PolicyEditorPage() {
                       {s}
                     </option>
                   ))}
-                  {isSystem && <option value="SYSTEM_DEFAULT">SYSTEM_DEFAULT</option>}
+                  {isSystem && (
+                    <option value="SYSTEM_DEFAULT">SYSTEM_DEFAULT</option>
+                  )}
                 </select>
               </label>
 
@@ -497,7 +539,10 @@ export function PolicyEditorPage() {
                         disabled={locked}
                         value={form.scope.vendor ?? ""}
                         onChange={(e) => {
-                          updateField("scope", { ...form.scope, vendor: e.target.value });
+                          updateField("scope", {
+                            ...form.scope,
+                            vendor: e.target.value,
+                          });
                         }}
                         className={inputClass}
                       >
@@ -540,18 +585,29 @@ export function PolicyEditorPage() {
                   )}
                   {requiredScope === "site_id" && (
                     <label className={labelClass}>
-                      Site ID
-                      <input
-                        type="text"
+                      Site
+                      {/* The sites endpoint is the only list of sites: a
+                       * hand-typed id could name a site that does not
+                       * exist and match nothing, silently. */}
+                      <select
                         required
                         disabled={locked}
-                        placeholder="site_..."
                         value={form.scope.site_id ?? ""}
                         onChange={(e) => {
-                          updateField("scope", { ...form.scope, site_id: e.target.value });
+                          updateField("scope", {
+                            ...form.scope,
+                            site_id: e.target.value,
+                          });
                         }}
                         className={inputClass}
-                      />
+                      >
+                        <option value="">Select a site…</option>
+                        {sites.map((site) => (
+                          <option key={site.value} value={site.value}>
+                            {site.label}
+                          </option>
+                        ))}
+                      </select>
                     </label>
                   )}
                 </div>
@@ -603,7 +659,10 @@ export function PolicyEditorPage() {
                       placeholder="key (used in {template})"
                       value={row.key}
                       onChange={(e) => {
-                        updateEvidenceRow(index, { ...row, key: e.target.value });
+                        updateEvidenceRow(index, {
+                          ...row,
+                          key: e.target.value,
+                        });
                       }}
                       className="rounded border border-gray-300 px-2 py-1 text-sm dark:border-gray-600 dark:bg-gray-900"
                     />
@@ -611,7 +670,10 @@ export function PolicyEditorPage() {
                       disabled={locked}
                       value={row.metric}
                       onChange={(e) => {
-                        updateEvidenceRow(index, { ...row, metric: e.target.value });
+                        updateEvidenceRow(index, {
+                          ...row,
+                          metric: e.target.value,
+                        });
                       }}
                       className="rounded border border-gray-300 px-2 py-1 text-sm dark:border-gray-600 dark:bg-gray-900"
                     >
@@ -662,7 +724,11 @@ export function PolicyEditorPage() {
       )}
 
       {isEdit && id && existingPolicy && (
-        <HistoryPanel eventTypes={HEALTH_POLICY_EVENT_TYPES} idField="policy_id" entityId={id} />
+        <HistoryPanel
+          eventTypes={HEALTH_POLICY_EVENT_TYPES}
+          idField="policy_id"
+          entityId={id}
+        />
       )}
     </main>
   );

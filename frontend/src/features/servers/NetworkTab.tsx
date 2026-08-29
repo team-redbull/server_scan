@@ -11,13 +11,16 @@ export function NetworkTab({ network }: { network: NetworkInfo | undefined }) {
   return (
     <div className="space-y-8">
       <section>
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-gray-500">BMC</h2>
+        <h2 className="text-sm font-semibold uppercase tracking-wide text-gray-500">
+          BMC
+        </h2>
         {bmc ? (
           <dl className="mt-2 grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">
-            <Stat label="Address" value={bmc.address_raw} />
-            <Stat label="Scheme" value={bmc.scheme} />
-            <Stat label="Host" value={bmc.host} />
-            <Stat label="Port" value={String(bmc.port)} />
+            {/* The host alone: an operator wants the address they would
+             * ping or open, not the scheme, port and Redfish path the
+             * collector reported. The full URI is still stored, for the
+             * Metal3 `BareMetalHost` round-trip. */}
+            <Stat label="Address" value={bmc.host ?? bmc.address_raw} />
             {bmc.mac && <Stat label="MAC" value={bmc.mac} />}
           </dl>
         ) : (
@@ -26,7 +29,9 @@ export function NetworkTab({ network }: { network: NetworkInfo | undefined }) {
       </section>
 
       <section>
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-gray-500">Interfaces</h2>
+        <h2 className="text-sm font-semibold uppercase tracking-wide text-gray-500">
+          Interfaces
+        </h2>
         {interfaces.length > 0 ? (
           <table className="mt-2 min-w-full divide-y divide-gray-200 text-sm dark:divide-gray-700">
             <thead>
@@ -42,7 +47,9 @@ export function NetworkTab({ network }: { network: NetworkInfo | undefined }) {
                 <tr key={`${iface.name}-${iface.mac}`}>
                   <td className="py-1 pr-4">{iface.name}</td>
                   <td className="py-1 pr-4">{iface.mac}</td>
-                  <td className="py-1 pr-4">{iface.speed_mbps ? `${iface.speed_mbps} Mbps` : "—"}</td>
+                  <td className="py-1 pr-4">
+                    {iface.speed_mbps ? `${iface.speed_mbps} Mbps` : "—"}
+                  </td>
                   <td className="py-1 pr-4">
                     <LinkStateBadge state={iface.link_state} />
                   </td>

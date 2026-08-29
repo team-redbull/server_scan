@@ -17,12 +17,19 @@
  * vendor is known by construction. */
 export type Vendor = "dell" | "cisco" | "hp" | "standalone";
 
-/** The closed set of sites. A server's site is parsed from its name
+/** A site code. A server's site is parsed from its name
  * (`ocp4-prod-tlv-infra-01` -> "tlv"); `null` means the name carries no
- * site token and is surfaced as "Unassigned". */
-export type SiteCode = "nyc" | "tlv" | "bat-yam" | "five";
+ * site token and is surfaced as "Unassigned".
+ *
+ * Deliberately not a union of the current codes: the closed set is the
+ * backend's `SiteCode` enum, and `GET /api/v1/sites` is what tells the UI
+ * which codes exist and what each is called. A union here would be a
+ * second copy of that list, free to disagree with it — as it did when the
+ * sites were renamed and the filter dropdown kept offering the old ones. */
+export type SiteCode = string;
 
-export type HealthSeverity = "UNKNOWN" | "HEALTHY" | "INFO" | "WARNING" | "CRITICAL";
+export type HealthSeverity =
+  "UNKNOWN" | "HEALTHY" | "INFO" | "WARNING" | "CRITICAL";
 
 /** Link/operational state as reported for a physical/logical network link. */
 export type LinkState = "UP" | "DOWN" | "UNKNOWN" | "DISABLED";

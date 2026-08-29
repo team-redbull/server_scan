@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 
 import { ApiError } from "@/api/client";
+import { siteOptions } from "@/api/sites";
 import { HistoryPanel } from "@/features/events/HistoryPanel";
 import {
   useClassificationRuleQuery,
@@ -10,6 +11,7 @@ import {
   useUpdateClassificationRuleMutation,
 } from "@/features/classification/hooks";
 import { PreviewPanel } from "@/features/classification/PreviewPanel";
+import { useSitesQuery } from "@/features/sites/hooks";
 import { useDebouncedValue } from "@/lib/useDebouncedValue";
 import type { InstallationType, Vendor } from "@/types/server";
 import {
@@ -31,7 +33,11 @@ import type {
 } from "@/types/classification";
 import { CLASSIFICATION_EVENT_TYPES } from "@/types/events";
 
-const INSTALLATION_TYPES: InstallationType[] = ["HOSTED_CLUSTER", "UPI", "UNCLASSIFIED"];
+const INSTALLATION_TYPES: InstallationType[] = [
+  "HOSTED_CLUSTER",
+  "UPI",
+  "UNCLASSIFIED",
+];
 const VENDORS: Vendor[] = ["dell", "cisco", "hp", "standalone"];
 const MANAGER_TYPES: ManagerType[] = [
   "OPENMANAGE",
@@ -90,7 +96,9 @@ function formStateFromRule(rule: ClassificationRuleResponse): RuleFormState {
 /** Which single scope field a source requires (mirrors
  * `app.application.services.classification_service.validate_rule_write`).
  * `null` means the source must have an entirely empty scope. */
-function requiredScopeField(source: RuleSource): "vendor" | "manager_type" | "site_id" | null {
+function requiredScopeField(
+  source: RuleSource,
+): "vendor" | "manager_type" | "site_id" | null {
   if (source === "SITE_CUSTOM") return "site_id";
   if (source === "MANAGER_CUSTOM") return "manager_type";
   if (source === "VENDOR_CUSTOM") return "vendor";
@@ -111,7 +119,9 @@ function formatApiError(error: unknown): string {
     const detailParts = Object.entries(error.problem.details)
       .map(([key, value]) => `${key}: ${JSON.stringify(value)}`)
       .join("; ");
-    return detailParts ? `${error.problem.detail} (${detailParts})` : error.problem.detail;
+    return detailParts
+      ? `${error.problem.detail} (${detailParts})`
+      : error.problem.detail;
   }
   if (error instanceof Error) {
     return error.message;
@@ -120,6 +130,7 @@ function formatApiError(error: unknown): string {
 }
 
 export function RuleEditorPage() {
+  const sites = siteOptions(useSitesQuery().data?.items);
   const { id } = useParams<{ id: string }>();
   const isEdit = id !== undefined;
   const navigate = useNavigate();
@@ -163,12 +174,21 @@ export function RuleEditorPage() {
       pattern: debouncedPattern,
       flags: form.flags,
     };
-  }, [debouncedField, debouncedPattern, form.installation_type, form.scope, form.flags]);
+  }, [
+    debouncedField,
+    debouncedPattern,
+    form.installation_type,
+    form.scope,
+    form.flags,
+  ]);
 
   const requiredScope = requiredScopeField(form.source);
   const band = PRIORITY_BANDS[form.source];
 
-  function updateField<K extends keyof RuleFormState>(key: K, value: RuleFormState[K]) {
+  function updateField<K extends keyof RuleFormState>(
+    key: K,
+    value: RuleFormState[K],
+  ) {
     setForm((prev) => ({ ...prev, [key]: value }));
   }
 
@@ -208,7 +228,10 @@ export function RuleEditorPage() {
         priority: form.priority,
         order: form.order,
       };
-      updateMutation.mutate({ id, body }, { onSuccess: () => navigate("/classification-rules") });
+      updateMutation.mutate(
+        { id, body },
+        { onSuccess: () => navigate("/classification-rules") },
+      );
     } else {
       const body: ClassificationRuleCreate = {
         name: form.name,
@@ -223,7 +246,9 @@ export function RuleEditorPage() {
         priority: form.priority,
         order: form.order,
       };
-      createMutation.mutate(body, { onSuccess: () => navigate("/classification-rules") });
+      createMutation.mutate(body, {
+        onSuccess: () => navigate("/classification-rules"),
+      });
     }
   }
 
@@ -245,7 +270,9 @@ export function RuleEditorPage() {
         {isEdit ? "Edit Classification Rule" : "New Classification Rule"}
       </h1>
 
-      {isEdit && isLoadingRule && <p className="mt-4 text-gray-500">Loading rule…</p>}
+      {isEdit && isLoadingRule && (
+        <p className="mt-4 text-gray-500">Loading rule…</p>
+      )}
 
       {isEdit && isRuleError && (
         <p className="mt-4 rounded border border-red-300 bg-red-50 p-3 text-red-700 dark:border-red-800 dark:bg-red-950 dark:text-red-300">
@@ -261,8 +288,8 @@ export function RuleEditorPage() {
           >
             {locked && (
               <p className="rounded border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-300">
-                This is a system rule. Only "Enabled" can be changed — every other field is
-                locked.
+                This is a system rule. Only "Enabled" can be changed — every
+                other field is locked.
               </p>
             )}
 
@@ -317,7 +344,10 @@ export function RuleEditorPage() {
                   disabled={locked}
                   value={form.installation_type}
                   onChange={(e) => {
-                    updateField("installation_type", e.target.value as InstallationType);
+                    updateField(
+                      "installation_type",
+                      e.target.value as InstallationType,
+                    );
                   }}
                   className={inputClass}
                 >
@@ -344,7 +374,9 @@ export function RuleEditorPage() {
                       {s}
                     </option>
                   ))}
-                  {isSystem && <option value="SYSTEM_DEFAULT">SYSTEM_DEFAULT</option>}
+                  {isSystem && (
+                    <option value="SYSTEM_DEFAULT">SYSTEM_DEFAULT</option>
+                  )}
                 </select>
               </label>
             </div>
@@ -382,7 +414,10 @@ export function RuleEditorPage() {
                         disabled={locked}
                         value={form.scope.vendor ?? ""}
                         onChange={(e) => {
-                          updateField("scope", { ...form.scope, vendor: e.target.value as Vendor });
+                          updateField("scope", {
+                            ...form.scope,
+                            vendor: e.target.value as Vendor,
+                          });
                         }}
                         className={inputClass}
                       >
@@ -425,18 +460,29 @@ export function RuleEditorPage() {
                   )}
                   {requiredScope === "site_id" && (
                     <label className={labelClass}>
-                      Site ID
-                      <input
-                        type="text"
+                      Site
+                      {/* The sites endpoint is the only list of sites: a
+                       * hand-typed id could name a site that does not
+                       * exist and match nothing, silently. */}
+                      <select
                         required
                         disabled={locked}
-                        placeholder="site_..."
                         value={form.scope.site_id ?? ""}
                         onChange={(e) => {
-                          updateField("scope", { ...form.scope, site_id: e.target.value });
+                          updateField("scope", {
+                            ...form.scope,
+                            site_id: e.target.value,
+                          });
                         }}
                         className={inputClass}
-                      />
+                      >
+                        <option value="">Select a site…</option>
+                        {sites.map((site) => (
+                          <option key={site.value} value={site.value}>
+                            {site.label}
+                          </option>
+                        ))}
+                      </select>
                     </label>
                   )}
                 </div>
@@ -486,7 +532,10 @@ export function RuleEditorPage() {
                     disabled={locked}
                     checked={form.flags.ignore_case}
                     onChange={(e) => {
-                      updateField("flags", { ...form.flags, ignore_case: e.target.checked });
+                      updateField("flags", {
+                        ...form.flags,
+                        ignore_case: e.target.checked,
+                      });
                     }}
                   />
                   ignore_case
@@ -497,7 +546,10 @@ export function RuleEditorPage() {
                     disabled={locked}
                     checked={form.flags.multiline}
                     onChange={(e) => {
-                      updateField("flags", { ...form.flags, multiline: e.target.checked });
+                      updateField("flags", {
+                        ...form.flags,
+                        multiline: e.target.checked,
+                      });
                     }}
                   />
                   multiline
@@ -508,7 +560,10 @@ export function RuleEditorPage() {
                     disabled={locked}
                     checked={form.flags.dotall}
                     onChange={(e) => {
-                      updateField("flags", { ...form.flags, dotall: e.target.checked });
+                      updateField("flags", {
+                        ...form.flags,
+                        dotall: e.target.checked,
+                      });
                     }}
                   />
                   dotall
@@ -532,7 +587,11 @@ export function RuleEditorPage() {
       )}
 
       {isEdit && id && existingRule && (
-        <HistoryPanel eventTypes={CLASSIFICATION_EVENT_TYPES} idField="rule_id" entityId={id} />
+        <HistoryPanel
+          eventTypes={CLASSIFICATION_EVENT_TYPES}
+          idField="rule_id"
+          entityId={id}
+        />
       )}
     </main>
   );

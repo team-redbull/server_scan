@@ -41,7 +41,7 @@ describe("RuleEditorPage (create)", () => {
     expect(screen.getByText("GLOBAL_CUSTOM: 200-299")).toBeInTheDocument();
   });
 
-  it("shows a site_id field and the SITE_CUSTOM band when source changes to SITE_CUSTOM", async () => {
+  it("shows a site field and the SITE_CUSTOM band when source changes to SITE_CUSTOM", async () => {
     renderNewRulePage();
 
     await waitFor(() => {
@@ -50,7 +50,7 @@ describe("RuleEditorPage (create)", () => {
 
     fireEvent.change(screen.getByLabelText("Source"), { target: { value: "SITE_CUSTOM" } });
 
-    expect(screen.getByLabelText("Site ID")).toBeInTheDocument();
+    expect(screen.getByLabelText("Site")).toBeInTheDocument();
     expect(screen.getByText("SITE_CUSTOM: 500-599")).toBeInTheDocument();
     expect(screen.queryByLabelText("Vendor")).not.toBeInTheDocument();
   });
@@ -66,7 +66,7 @@ describe("RuleEditorPage (create)", () => {
 
     expect(screen.getByLabelText("Vendor")).toBeInTheDocument();
     expect(screen.getByText("VENDOR_CUSTOM: 300-399")).toBeInTheDocument();
-    expect(screen.queryByLabelText("Site ID")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Site")).not.toBeInTheDocument();
   });
 
   it("shows a manager type field when source changes to MANAGER_CUSTOM", async () => {

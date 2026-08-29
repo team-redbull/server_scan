@@ -10,9 +10,12 @@ import type { HealthSeverity, SiteCode, Vendor } from "@/types/server";
  * separate list of "known sites": the response IS the list.
  */
 
-/** A site card's id: one of the five fixed sites, or the bucket for
- * servers whose name carries no site token. */
-export type SiteStatsId = SiteCode | "unassigned";
+/** A site card's id: a site code, or `UNASSIGNED_SITE_ID` for the bucket
+ * of servers whose name carries no site token. */
+export type SiteStatsId = SiteCode;
+
+/** The id of the bucket for servers whose name names no site. */
+export const UNASSIGNED_SITE_ID = "unassigned";
 
 export interface VendorCount {
   vendor: Vendor;
@@ -37,10 +40,20 @@ export function listSites(): Promise<SiteStatsListResponse> {
   return apiFetch<SiteStatsListResponse>("/api/v1/sites");
 }
 
-/** The real sites, for filter dropdowns. Derived from the same
- * response the overview renders, so a site can never appear in one and
- * not the other. */
-export const SITE_CODES: readonly SiteCode[] = ["nyc", "tlv", "bat-yam", "five"];
+/** The real sites, for filter dropdowns — read from the same response the
+ * overview renders, so a site can never appear in one and not the other,
+ * and renaming a site in the backend enum needs no frontend change.
+ *
+ * Args:
+ *   items: the `SiteStats` rows as returned by `listSites`.
+ */
+export function siteOptions(
+  items: SiteStats[] | undefined,
+): { value: string; label: string }[] {
+  return (items ?? [])
+    .filter((site) => site.site_id !== UNASSIGNED_SITE_ID)
+    .map((site) => ({ value: site.site_id, label: site.name }));
+}
 
 export const VENDORS: readonly Vendor[] = ["dell", "cisco", "hp", "standalone"];
 
