@@ -120,7 +120,7 @@ class TestHealthyHost:
         assert len(servers) == 1
         server = servers[0]
         assert server.vendor == Vendor.DELL.value
-        assert server.name == "ocp4-prod-one-infra-01"
+        assert server.name == "ocp4-prod-tlv-infra-01"
         assert server.serial == "FCH2201V0AB"
         assert server.external_id == "redfish://127.0.0.1/redfish/v1/Systems/1"
         assert server.cpu_sockets == 2
@@ -279,7 +279,7 @@ class TestGpuBaseboardMerging:
         # One server, not two — the tray is not ingested on its own.
         assert len(servers) == 1
         server = servers[0]
-        assert server.name == "ocp4-prod-one-infra-01"
+        assert server.name == "ocp4-prod-tlv-infra-01"
         assert server.vendor == Vendor.DELL.value  # from the host, not the tray
         assert server.cpu_cores == 64  # the tray has none to contribute
 
@@ -297,7 +297,7 @@ class TestGpuBaseboardMerging:
         second_host = dict(resources["/redfish/v1/Systems/1"])
         second_host["@odata.id"] = "/redfish/v1/Systems/2"
         second_host["Id"] = "2"
-        second_host["HostName"] = "ocp4-prod-one-infra-02"
+        second_host["HostName"] = "ocp4-prod-tlv-infra-02"
         second_host["SerialNumber"] = "FCH2201V0AC"
         resources["/redfish/v1/Systems/2"] = second_host
         resources["/redfish/v1/Systems"] = {

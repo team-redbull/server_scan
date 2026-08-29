@@ -445,7 +445,7 @@ async def test_preview_reflects_shadowing_site_override_wins(
     await policy_repo.upsert(global_critical)
 
     await server_repo.upsert(
-        _make_server("srv-in-shadow-site", index=1, site_id="two", fabric_paths_down=2)
+        _make_server("srv-in-shadow-site", index=1, site_id="nyc", fabric_paths_down=2)
     )
 
     # Draft: a SITE_CUSTOM WARNING override for site_shadow, same
@@ -458,7 +458,7 @@ async def test_preview_reflects_shadowing_site_override_wins(
         "condition": {"metric": "connectivity.fabric_paths_down", "operator": "GTE", "value": 2},
         "evidence": [{"key": "down", "metric": "connectivity.fabric_paths_down"}],
         "message_template": "{down} down (site override)",
-        "scope": {"site_id": "two"},
+        "scope": {"site_id": "nyc"},
         "source": "SITE_CUSTOM",
         "priority": 500,
     }
@@ -489,13 +489,13 @@ async def test_preview_draft_shadowed_by_existing_higher_specificity_policy_does
         source="SITE_CUSTOM",
         priority=500,
         severity=HealthSeverity.CRITICAL,
-        scope=PolicyScope(site_id="three"),
+        scope=PolicyScope(site_id="bat-yam"),
         condition=Condition(metric="connectivity.fabric_paths_down", operator="GTE", value=1),
     )
     await policy_repo.upsert(existing_site_critical)
 
     await server_repo.upsert(
-        _make_server("srv-in-inverse-site", index=1, site_id="three", fabric_paths_down=1)
+        _make_server("srv-in-inverse-site", index=1, site_id="bat-yam", fabric_paths_down=1)
     )
     await server_repo.upsert(
         _make_server("srv-elsewhere", index=2, site_id=None, fabric_paths_down=1)

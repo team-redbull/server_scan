@@ -343,10 +343,15 @@ non-obvious enough to bite you.
 
 - **A server's site is parsed from its name**
   (`app.domain.value_objects.site.parse_site_code`), never taken from
-  configuration — `ocp4-prod-one-infra-01` -> `one`. Token-based, not a
-  substring search (`ocp4-stone-01` contains "one" but names no site),
+  configuration — `ocp4-prod-tlv-infra-01` -> `tlv`. Token-based, not a
+  substring search (`ocp4-tlvx-01` contains "tlv" but names no site),
   and an ambiguous name yields `None` rather than a guess. `None` is a
-  real state the UI shows as "Unassigned".
+  real state the UI shows as "Unassigned". The sites are `nyc`, `tlv`,
+  `bat-yam` and `five`; a code spelled with a separator (`bat-yam`)
+  matches consecutive tokens. **A Cisco server whose name carries no site
+  token falls back to its service profile's org DN**
+  (`org-root/org_tlv/ls-worker-01` -> `tlv`) — the name is still the
+  authority, the org path is only consulted when it says nothing.
 - **`Vendor` is dell/cisco/hp/standalone — there is still no `UNKNOWN`.**
   `STANDALONE` means *a manufacturer this platform does not model*
   (Lenovo, Supermicro, a whitebox) **or one the BMC did not report at

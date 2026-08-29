@@ -347,7 +347,7 @@ class TestDryRun:
                 return None
 
             async def list_servers(self) -> Any:
-                for name in ("ocp4-prod-one-infra-01", "ocp4-hypershift-five-01"):
+                for name in ("ocp4-prod-tlv-infra-01", "ocp4-hypershift-five-01"):
                     yield ProviderServer(external_id=f"dn/{name}", vendor="cisco", name=name)
 
         count = await _dry_run_one_manager(
@@ -361,10 +361,38 @@ class TestDryRun:
         out = capsys.readouterr().out
         # The site each name resolves to is shown, since that is derived
         # at ingest and is otherwise invisible until after a real write.
-        assert "ocp4-prod-one-infra-01" in out
-        assert "one" in out
+        assert "ocp4-prod-tlv-infra-01" in out
+        assert "tlv" in out
         assert "five" in out
         assert "Nothing was written" in out
+
+    async def test_dry_run_falls_back_to_the_org_dn_for_the_site(self, capsys: Any) -> None:
+        """A UCS server whose name carries no site token still gets one
+        when its service profile lives under a site-named org.
+        """
+
+        class FakeProvider:
+            provider_type = "UCS_CENTRAL"
+
+            async def health_check(self) -> None:
+                return None
+
+            async def list_servers(self) -> Any:
+                yield ProviderServer(
+                    external_id="compute/sys-1/blade-1",
+                    vendor="cisco",
+                    name="blade-1",
+                    profile_dn="org-root/org_bat-yam/ls-worker-01",
+                )
+
+        await _dry_run_one_manager(
+            _manager(),
+            credential_resolver=FakeCredentialResolver(),  # type: ignore[arg-type]
+            timeout_seconds=5.0,
+            limit=None,
+            provider_factory=_factory(FakeProvider()),
+        )
+        assert "bat-yam" in capsys.readouterr().out
 
     async def test_dry_run_shows_gpu_detail(self, capsys: Any) -> None:
         """The dry-run print has to show every field a collector reports,
@@ -467,12 +495,12 @@ class TestNameFilter:
     async def test_keeps_only_matching_servers(self) -> None:
         kept = await self._names_through(
             "^ocp",
-            "ocp4-prod-one-infra-01",
+            "ocp4-prod-tlv-infra-01",
             "vmhost-two-14",
             "ocp4-hypershift-five-01",
             "db-prod-03",
         )
-        assert kept == ["ocp4-prod-one-infra-01", "ocp4-hypershift-five-01"]
+        assert kept == ["ocp4-prod-tlv-infra-01", "ocp4-hypershift-five-01"]
 
     async def test_the_anchor_is_the_operators_to_write(self) -> None:
         """`re.search`, not `re.match` — so `^ocp` means "starts with" and
@@ -512,11 +540,11 @@ class TestNameFilter:
             timeout_seconds=5.0,
             limit=None,
             name_pattern="^ocp",
-            provider_factory=_factory(self._Fake("ocp4-prod-one-infra-01", "vmhost-two-14")),
+            provider_factory=_factory(self._Fake("ocp4-prod-tlv-infra-01", "vmhost-two-14")),
         )
         assert count == 1
         out = capsys.readouterr().out
-        assert "ocp4-prod-one-infra-01" in out
+        assert "ocp4-prod-tlv-infra-01" in out
         assert "vmhost-two-14" not in out
         assert "^ocp" in out
 

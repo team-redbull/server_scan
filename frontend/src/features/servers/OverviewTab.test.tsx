@@ -13,7 +13,7 @@ function makeServer(overrides: Partial<ServerDetail> = {}): ServerDetail {
     classification: { installation_type: "HOSTED_CLUSTER" },
     health: { overall: "HEALTHY" },
     maintenance: { enabled: false },
-    site_id: "one",
+    site_id: "tlv",
     manager_id: "mgr_1",
     source_provider: "UCS_CENTRAL",
     last_seen_at: "2026-08-13T10:00:00Z",

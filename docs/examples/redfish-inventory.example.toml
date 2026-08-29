@@ -28,8 +28,8 @@ port = 443
 
 # Groups exist so a per-site credential or CA does not have to be repeated
 # on every host.
-[groups.site-one]
-credential = "site-one-shared"
+[groups.site-tlv]
+credential = "site-tlv-shared"
 
 [groups.lab]
 verify_tls = false
@@ -53,13 +53,13 @@ verify_tls_reason = "lab BMCs keep factory certificates; not on the production m
 [[hosts]]
 host = "192.0.2.41"
 # Optional. Wins over whatever the BMC reports, and is what the platform
-# parses the site out of — `ocp4-prod-one-infra-01` -> site `one`. Without
+# parses the site out of — `ocp4-prod-tlv-infra-01` -> site `tlv`. Without
 # it, a machine named after its BMC lands in "Unassigned".
-name = "ocp4-prod-one-infra-01"
+name = "ocp4-prod-tlv-infra-01"
 
 [[hosts]]
 host = "192.0.2.42"
-group = "site-one"
+group = "site-tlv"
 
 [[hosts]]
 host = "bmc-043.mgmt.example.com"

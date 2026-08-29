@@ -143,12 +143,12 @@ async def test_pagination_covers_every_document_exactly_once(
 async def test_filters_narrow_results(mongo_holder: MongoClientHolder) -> None:
     repo = MongoServerRepository(mongo_holder, cursor_secret=_CURSOR_SECRET)
     for i in range(5):
-        await repo.upsert(_make_server(i, site_id="one"))
+        await repo.upsert(_make_server(i, site_id="tlv"))
     for i in range(5, 8):
-        await repo.upsert(_make_server(i, site_id="two"))
+        await repo.upsert(_make_server(i, site_id="nyc"))
 
     page = await repo.list_page(
-        filters={"site_id": "one"},
+        filters={"site_id": "tlv"},
         search=None,
         sort="name",
         sort_desc=False,
@@ -158,7 +158,7 @@ async def test_filters_narrow_results(mongo_holder: MongoClientHolder) -> None:
     )
 
     assert len(page.items) == 5
-    assert all(item.site_id == "one" for item in page.items)
+    assert all(item.site_id == "tlv" for item in page.items)
     assert page.total_count == 5
 
 
@@ -230,10 +230,10 @@ async def test_stale_cursor_after_filter_change_is_rejected(
 ) -> None:
     repo = MongoServerRepository(mongo_holder, cursor_secret=_CURSOR_SECRET)
     for i in range(5):
-        await repo.upsert(_make_server(i, site_id="one"))
+        await repo.upsert(_make_server(i, site_id="tlv"))
 
     page = await repo.list_page(
-        filters={"site_id": "one"},
+        filters={"site_id": "tlv"},
         search=None,
         sort="name",
         sort_desc=False,
@@ -245,7 +245,7 @@ async def test_stale_cursor_after_filter_change_is_rejected(
 
     with pytest.raises(CursorFilterMismatchError):
         await repo.list_page(
-            filters={"site_id": "two"},
+            filters={"site_id": "nyc"},
             search=None,
             sort="name",
             sort_desc=False,

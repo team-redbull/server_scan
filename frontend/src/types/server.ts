@@ -18,9 +18,9 @@
 export type Vendor = "dell" | "cisco" | "hp" | "standalone";
 
 /** The closed set of sites. A server's site is parsed from its name
- * (`ocp4-prod-one-infra-01` -> "one"); `null` means the name carries no
+ * (`ocp4-prod-tlv-infra-01` -> "tlv"); `null` means the name carries no
  * site token and is surfaced as "Unassigned". */
-export type SiteCode = "one" | "two" | "three" | "four" | "five";
+export type SiteCode = "nyc" | "tlv" | "bat-yam" | "five";
 
 export type HealthSeverity = "UNKNOWN" | "HEALTHY" | "INFO" | "WARNING" | "CRITICAL";
 

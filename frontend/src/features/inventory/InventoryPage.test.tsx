@@ -12,7 +12,7 @@ function makeServer(overrides: Partial<ServerSummary> = {}): ServerSummary {
     name: "ocp-dell-worker-001",
     vendor: "dell",
     model: "PowerEdge R760",
-    site_id: "one",
+    site_id: "tlv",
     manager_id: "mgr_ome_tlv_01",
     source_provider: "UCS_CENTRAL",
     classification: { installation_type: "HOSTED_CLUSTER" },

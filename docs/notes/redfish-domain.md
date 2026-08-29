@@ -134,7 +134,7 @@ anyway, which is a fair proxy for "this needs a written justification".
 
 A BMC is reachable at an IP or a management hostname —
 `10.20.30.41`, `srv-ilo-042.mgmt.example.com`. The platform parses
-`site` out of the **server's own name** (`ocp4-prod-one-infra-01` →
+`site` out of the **server's own name** (`ocp4-prod-tlv-infra-01` →
 `one`), and `parse_site_code` requires an exact `-`-delimited token
 match.
 

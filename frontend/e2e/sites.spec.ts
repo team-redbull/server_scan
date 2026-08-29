@@ -5,10 +5,10 @@ test.describe("Sites overview", () => {
     await page.goto("/");
     await expect(page.getByRole("heading", { name: "Sites", level: 1 })).toBeVisible();
 
-    // All five fixed sites always render, even one with no servers — a
+    // Every fixed site always renders, even one with no servers — a
     // site with nothing in it and a site that does not exist are
     // different facts, and the UI must be able to show the difference.
-    for (const name of ["Site One", "Site Two", "Site Three", "Site Four", "Site Five"]) {
+    for (const name of ["New York City", "Tel Aviv", "Bat Yam", "Site Five"]) {
       await expect(page.getByRole("heading", { name, exact: true })).toBeVisible();
     }
 

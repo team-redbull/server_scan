@@ -8,7 +8,7 @@ The exposure is specific to this platform. A Redfish credentials file is
 a fleet-wide, root-equivalent secret, and an inventory or a raw
 `Redfish-Mockup-Creator` capture discloses the estate's topology —
 doubly so here, because this project encodes the site code in the server
-name (`ocp4-prod-one-infra-01` -> site `one`). And committed is forever:
+name (`ocp4-prod-tlv-infra-01` -> site `tlv`). And committed is forever:
 `git rm` does not remove a file from history.
 
 See docs/adr/0016-redfish-standalone-collector.md.

@@ -474,7 +474,7 @@ async def _dry_run_one_manager(
             print(f"  … stopped at --limit {limit}")
             break
         count += 1
-        site = parse_site_code(ps.name)
+        site = parse_site_code(ps.name) or parse_site_code(ps.profile_dn)
         memory = (
             f"{ps.memory_total_bytes / 1024**3:.1f} GiB"
             if ps.memory_total_bytes is not None

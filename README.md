@@ -64,7 +64,7 @@ physical manager. On a schedule, a CronJob's pod:
    evaluate, audit, and upsert into MongoDB, all in one write per server.
 
 A server's **site** is not configured anywhere: it is parsed from the
-server's own name (`ocp4-prod-one-infra-01` -> site `one`), so a
+server's own name (`ocp4-prod-tlv-infra-01` -> site `tlv`), so a
 misconfigured manager cannot mislabel everything it collects. A name with
 no site token is surfaced as "Unassigned" rather than defaulted.
 

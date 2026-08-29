@@ -59,10 +59,9 @@ from app.utils.ids import ID_PREFIXES
 
 _SITE_CODES = tuple(member.value for member in SiteCode)
 _SITE_NAMES = {
-    "one": "Site One",
-    "two": "Site Two",
-    "three": "Site Three",
-    "four": "Site Four",
+    "nyc": "New York City",
+    "tlv": "Tel Aviv",
+    "bat-yam": "Bat Yam",
     "five": "Site Five",
 }
 

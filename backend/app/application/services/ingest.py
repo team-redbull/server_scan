@@ -530,9 +530,11 @@ class IngestService:
             }
 
         # The name is the authority on site, not the collector's config —
-        # see `app.domain.value_objects.site`. `None` (a name with no site
-        # token) is a real, surfaced state, never defaulted to a site.
-        site_id = parse_site_code(ps.name)
+        # see `app.domain.value_objects.site`. A UCS server whose name
+        # carries no site token falls back to the org path of its service
+        # profile (`org-root/org_tlv/...`); `None` (neither says) is a
+        # real, surfaced state, never defaulted to a site.
+        site_id = parse_site_code(ps.name) or parse_site_code(ps.profile_dn)
 
         server = Server(
             _id=server_id,

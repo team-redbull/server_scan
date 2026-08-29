@@ -51,7 +51,7 @@ A minimal inventory is three lines:
 ```toml
 [[hosts]]
 host = "192.0.2.41"
-name = "ocp4-prod-one-infra-01"
+name = "ocp4-prod-tlv-infra-01"
 ```
 
 **The two things worth knowing up front:**
@@ -62,7 +62,7 @@ because a credential in an address would otherwise reach MongoDB, the
 API and this collector's own dry-run output.
 
 **`name` decides the site.** The platform parses a server's site out of
-its name (`ocp4-prod-one-infra-01` → site `one`). A BMC usually does not
+its name (`ocp4-prod-tlv-infra-01` → site `tlv`). A BMC usually does not
 know that name, so without `name =` the server lands in "Unassigned" and
 classifies as `UNCLASSIFIED`. That is correct behaviour, not a bug — but
 it is almost never what you want.
@@ -121,7 +121,7 @@ Point the collector at a **canary inventory of one to five hosts** first.
 cat > ./canary.toml <<'EOF'
 [[hosts]]
 host = "192.0.2.41"
-name = "ocp4-prod-one-infra-01"
+name = "ocp4-prod-tlv-infra-01"
 EOF
 
 INVENTORY_REDFISH_INVENTORY_FILE=./canary.toml \
@@ -137,7 +137,7 @@ mapping together.
 ```
 === redfish-standalone (REDFISH_STANDALONE @ ./canary.toml) ===
 
-[1] ocp4-prod-one-infra-01
+[1] ocp4-prod-tlv-infra-01
      external_id : redfish://192.0.2.41/redfish/v1/Systems/1
      site (from name): one
      vendor/model: dell / PowerEdge R660

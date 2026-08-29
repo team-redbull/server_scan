@@ -219,7 +219,7 @@ def minimal_service(**overrides: Any) -> dict[str, Any]:
             "@odata.type": "#ComputerSystem.v1_22_0.ComputerSystem",
             "Id": "1",
             "Name": "System",
-            "HostName": "ocp4-prod-one-infra-01",
+            "HostName": "ocp4-prod-tlv-infra-01",
             "Manufacturer": "Dell Inc.",
             "Model": "PowerEdge R660",
             "SerialNumber": "FCH2201V0AB",

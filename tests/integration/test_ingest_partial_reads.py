@@ -61,7 +61,7 @@ def _fully_read(**overrides: object) -> ProviderServer:
     base: dict[str, object] = {
         "external_id": "redfish://10.20.30.41/redfish/v1/Systems/1",
         "vendor": "dell",
-        "name": "ocp4-prod-one-infra-01",
+        "name": "ocp4-prod-tlv-infra-01",
         "serial": "SN-PARTIAL-1",
         "system_uuid": "11111111-2222-3333-4444-555555555555",
         "nic_macs": ("00:00:5e:00:53:01",),

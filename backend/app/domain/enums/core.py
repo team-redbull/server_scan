@@ -51,7 +51,7 @@ class SiteCode(StrEnum):
     """The closed set of sites. Servers are assigned to one by parsing
     their name (`app.domain.value_objects.site.parse_site_code`) — the
     site token is embedded in every production hostname, e.g.
-    `ocp4-prod-one-infra-01`.
+    `ocp4-prod-tlv-infra-01`.
 
     A closed enum rather than free-form strings because the previous
     free-form `site_id` let a caller filter on a value no document could
@@ -59,10 +59,9 @@ class SiteCode(StrEnum):
     distinguish "no such site" from "no servers there".
     """
 
-    ONE = "one"
-    TWO = "two"
-    THREE = "three"
-    FOUR = "four"
+    NYC = "nyc"
+    TLV = "tlv"
+    BAT_YAM = "bat-yam"
     FIVE = "five"
 
 
