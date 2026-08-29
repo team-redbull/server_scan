@@ -60,8 +60,16 @@ export const VENDORS: readonly Vendor[] = ["dell", "cisco", "hp", "standalone"];
 /** How a server is reached, which is a different question from who built
  * it. A Dell reached at its own BMC is still `vendor: "dell"`; what makes
  * it unmanaged is `source_provider: "REDFISH_STANDALONE"`. Values match
- * the backend's `ManagerType`. */
+ * the backend's `ManagerType`.
+ *
+ * Only the collectors that actually exist are listed — filtering by one
+ * with no implementation would always return nothing. The two Cisco
+ * entries partition the Cisco fleet rather than overlapping: UCS Central
+ * owns the UCS-managed domains, Intersight owns the servers no UCS domain
+ * does. `tests/unit/test_frontend_manager_types.py` fails the build if a
+ * collector is added to the backend and not to this list. */
 export const SOURCE_PROVIDERS: readonly { value: string; label: string }[] = [
   { value: "UCS_CENTRAL", label: "UCS Central" },
+  { value: "INTERSIGHT", label: "Intersight" },
   { value: "REDFISH_STANDALONE", label: "Standalone (Redfish)" },
 ];

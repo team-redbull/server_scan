@@ -45,6 +45,7 @@ const MANAGER_TYPES: ManagerType[] = [
   "UCS_CENTRAL",
   "INTERSIGHT",
   "ONEVIEW",
+  "REDFISH_STANDALONE",
 ];
 
 interface RuleFormState {
