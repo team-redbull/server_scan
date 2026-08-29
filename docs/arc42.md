@@ -16,6 +16,7 @@ of a technical explanation is a second copy to keep true:
 | Verified Cisco implementation facts | `docs/cisco-collectors.md` |
 | Working in this repo | `CLAUDE.md` |
 | Air-gapped mirroring | `docs/air-gap.md` |
+| A picture of the runtime | `docs/diagrams/runtime-architecture.html` — open it in a browser |
 
 Sections 4–8 therefore read as maps with pointers, not as prose
 duplicates. Where this document is the only place a fact is written
