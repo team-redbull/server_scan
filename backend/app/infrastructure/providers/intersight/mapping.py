@@ -109,6 +109,29 @@ def management_mode(summary: Mapping[str, Any]) -> str:
     return _text(summary.get("ManagementMode")) or MODE_STANDALONE
 
 
+def profile_name_from_dn(dn: str | None) -> str | None:
+    """
+    The service profile's name, out of its distinguished name.
+
+    A UCSM-managed server has no `server.Profile` object in Intersight —
+    only the summary's `ServiceProfile` DN, whose last component is
+    `ls-<name>`. This is the same shape `ucs_manager.mapping` reads a
+    profile's name from, and without it a UCSM-mode server falls back to
+    `compute.PhysicalSummary.Name`, which is a chassis slot.
+
+    Args:
+        dn (str | None): A service profile DN, e.g.
+            `"org-root/org_tlv/ls-worker-01"`.
+
+    Returns:
+        str | None: `"worker-01"`, or None if the DN names no profile.
+    """
+    tail = (_text(dn) or "").rsplit("/", 1)[-1]
+    if not tail.startswith("ls-"):
+        return None
+    return tail[len("ls-") :] or None
+
+
 def server_name(summary: Mapping[str, Any], profile: Mapping[str, Any] | None) -> str | None:
     """
     The name an operator would recognise this server by.
@@ -122,6 +145,13 @@ def server_name(summary: Mapping[str, Any], profile: Mapping[str, Any] | None) -
     filters the fleet on it, sourcing it wrong collects nothing rather
     than failing.
 
+    The `ServiceProfile` step is not dead code for a default run even
+    though `UCSM` is excluded by default: the mode set is operator-
+    editable (`INVENTORY_INTERSIGHT_MANAGEMENT_MODES`), and without this
+    step adding `UCSM` to it would silently name every such server after
+    its chassis slot — reproducing exactly the defect this docstring
+    describes.
+
     Args:
         summary (Mapping[str, Any]): A `compute.PhysicalSummary`.
         profile (Mapping[str, Any] | None): Its associated
@@ -129,13 +159,18 @@ def server_name(summary: Mapping[str, Any], profile: Mapping[str, Any] | None) -
 
     Returns:
         str | None: The server profile's name where one is assigned, then
-            the operator's own label, then whatever the summary calls it.
+            the name in a UCSM service-profile DN, then the operator's own
+            label, then whatever the summary calls it.
     """
     if profile is not None:
         name = _text(profile.get("Name"))
         if name:
             return name
-    return _text(summary.get("UserLabel")) or _text(summary.get("Name"))
+    return (
+        profile_name_from_dn(_text(summary.get("ServiceProfile")))
+        or _text(summary.get("UserLabel"))
+        or _text(summary.get("Name"))
+    )
 
 
 def bmc_address(summary: Mapping[str, Any], interface: Mapping[str, Any] | None) -> str | None:
@@ -148,14 +183,23 @@ def bmc_address(summary: Mapping[str, Any], interface: Mapping[str, Any] | None)
         interface (Mapping[str, Any] | None): The server's
             `management.Interface`, used only when the summary has none.
 
+    The interface is consulted **first** where one was read. It is the
+    more specific source, and it is also where `bmc_mac` comes from — so
+    preferring it keeps a server's reported BMC address and BMC MAC
+    describing the same interface rather than potentially two. The
+    summary's own field needs no extra query and is the fallback. Whether
+    the two can actually disagree is unverified; see ADR-0017.
+
     Returns:
         str | None: `ipmi://host:623`, the form
             `app.domain.value_objects.bmc_address.parse_bmc_address`
             already recognises for Cisco, or None.
     """
-    address = _text(summary.get("MgmtIpAddress"))
-    if not address and interface is not None:
+    address = None
+    if interface is not None:
         address = _text(interface.get("IpAddress")) or _text(interface.get("Ipv4Address"))
+    if not address:
+        address = _text(summary.get("MgmtIpAddress"))
     if not address or address.lower() in _UNSET_ADDRESSES:
         return None
     return f"ipmi://{address}:623"
@@ -381,11 +425,18 @@ def to_provider_server(
     ext = list(ext_interfaces) if ext_interfaces is not None else None
     host = list(host_interfaces) if host_interfaces is not None else None
 
+    # vNIC MACs are what an OS reports; the physical ports' own MACs stand
+    # in only for a server that has no vNIC at all. `()` is claimed ONLY
+    # when both tables were read and both are empty — if either failed,
+    # "no MACs" is not something this run is entitled to assert, and
+    # asserting it would overwrite the stored MACs with nothing.
     macs: tuple[str, ...] | None = None
-    if host is not None or ext is not None:
-        # vNIC MACs are what an OS reports; the physical ports' own MACs
-        # stand in only for a server that has no vNIC at all.
-        macs = _macs(host or []) or _macs(ext or [])
+    host_macs = _macs(host) if host is not None else ()
+    ext_macs = _macs(ext) if ext is not None else ()
+    if host_macs or ext_macs:
+        macs = host_macs or ext_macs
+    elif host is not None and ext is not None:
+        macs = ()
 
     attachments: list[ProviderAttachment] = []
     for interface in ext or ():

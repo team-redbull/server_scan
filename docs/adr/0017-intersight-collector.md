@@ -520,6 +520,42 @@ their precedence. The join consults `AssociatedServer` first — the
 machine actually running the configuration — and falls back to
 `AssignedServer`.
 
+### Found by an independent review pass
+
+The mapping was reviewed against the Phase-1 research notes by someone
+other than its author. Four findings were real and are fixed:
+
+1. **The UCSM fallback this ADR promised was never implemented.** The
+   section above says a `UCSM`-mode server would parse its
+   `ServiceProfile` DN for a name; the code only ever read
+   `server.Profile.Name`. Since `INVENTORY_INTERSIGHT_MANAGEMENT_MODES`
+   is operator-editable, adding `UCSM` to it would have named every such
+   server after its chassis slot — the ADR-0009 defect, reintroduced by
+   an ADR section that described a behaviour the code did not have.
+   `mapping.profile_name_from_dn` now reads `ls-<name>` the way
+   `ucs_manager.mapping` does.
+2. **`nic_macs` could report `()` when a NIC table had failed.** The two
+   adapter-interface queries fail independently. If the physical-port
+   table failed while the vNIC table succeeded and a server genuinely had
+   no vNICs, the merge produced an empty tuple — an assertion that the
+   server has no MACs, which `IngestService` would write over the stored
+   ones. `()` is now claimed only when *both* tables were read.
+3. **The run budget did not cover the join phase.** Every fleet-wide
+   sub-resource read happened before the budget was ever consulted, so a
+   throttled tenant could burn the whole budget there and be killed by
+   `activeDeadlineSeconds` with nothing reported — precisely what the
+   budget exists to prevent. It is now checked between tables, and a
+   table skipped for time is `None` (unread), not empty.
+4. **`bmc_address` preferred the summary over the management
+   interface.** Reversed: `bmc_mac` comes from the interface, so the
+   address should too, or a server reports an address and a MAC that need
+   not describe the same interface.
+
+A fifth finding — that the memory check filtered `memory/Units` on
+relationship fields it does not have — had already been found and fixed
+independently; `memory.Unit` reaches its server only through
+`memory.Array`.
+
 ---
 
 ## Superseded: the questions as they were asked

@@ -458,3 +458,32 @@ async def test_an_unassociated_profile_still_names_its_assigned_server() -> None
     servers = await _collect(_provider(_FakeClient(tables)))
 
     assert next(s for s in servers if s.serial == "WZP2").name == "ocp4-nyc-worker-01"
+
+
+@pytest.mark.asyncio
+async def test_the_run_budget_also_bounds_the_join_phase() -> None:
+    """The sub-resource reads are where a throttled tenant actually costs
+    its time. A budget that only bounded the streaming phase would let the
+    CronJob be killed here with nothing reported at all.
+    """
+    client = _FakeClient()
+    provider = _provider(client, run_budget_seconds=-1.0)
+    servers = await _collect(provider)
+
+    assert servers == []
+    assert any("run budget" in m for m in provider.collection_errors)
+    # No sub-resource was read: it gave up before spending the time,
+    # rather than reading the whole estate and only then noticing.
+    assert [r for r in client.requested if r != "compute/PhysicalSummaries"] == []
+
+
+@pytest.mark.asyncio
+async def test_the_budget_message_names_the_phase_it_gave_up_in() -> None:
+    """ "Ran out of time" is not actionable; "ran out before reading any
+    sub-resource" tells an operator to raise the budget rather than go
+    looking for a broken query.
+    """
+    provider = _provider(_FakeClient(), run_budget_seconds=-1.0)
+    await _collect(provider)
+
+    assert any("before reading any sub-resource" in m for m in provider.collection_errors)

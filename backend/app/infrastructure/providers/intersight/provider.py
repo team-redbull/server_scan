@@ -308,17 +308,41 @@ class IntersightProvider:
             logger.warning("intersight.subresource_failed", resource=resource, error=str(exc))
             return None
 
-    async def _build_joins(self, client: Any) -> _Joins:
+    def _over_budget(self, started: float) -> bool:
+        """
+        Whether this run has spent its wall-clock budget.
+
+        Args:
+            started (float): `time.monotonic()` when the run began.
+
+        Returns:
+            bool: True once the budget is gone.
+        """
+        return time.monotonic() - started > self._run_budget_seconds
+
+    async def _build_joins(self, client: Any, *, started: float) -> _Joins:
         """
         Read every sub-resource once and index it by owning server.
 
+        The budget is checked between tables, not only while streaming
+        servers: this phase is where a throttled tenant actually costs
+        its time, and a budget that only bounded the streaming phase
+        would let the CronJob be killed here with nothing reported.
+        A table skipped for budget is `None` — unread, not empty — so it
+        degrades exactly as a failed one does.
+
         Args:
             client (Any): The Intersight client.
+            started (float): `time.monotonic()` when the run began.
 
         Returns:
-            _Joins: The indexed tables, with `None` for any that failed.
+            _Joins: The indexed tables, with `None` for any that failed
+                or was skipped.
         """
         joins = _Joins()
+        if self._over_budget(started):
+            self._note_budget_exhausted(phase="before reading any sub-resource")
+            return joins
 
         profiles = await self._collect_table(client, "server/Profiles", select=_PROFILE_FIELDS)
         if profiles is not None:
@@ -331,6 +355,10 @@ class IntersightProvider:
             joins.templates = {
                 str(t.get("Moid")): t for t in templates or () if t.get("Moid") is not None
             }
+
+        if self._over_budget(started):
+            self._note_budget_exhausted(phase="after reading server profiles")
+            return joins
 
         adapter_units = await self._collect_table(
             client, "adapter/Units", select=_ADAPTER_UNIT_FIELDS
@@ -366,6 +394,10 @@ class IntersightProvider:
             if host is not None:
                 joins.host_interfaces = _group_by(host, by_adapter)
 
+        if self._over_budget(started):
+            self._note_budget_exhausted(phase="after reading adapter interfaces")
+            return joins
+
         controllers = await self._collect_table(
             client, "storage/Controllers", select=_STORAGE_CONTROLLER_FIELDS
         )
@@ -383,6 +415,10 @@ class IntersightProvider:
                         mapping.moref(d.get("StorageController")) or ""
                     ),
                 )
+
+        if self._over_budget(started):
+            self._note_budget_exhausted(phase="after reading storage")
+            return joins
 
         cards = await self._collect_table(client, "graphics/Cards", select=_CARD_FIELDS)
         if cards is not None:
@@ -413,6 +449,22 @@ class IntersightProvider:
 
         return joins
 
+    def _note_budget_exhausted(self, *, phase: str) -> None:
+        """
+        Record that the run ran out of time, and where.
+
+        Reported as a collection error rather than raised: `run_collector`
+        turns a non-empty `collection_errors` into exit 3 (PARTIAL), which
+        is the honest description of a run that wrote some servers but did
+        not see the whole fleet.
+
+        Args:
+            phase (str): What the run had reached when the budget went.
+        """
+        message = f"run budget of {self._run_budget_seconds:.0f}s exhausted {phase}"
+        self._collection_errors.append(message)
+        logger.warning("intersight.run_budget_exhausted", phase=phase)
+
     async def list_servers(self) -> AsyncIterator[ProviderServer]:
         """
         Every server this endpoint reports, in the modes configured.
@@ -430,7 +482,7 @@ class IntersightProvider:
         started = time.monotonic()
         client = self._new_client()
         try:
-            joins = await self._build_joins(client)
+            joins = await self._build_joins(client, started=started)
 
             collected = 0
             async for summary in client.list_all(
@@ -438,14 +490,10 @@ class IntersightProvider:
                 select=_SUMMARY_FIELDS,
                 filter_expr=self._mode_filter(),
             ):
-                elapsed = time.monotonic() - started
-                if elapsed > self._run_budget_seconds:
-                    message = (
-                        f"run budget of {self._run_budget_seconds:.0f}s exhausted after "
-                        f"{collected} server(s); the rest of the fleet was not read"
+                if self._over_budget(started):
+                    self._note_budget_exhausted(
+                        phase=f"after {collected} server(s); the rest of the fleet was not read"
                     )
-                    self._collection_errors.append(message)
-                    logger.warning("intersight.run_budget_exhausted", collected=collected)
                     break
 
                 moid = str(summary.get("Moid") or "")

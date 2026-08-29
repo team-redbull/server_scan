@@ -321,11 +321,16 @@ def test_an_unset_bmc_address_sentinel_is_not_an_address() -> None:
     assert mapping.bmc_address(_summary(MgmtIpAddress=""), None) is None
 
 
-def test_the_management_interface_supplies_an_address_only_as_a_fallback() -> None:
-    """The summary's own field costs no extra query."""
-    summary = _summary(MgmtIpAddress=None)
-    assert mapping.bmc_address(summary, {"IpAddress": "10.10.5.99"}) == "ipmi://10.10.5.99:623"
-    assert mapping.bmc_address(_summary(), {"IpAddress": "10.10.5.99"}) == "ipmi://10.10.5.31:623"
+def test_the_management_interface_wins_over_the_summarys_own_field() -> None:
+    """`bmc_mac` comes from the interface, so the address must too — a
+    server reporting an address from one source and a MAC from another
+    describes no single interface. The summary is the fallback for when
+    no interface was read.
+    """
+    assert mapping.bmc_address(_summary(), {"IpAddress": "10.10.5.99"}) == "ipmi://10.10.5.99:623"
+    assert mapping.bmc_address(_summary(), None) == "ipmi://10.10.5.31:623"
+    # An interface that was read but carries no address still falls back.
+    assert mapping.bmc_address(_summary(), {"MacAddress": "aa:bb"}) == "ipmi://10.10.5.31:623"
 
 
 def test_a_ucsm_managed_server_keeps_its_service_profile_dn() -> None:
@@ -385,3 +390,92 @@ def test_a_moref_resolves_and_an_unset_one_does_not() -> None:
     assert mapping.moref(_ref("abc")) == "abc"
     assert mapping.moref(None) is None
     assert mapping.moref({"ClassId": "mo.MoRef"}) is None
+
+
+# --- the UCSM service-profile fallback --------------------------------
+
+
+def test_a_ucsm_server_is_named_from_its_service_profile_dn() -> None:
+    """A UCSM-managed server has no `server.Profile` object at all, only
+    the summary's `ServiceProfile` DN. Without reading the name out of
+    it, such a server falls back to `PhysicalSummary.Name` — a chassis
+    slot — which carries no site token and matches no `^ocp`.
+
+    `UCSM` is excluded by default, but the mode set is operator-editable,
+    so this is the difference between an override that works and one that
+    silently collects nothing.
+    """
+    summary = _summary(
+        ManagementMode="UCSM",
+        ServiceProfile="org-root/org_tlv/ls-ocp4-prod-tlv-infra-01",
+        Name="FI-cluster-A/chassis-3/blade-7",
+    )
+    assert mapping.server_name(summary, None) == "ocp4-prod-tlv-infra-01"
+
+
+@pytest.mark.parametrize(
+    ("dn", "expected"),
+    [
+        ("org-root/org_tlv/ls-worker-01", "worker-01"),
+        ("org-root/ls-a", "a"),
+        ("org-root/org_tlv", None),
+        ("", None),
+        (None, None),
+        ("org-root/ls-", None),
+    ],
+)
+def test_a_profile_name_is_read_off_the_dns_last_component(
+    dn: str | None, expected: str | None
+) -> None:
+    """Same `ls-<name>` shape `ucs_manager.mapping` already reads."""
+    assert mapping.profile_name_from_dn(dn) == expected
+
+
+def test_a_real_profile_still_beats_the_dn() -> None:
+    """An IMM server has both in principle; the object is authoritative."""
+    summary = _summary(ServiceProfile="org-root/ls-from-dn")
+    assert mapping.server_name(summary, {"Name": "from-profile"}) == "from-profile"
+
+
+# --- None-versus-empty when the two NIC tables disagree ---------------
+
+
+def test_macs_stay_unread_when_one_nic_table_failed() -> None:
+    """The bug this guards: `adapter/ExtEthInterfaces` fails for the whole
+    run while `adapter/HostEthInterfaces` succeeds and this server happens
+    to have no vNICs. Reporting `()` would assert "this server has no
+    MACs", and `IngestService` would overwrite the stored MACs with
+    nothing — the exact class of loss ADR-0016 exists to prevent.
+    """
+    server = mapping.to_provider_server(
+        _summary(),
+        provider_type="INTERSIGHT",
+        manager_id="mgr_intersight",
+        host_interfaces=[],
+        ext_interfaces=None,
+    )
+    assert server.nic_macs is None
+
+
+def test_macs_are_empty_only_when_both_tables_were_read() -> None:
+    """ "Read both, found none" is a real claim and must be recorded."""
+    server = mapping.to_provider_server(
+        _summary(),
+        provider_type="INTERSIGHT",
+        manager_id="mgr_intersight",
+        host_interfaces=[],
+        ext_interfaces=[],
+    )
+    assert server.nic_macs == ()
+
+
+def test_macs_from_the_surviving_table_are_still_reported() -> None:
+    """A failed sibling must not discard MACs that were actually read."""
+    server = mapping.to_provider_server(
+        _summary(),
+        provider_type="INTERSIGHT",
+        manager_id="mgr_intersight",
+        host_interfaces=None,
+        ext_interfaces=[{"SwitchId": "A", "MacAddress": "00:11:22:33:44:00"}],
+    )
+    assert server.nic_macs == ("00:11:22:33:44:00",)
