@@ -11,6 +11,7 @@ from app.domain.models.hardware import Gpu
 from app.domain.ports.credentials import ManagerConnection
 from app.domain.value_objects.site import parse_site_code
 from app.infrastructure.providers.fake.generator import (
+    collector_for,
     generate_servers,
     list_managers,
     list_sites,
@@ -82,25 +83,32 @@ def test_bmc_address_forms_match_the_collector_that_reported_them() -> None:
 
 
 def test_external_ids_match_the_collector_that_reported_them() -> None:
-    """A Cisco server is identified by its Central-rooted DN, a standalone
-    one by the Redfish system URL — the same strings the real collectors
-    correlate on.
+    """Each collector stamps its own identity: a Central-rooted DN, an
+    `intersight/<moid>`, or a Redfish system URL — the same strings the
+    real collectors correlate on.
     """
     for s in generate_servers(seed=42, count=300):
-        if s.vendor == "cisco":
+        collector = provider_type_for(s)
+        if collector == ManagerType.UCS_CENTRAL.value:
             assert s.external_id.startswith("compute/sys-")
             assert "/blade-" in s.external_id or "/rack-unit-" in s.external_id
+        elif collector == ManagerType.INTERSIGHT.value:
+            assert s.external_id.startswith("intersight/")
+            # A Moid is 24 hex characters, which is what the real
+            # `intersight.mapping.external_id` carries.
+            assert len(s.external_id[len("intersight/") :]) == 24
         else:
             assert s.external_id.startswith("redfish://")
 
 
-def test_only_cisco_servers_carry_a_service_profile_dn() -> None:
-    """A BMC knows nothing about service profiles, so `profile_dn` is the
-    UCS collector's alone — and its org segment is what the site falls
-    back to when a name carries no site token.
+def test_only_ucs_central_servers_carry_a_service_profile_dn() -> None:
+    """`profile_dn` is UCS Manager's alone. A BMC knows nothing about
+    service profiles, and an Intersight `server.Profile` has no `Dn`
+    field at all — so only UCS Central's servers get the org path that
+    the site falls back to when a name carries no site token.
     """
     for s in generate_servers(seed=42, count=300):
-        if s.vendor != "cisco":
+        if provider_type_for(s) != ManagerType.UCS_CENTRAL.value:
             assert s.profile_dn is None
             continue
         assert s.profile_dn is not None
@@ -108,24 +116,37 @@ def test_only_cisco_servers_carry_a_service_profile_dn() -> None:
         assert parse_site_code(s.profile_dn) is not None
 
 
-def test_a_siteless_cisco_name_still_resolves_through_its_org_dn() -> None:
+def test_a_siteless_ucs_central_name_still_resolves_through_its_org_dn() -> None:
+    """Only for UCS Central: it is the one collector with an org path to
+    fall back to. An Intersight server whose name carries no site token
+    really does end up unsited, which is a gap this fixture shows rather
+    than papers over.
+    """
     siteless = [
         s
         for s in generate_servers(seed=42, count=300)
-        if s.vendor == "cisco" and parse_site_code(s.name) is None
+        if provider_type_for(s) == ManagerType.UCS_CENTRAL.value and parse_site_code(s.name) is None
     ]
-    assert siteless, "the siteless name family should reach Cisco servers too"
+    assert siteless, "the siteless name family should reach UCS Central servers too"
     for s in siteless:
         assert parse_site_code(s.profile_dn) is not None
 
 
-def test_gpus_are_reported_by_redfish_and_unread_by_ucs() -> None:
-    """`None` and `()` are different claims: UCS never reads GPUs, while a
-    Redfish server with none discoverable reports an empty tuple.
+def test_each_collector_reports_gpus_to_its_own_ceiling() -> None:
+    """`None` and `()` are different claims, and so are "the GPU exists"
+    and "here is its temperature". UCS Central reads no GPU objects at
+    all; Intersight reads a card's identity but has no telemetry field
+    anywhere in its schema; only Redfish reads both.
     """
     servers = list(generate_servers(seed=42, count=300))
-    assert all(s.gpus is None for s in servers if s.vendor == "cisco")
-    assert all(s.gpus is not None for s in servers if s.vendor != "cisco")
+    by_collector: dict[str, list] = {}
+    for s in servers:
+        by_collector.setdefault(provider_type_for(s), []).append(s)
+
+    assert all(s.gpus is None for s in by_collector[ManagerType.UCS_CENTRAL.value])
+    assert all(s.gpus is not None for s in by_collector[ManagerType.INTERSIGHT.value])
+    assert all(s.gpus is not None for s in by_collector[ManagerType.REDFISH_STANDALONE.value])
+
     with_gpus = [s for s in servers if s.gpus]
     assert with_gpus
     for s in with_gpus:
@@ -133,6 +154,20 @@ def test_gpus_are_reported_by_redfish_and_unread_by_ucs() -> None:
         for gpu in s.gpus:
             assert set(gpu) == set(Gpu.model_fields)
             Gpu.model_validate(gpu)
+
+    intersight_gpus = [
+        gpu for s in by_collector[ManagerType.INTERSIGHT.value] for gpu in (s.gpus or ())
+    ]
+    assert intersight_gpus, "some Intersight servers should carry GPUs"
+    for gpu in intersight_gpus:
+        # Identity is real; every telemetry field is None because the API
+        # carries no such field. Reporting zeros would read as a healthy
+        # idle GPU. See docs/adr/0017-intersight-collector.md.
+        assert gpu["model"]
+        assert gpu["memory_bytes"] is None
+        assert gpu["temperature_celsius"] is None
+        assert gpu["ecc_mode_enabled"] is None
+        assert gpu["correctable_error_count"] is None
 
 
 def test_drive_health_uses_the_health_severity_vocabulary() -> None:
@@ -244,6 +279,7 @@ def test_managers_are_exactly_the_implemented_collectors() -> None:
     """
     assert {m.type for m in list_managers()} == {
         ManagerType.UCS_CENTRAL,
+        ManagerType.INTERSIGHT,
         ManagerType.REDFISH_STANDALONE,
     }
 
@@ -254,17 +290,26 @@ def test_manager_ids_match_what_a_real_collector_writes() -> None:
     """
     assert {m.id for m in list_managers()} == {
         manager_for(t, ManagerConnection(endpoint="e", username="u", password="p")).id
-        for t in (ManagerType.UCS_CENTRAL, ManagerType.REDFISH_STANDALONE)
+        for t in (ManagerType.UCS_CENTRAL, ManagerType.INTERSIGHT, ManagerType.REDFISH_STANDALONE)
     }
 
 
 def test_every_server_is_owned_by_the_collector_that_could_find_it() -> None:
+    """And by exactly one: the two Cisco collectors partition the Cisco
+    fleet rather than both claiming it, mirroring the `ManagementMode`
+    split the real Intersight collector enforces.
+    """
+    seen: set[str] = set()
     for s in generate_servers(seed=42, count=300):
-        expected = (
-            ManagerType.UCS_CENTRAL if s.vendor == "cisco" else ManagerType.REDFISH_STANDALONE
-        )
-        assert provider_type_for(s.vendor) == expected.value
+        expected = collector_for(s.vendor, s.model or "")
+        assert provider_type_for(s) == expected.value
         assert s.manager_id == manager_id_for(expected)
+        if s.vendor == "cisco":
+            seen.add(expected.value)
+
+    assert seen == {ManagerType.UCS_CENTRAL.value, ManagerType.INTERSIGHT.value}, (
+        "Cisco servers should be split across both Cisco collectors"
+    )
 
 
 def test_servers_reference_known_managers() -> None:

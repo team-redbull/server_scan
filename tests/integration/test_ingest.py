@@ -88,10 +88,15 @@ async def test_source_provider_names_the_collector_that_found_each_server(
         with_count=False,
     )
     sources = {s.source_provider for s in page.items}
-    assert sources == {"UCS_CENTRAL", "REDFISH_STANDALONE"}
+    assert sources == {"UCS_CENTRAL", "INTERSIGHT", "REDFISH_STANDALONE"}
     for server in page.items:
-        expected = "UCS_CENTRAL" if server.identity.vendor == Vendor.CISCO else "REDFISH_STANDALONE"
-        assert server.source_provider == expected
+        if server.identity.vendor == Vendor.CISCO:
+            # The two Cisco collectors partition the Cisco fleet rather
+            # than both claiming it — the same split the real Intersight
+            # collector enforces by excluding ManagementMode == UCSM.
+            assert server.source_provider in {"UCS_CENTRAL", "INTERSIGHT"}
+        else:
+            assert server.source_provider == "REDFISH_STANDALONE"
 
 
 async def test_reingest_same_seed_updates_not_duplicates(mongo_holder: MongoClientHolder) -> None:

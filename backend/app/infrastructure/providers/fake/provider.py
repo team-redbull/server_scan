@@ -17,9 +17,9 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 
-from app.domain.enums import ManagerType
 from app.domain.ports.provider import ProviderServer
 from app.infrastructure.providers.fake.generator import (
+    COLLECTOR_TYPES,
     generate_servers,
     provider_type_for,
 )
@@ -56,7 +56,7 @@ class FakeProvider:
             ProviderServer: Each fake server this collector would own.
         """
         for server in generate_servers(seed=self._seed, count=self._count):
-            if provider_type_for(server.vendor) == self.provider_type:
+            if provider_type_for(server) == self.provider_type:
                 yield server
 
 
@@ -76,5 +76,5 @@ def fake_providers(*, seed: int, count: int) -> list[FakeProvider]:
     """
     return [
         FakeProvider(seed=seed, count=count, provider_type=manager_type.value)
-        for manager_type in (ManagerType.UCS_CENTRAL, ManagerType.REDFISH_STANDALONE)
+        for manager_type in COLLECTOR_TYPES
     ]

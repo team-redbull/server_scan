@@ -42,7 +42,10 @@ _SUMMARY_FIELDS = (
     "Moid,Dn,Name,UserLabel,Model,Serial,Uuid,Vendor,TotalMemory,NumCpus,NumCpuCores,"
     "NumThreads,MgmtIpAddress,ManagementMode,ServiceProfile"
 )
-_PROFILE_FIELDS = "Moid,Name,Dn,AssignedServer,SrcTemplate"
+# No `Dn`: a `server.Profile` has none, and selecting a field the
+# schema does not define risks failing the whole query — which
+# would cost every server its name.
+_PROFILE_FIELDS = "Moid,Name,AssignedServer,AssociatedServer,SrcTemplate"
 _TEMPLATE_FIELDS = "Moid,Name"
 _ADAPTER_UNIT_FIELDS = "Moid,ComputeBlade,ComputeRackUnit"
 _EXT_IF_FIELDS = (
@@ -73,6 +76,28 @@ def _owning_server(mo: Mapping[str, Any]) -> str | None:
             set (a spare part, or an object owned by a chassis).
     """
     return mapping.moref(mo.get("ComputeBlade")) or mapping.moref(mo.get("ComputeRackUnit"))
+
+
+def _profile_server(profile: Mapping[str, Any]) -> str | None:
+    """
+    The server a profile names.
+
+    `AssociatedServer` is preferred over `AssignedServer`: a profile can
+    be assigned to a server it has not been deployed to yet, and the
+    associated one is the machine actually running this configuration.
+    Their exact precedence is unverified against a live tenant — see
+    ADR-0017's UNVERIFIED list — so both are consulted rather than one
+    being trusted.
+
+    Args:
+        profile (Mapping[str, Any]): A `server.Profile`.
+
+    Returns:
+        str | None: The server's `Moid`, or None when unassigned.
+    """
+    return mapping.moref(profile.get("AssociatedServer")) or mapping.moref(
+        profile.get("AssignedServer")
+    )
 
 
 def _group_by(
@@ -298,10 +323,7 @@ class IntersightProvider:
         profiles = await self._collect_table(client, "server/Profiles", select=_PROFILE_FIELDS)
         if profiles is not None:
             joins.profiles = {
-                server: rows[0]
-                for server, rows in _group_by(
-                    profiles, lambda p: mapping.moref(p.get("AssignedServer"))
-                ).items()
+                server: rows[0] for server, rows in _group_by(profiles, _profile_server).items()
             }
             templates = await self._collect_table(
                 client, "server/ProfileTemplates", select=_TEMPLATE_FIELDS

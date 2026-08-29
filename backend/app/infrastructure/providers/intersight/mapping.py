@@ -360,7 +360,10 @@ def to_provider_server(
         summary (Mapping[str, Any]): The `compute.PhysicalSummary` anchor.
         provider_type (str): The collector's `ManagerType` value.
         manager_id (str | None): The `Manager` projection's id.
-        profile (Mapping[str, Any] | None): Its `server.Profile`.
+        profile (Mapping[str, Any] | None): Its `server.Profile`. Used
+            for the name and the template only: unlike UCS Manager's
+            `lsServer`, a `server.Profile` has no `Dn` at all, so the
+            only DN available is `ServiceProfile` on a UCSM-mode summary.
         template (Mapping[str, Any] | None): The profile's source
             `server.ProfileTemplate`.
         ext_interfaces (list[Mapping[str, Any]] | None):
@@ -417,7 +420,7 @@ def to_provider_server(
         bmc_address_raw=bmc_address(summary, management_interface),
         bmc_mac=_text(management_interface.get("MacAddress")) if management_interface else None,
         manager_id=manager_id,
-        profile_dn=_text(profile.get("Dn")) if profile else _text(summary.get("ServiceProfile")),
+        profile_dn=_text(summary.get("ServiceProfile")),
         profile_template_name=_text(template.get("Name")) if template else None,
         profile_template_external_id=_text(template.get("Moid")) if template else None,
         cpu_sockets=_as_int(summary.get("NumCpus")),

@@ -1,12 +1,23 @@
 """Deterministic fake inventory data.
 
-Produces `ProviderServer` DTOs in the shapes the two collectors that
-actually exist emit — `UCS_CENTRAL` for every Cisco server and
-`REDFISH_STANDALONE` for everything else — so dev and CI fixtures
-exercise the same field shapes, vocabularies and absences production
-does. A field one of those collectors cannot read is `None` here too
-(Cisco GPUs), and one neither reports is absent (tags), because a fixture
-richer than the real thing hides exactly the gaps worth seeing.
+Produces `ProviderServer` DTOs in the shapes the three collectors that
+actually exist emit, so dev and CI fixtures exercise the same field
+shapes, vocabularies and absences production does:
+
+* `UCS_CENTRAL` — Cisco blades, which live in a UCS domain registered
+  with Central.
+* `INTERSIGHT` — Cisco rack units, the ones claimed directly into
+  Intersight rather than into a UCS domain. This mirrors the real
+  partition: the Intersight collector excludes `ManagementMode == UCSM`
+  precisely because UCS Central already owns those servers
+  (docs/adr/0017-intersight-collector.md, "Decision 3").
+* `REDFISH_STANDALONE` — everything else, one BMC at a time.
+
+A field a collector cannot read is `None` here too, and each collector's
+absences differ, which is the point: UCS Manager reports no GPUs at all,
+while Intersight reports a GPU's identity with none of its telemetry, and
+only Redfish reports both. A fixture richer than the real thing hides
+exactly the gaps worth seeing.
 
 Determinism: every random choice goes through a single `random.Random(seed)`
 instance threaded through in a fixed order, so `generate_servers(seed=42,
@@ -39,11 +50,12 @@ from app.domain.value_objects.site import SITE_DISPLAY_NAMES
 
 _SITE_CODES = tuple(member.value for member in SiteCode)
 
-# The manager types that have a collector. `OPENMANAGE`/`ONEVIEW`/
-# `INTERSIGHT` have configuration slots and no implementation, so seeding
-# servers behind them would invent a data path that cannot exist.
-_COLLECTOR_TYPES: tuple[ManagerType, ...] = (
+# The manager types that have a collector. `OPENMANAGE` and `ONEVIEW`
+# have configuration slots and no implementation, so seeding servers
+# behind them would invent a data path that cannot exist.
+COLLECTOR_TYPES: tuple[ManagerType, ...] = (
     ManagerType.UCS_CENTRAL,
+    ManagerType.INTERSIGHT,
     ManagerType.REDFISH_STANDALONE,
 )
 
@@ -84,18 +96,62 @@ def manager_id_for(manager_type: ManagerType) -> str:
     return f"mgr_{manager_type.value.lower()}"
 
 
-def provider_type_for(vendor: str) -> str:
+def _is_blade(model: str) -> bool:
     """
-    Which collector would have found a server of this vendor.
+    Whether a Cisco model is a B-series blade rather than a rack unit.
+
+    Args:
+        model (str): The model string, e.g. `"UCS B200 M6"`.
+
+    Returns:
+        bool: True for a blade.
+    """
+    parts = model.split()
+    return len(parts) > 1 and parts[1].startswith("B")
+
+
+def collector_for(vendor: str, model: str) -> ManagerType:
+    """
+    Which collector would really have found this server.
+
+    Cisco is split the way the two Cisco collectors actually split it:
+    a blade sits in a chassis inside a UCS domain, which is what UCS
+    Central registers and collects; a rack unit is the shape claimed
+    directly into Intersight. Nothing is collected by both, mirroring the
+    `ManagementMode` partition the Intersight collector enforces.
 
     Args:
         vendor (str): A `Vendor` value.
+        model (str): The server's model.
 
     Returns:
-        str: `UCS_CENTRAL` for Cisco, `REDFISH_STANDALONE` for everything
-            else — the only two collectors that exist.
+        ManagerType: The owning collector.
     """
-    if vendor == "cisco":
+    if vendor != "cisco":
+        return ManagerType.REDFISH_STANDALONE
+    if _is_blade(model):
+        return ManagerType.UCS_CENTRAL
+    return ManagerType.INTERSIGHT
+
+
+def provider_type_for(server: ProviderServer) -> str:
+    """
+    Which collector owns an already-generated server.
+
+    Read back off `external_id` rather than recomputed from the server's
+    fields, because `external_id` is the one thing a real collector
+    stamps with its own identity — so this cannot drift from what
+    `collector_for` decided when the server was built.
+
+    Args:
+        server (ProviderServer): A generated server.
+
+    Returns:
+        str: The owning collector's `ManagerType` value.
+    """
+    if server.external_id.startswith("intersight/"):
+        return ManagerType.INTERSIGHT.value
+    if server.external_id.startswith("compute/sys-"):
         return ManagerType.UCS_CENTRAL.value
     return ManagerType.REDFISH_STANDALONE.value
 
@@ -139,7 +195,7 @@ def list_managers() -> list[Manager]:
             enabled=True,
             audit=AuditFields.new(),
         )
-        for manager_type in _COLLECTOR_TYPES
+        for manager_type in COLLECTOR_TYPES
     ]
 
 
@@ -253,47 +309,48 @@ def _random_uuid(rng: random.Random) -> str:
     return str(uuid.UUID(int=rng.getrandbits(128), version=4))
 
 
-def _bmc_address(vendor: str, ip: str) -> str:
+def _bmc_address(collector: ManagerType, ip: str) -> str:
     """
     The BMC address the owning collector would report.
 
     Args:
-        vendor (str): The server's vendor.
+        collector (ManagerType): The collector that owns the server.
         ip (str): Its BMC address.
 
     Returns:
-        str: `ipmi://<ip>:623` for Cisco, matching `ucs_manager.mapping.
-            _bmc_address`; the `redfish://` form `redfish.mapping` composes
-            for everything else.
+        str: `ipmi://<ip>:623` for either Cisco collector — they read the
+            same CIMC, and `intersight.mapping.bmc_address` deliberately
+            emits the same form `ucs_manager.mapping` does — and the
+            `redfish://` form `redfish.mapping` composes otherwise.
     """
-    if vendor == "cisco":
-        return f"ipmi://{ip}:623"
-    return f"redfish://{ip}/redfish/v1/Systems/1"
+    if collector is ManagerType.REDFISH_STANDALONE:
+        return f"redfish://{ip}/redfish/v1/Systems/1"
+    return f"ipmi://{ip}:623"
 
 
-def _external_id(vendor: str, *, index: int, site_index: int, model: str, bmc_ip: str) -> str:
+def _external_id(collector: ManagerType, *, index: int, site_index: int, bmc_ip: str) -> str:
     """
     The collector-native identifier for this server.
 
     Args:
-        vendor (str): The server's vendor.
+        collector (ManagerType): The collector that owns it.
         index (int): Its index in the generated fleet.
         site_index (int): Its site's position in `_SITE_CODES`, standing in
             for a registered UCS domain.
-        model (str): Its model, which decides blade vs rack unit.
         bmc_ip (str): Its BMC address.
 
     Returns:
         str: A domain-qualified UCS DN (`ucs_central.provider.
-            central_external_id`'s shape) for Cisco, the `redfish://`
-            system URL for everything else.
+            central_external_id`'s shape), an `intersight/<moid>` id
+            (`intersight.mapping.external_id`'s shape, whose Moid is 24
+            hex characters), or the `redfish://` system URL.
     """
-    if vendor != "cisco":
-        return f"redfish://{bmc_ip}/redfish/v1/Systems/1"
-    domain_id = str(1000 + site_index)
-    if model.split()[1].startswith("B"):  # B-series blade, in a chassis slot
+    if collector is ManagerType.UCS_CENTRAL:
+        domain_id = str(1000 + site_index)
         return f"compute/sys-{domain_id}/chassis-{index // 8 + 1}/blade-{index % 8 + 1}"
-    return f"compute/sys-{domain_id}/rack-unit-{index + 1}"
+    if collector is ManagerType.INTERSIGHT:
+        return f"intersight/{index:024x}"
+    return f"redfish://{bmc_ip}/redfish/v1/Systems/1"
 
 
 def _fake_ip(site_index: int, host_index: int) -> str:
@@ -341,25 +398,29 @@ def _profile_template(rng: random.Random, vendor: str) -> tuple[str | None, str 
     return name, name
 
 
-def _profile_dn(vendor: str, *, name: str, site_code: str) -> str | None:
+def _profile_dn(collector: ManagerType, *, name: str, site_code: str) -> str | None:
     """
     The service profile's own DN, which doubles as its org path.
 
     The org segment is what `app.domain.value_objects.site.parse_site_code`
     falls back to when a server's *name* carries no site token, so the
-    siteless name family still resolves to a site on Cisco — exactly as it
+    siteless name family still resolves to a site on UCS — exactly as it
     does in production.
 
+    Only `UCS_CENTRAL` reports one. An Intersight `server.Profile` has no
+    `Dn` field at all, so its servers get `None` and a siteless name
+    there really does resolve to no site — a real gap this fixture is
+    meant to show rather than paper over.
+
     Args:
-        vendor (str): The server's vendor.
+        collector (ManagerType): The collector that owns the server.
         name (str): The server's name, which is its profile's name.
         site_code (str): The site whose org holds the profile.
 
     Returns:
-        str | None: The DN, or `None` for a vendor with no service
-            profiles.
+        str | None: The DN, or `None` for a collector that reports none.
     """
-    if vendor != "cisco":
+    if collector is not ManagerType.UCS_CENTRAL:
         return None
     return f"org-root/org-{site_code}/ls-{name}"
 
@@ -449,25 +510,50 @@ def _build_storage_drives(
     return tuple(drives), total
 
 
-def _build_gpus(rng: random.Random, vendor: str) -> tuple[dict[str, object], ...] | None:
+def _build_gpus(rng: random.Random, collector: ManagerType) -> tuple[dict[str, object], ...] | None:
     """
     A server's GPUs, keyed exactly as `redfish.mapping.gpus_from_processors`
     emits them.
 
+    Each collector has a different ceiling here, and reproducing that is
+    the point: UCS Manager exposes no GPU objects at all (`None`);
+    Intersight exposes a `graphics.Card`'s identity but carries no
+    memory, thermal, power or ECC field anywhere in its schema, so those
+    are `None` while the GPU itself is real; only Redfish reports the
+    telemetry, from `ProcessorMetrics`/`EnvironmentMetrics`.
+
     Args:
         rng (random.Random): The seeded generator.
-        vendor (str): The server's vendor.
+        collector (ManagerType): The collector that owns the server.
 
     Returns:
         tuple[dict[str, object], ...] | None: The GPUs — empty for most
             servers, which is "none discoverable" rather than "none
-            installed" — or `None` for Cisco, whose collector does not read
-            GPUs at all.
+            installed" — or `None` for UCS Central.
     """
     count = rng.choice(_GPU_COUNTS)
     gpu_vendor, model, memory_type, memory_bytes = rng.choice(_GPU_MODELS)
-    if vendor == "cisco":
+    if collector is ManagerType.UCS_CENTRAL:
         return None
+    if collector is ManagerType.INTERSIGHT:
+        return tuple(
+            {
+                "vendor": gpu_vendor,
+                "model": model,
+                "serial": f"GPU{rng.getrandbits(32):08x}",
+                "memory_bytes": None,
+                "health": rng.choice(_COMPONENT_HEALTHS),
+                "pci_address": None,
+                "firmware_version": None,
+                "memory_type": None,
+                "ecc_mode_enabled": None,
+                "correctable_error_count": None,
+                "uncorrectable_error_count": None,
+                "temperature_celsius": None,
+                "power_watts": None,
+            }
+            for _ in range(count)
+        )
     return tuple(
         {
             "vendor": gpu_vendor,
@@ -583,6 +669,7 @@ def generate_servers(*, seed: int, count: int) -> Iterator[ProviderServer]:
         # the real hostname shapes embeds both
         # (`ocp-dell-r650-tlv-128c-1024gb-<serial>`).
         model = rng.choice(_MODELS[vendor])
+        collector = collector_for(vendor, model)
         memory_gib = rng.choice((128, 256, 512, 1024))
         memory_total_bytes = memory_gib * 1024**3
 
@@ -602,29 +689,28 @@ def generate_servers(*, seed: int, count: int) -> Iterator[ProviderServer]:
 
         drive_count = rng.randint(2, 8)
         storage_drives, storage_total_bytes = _build_storage_drives(rng, drive_count)
-        gpus = _build_gpus(rng, vendor)
+        gpus = _build_gpus(rng, collector)
 
-        # Only Cisco has a fabric interconnect in front of it; a standalone
-        # BMC has nothing to attach, and an empty tuple keeps the seeded
+        # Only Cisco has a fabric interconnect in front of it — both
+        # Cisco collectors report one — while a standalone BMC has nothing
+        # to attach, and an empty tuple keeps the seeded
         # `connectivity.fabric_paths_down` policies from evaluating against
         # fiction.
         attachments = _build_attachments(rng, site_code=site_code) if vendor == "cisco" else ()
         template_name, template_external_id = _profile_template(rng, vendor)
 
         yield ProviderServer(
-            external_id=_external_id(
-                vendor, index=index, site_index=site_index, model=model, bmc_ip=bmc_ip
-            ),
+            external_id=_external_id(collector, index=index, site_index=site_index, bmc_ip=bmc_ip),
             vendor=vendor,
             name=name,
             model=model,
             serial=serial,
             system_uuid=system_uuid,
             nic_macs=nic_macs,
-            bmc_address_raw=_bmc_address(vendor, bmc_ip),
+            bmc_address_raw=_bmc_address(collector, bmc_ip),
             bmc_mac=bmc_mac,
-            manager_id=manager_id_for(ManagerType(provider_type_for(vendor))),
-            profile_dn=_profile_dn(vendor, name=name, site_code=site_code),
+            manager_id=manager_id_for(collector),
+            profile_dn=_profile_dn(collector, name=name, site_code=site_code),
             profile_template_name=template_name,
             profile_template_external_id=template_external_id,
             cpu_sockets=cpu_sockets,
@@ -636,7 +722,8 @@ def generate_servers(*, seed: int, count: int) -> Iterator[ProviderServer]:
             storage_drives=storage_drives,
             gpus=gpus,
             attachments=attachments,
-            # Neither collector reports tags: UCS's are per-org labels the
-            # provider does not read, and a BMC has none at all.
+            # No collector reports tags: UCS's are per-org labels the
+            # provider does not read, Intersight's are not mapped, and a
+            # BMC has none at all.
             tags=(),
         )

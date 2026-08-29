@@ -423,3 +423,38 @@ async def test_the_provider_type_is_stamped_on_every_server() -> None:
 
     servers = await _collect(provider)
     assert all(s.manager_id == "mgr_intersight" for s in servers)
+
+
+@pytest.mark.asyncio
+async def test_a_profile_joins_on_its_association_before_its_assignment() -> None:
+    """A profile can be *assigned* to one server and *associated* with
+    the one actually running it. The association wins, because that is
+    the machine whose inventory this run is naming.
+    """
+    tables = dict(_TABLES)
+    tables["server/Profiles"] = [
+        {
+            "Moid": "profile1",
+            "Name": "ocp4-prod-tlv-infra-01",
+            "AssignedServer": _ref("server2"),
+            "AssociatedServer": _ref("server1"),
+        }
+    ]
+    servers = await _collect(_provider(_FakeClient(tables)))
+
+    assert next(s for s in servers if s.serial == "WZP1").name == "ocp4-prod-tlv-infra-01"
+    assert next(s for s in servers if s.serial == "WZP2").name == "UCSC-C220-WZP2"
+
+
+@pytest.mark.asyncio
+async def test_an_unassociated_profile_still_names_its_assigned_server() -> None:
+    """A profile assigned but not yet deployed is the normal state for a
+    server being built, and its name is still the right one.
+    """
+    tables = dict(_TABLES)
+    tables["server/Profiles"] = [
+        {"Moid": "p", "Name": "ocp4-nyc-worker-01", "AssignedServer": _ref("server2")}
+    ]
+    servers = await _collect(_provider(_FakeClient(tables)))
+
+    assert next(s for s in servers if s.serial == "WZP2").name == "ocp4-nyc-worker-01"

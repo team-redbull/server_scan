@@ -238,12 +238,84 @@ collectors:
     username: ""
     password: ""
 
-  # Cisco Intersight. No collector yet, and note these three fields mean
-  # something different here: Intersight signs each request with an API
-  # key instead of logging in, so `username` is the API Key ID and
-  # `password` is the secret key. `ip` is "intersight.com" for the SaaS
-  # tenant, or the appliance FQDN for a Connected Virtual Appliance.
+  # Cisco Intersight — the only collector that reaches the platform's
+  # 10,000-server target without qualification. Every sub-resource is
+  # listed once for the whole estate and joined in memory, so one run
+  # costs on the order of a hundred requests regardless of fleet size.
+  # See docs/adr/0017-intersight-collector.md.
+  #
+  # AIR-GAP: `intersight.com` is on the public internet. An air-gapped
+  # site must point `ip` at an on-prem Private Virtual Appliance instead;
+  # the Connected Virtual Appliance still calls home and does not help.
+  #
+  # AUTHENTICATION IS NOT A PASSWORD. Intersight has no password login
+  # for its API: it signs every request with an API key. Mint one under
+  # Settings > API Keys with a Read-Only role, and paste the two halves
+  # below. Everything the collector needs is in this file — no
+  # pre-existing Secret, and no key file to mount.
   intersight:
+    enabled: false
+
+    # "intersight.com" for the SaaS tenant, or the appliance FQDN.
+    # A bare hostname: no scheme, no port, no path.
     ip: ""
-    username: ""
-    password: ""
+
+    # The API Key ID exactly as Intersight displays it beside the key.
+    apiKeyId: ""
+
+    # The key's PEM private half, unencrypted, as a YAML literal block
+    # (`privateKey: |`, then the whole PEM including its BEGIN and END
+    # lines, indented). Both API key generations work — v2 keys are RSA,
+    # v3 keys are EC — and the collector picks the signing algorithm from
+    # the PEM header itself, so there is nothing else to configure.
+    #
+    # Prefer NOT pasting the key here at all: pass it at install time
+    # with `--set-file collectors.intersight.privateKey=/path/to/key.pem`,
+    # or from a `-f secrets.yaml` that is not in git. A committed PEM
+    # fails `tests/unit/test_no_committed_secrets.py`, deliberately.
+    privateKey: ""
+
+    # Which servers to collect, by how Intersight manages them. `UCSM` is
+    # deliberately absent: those servers are exactly the ones the
+    # ucsCentral collector above already owns, and collecting both makes
+    # one document's fields flip on whichever CronJob ran last. Add UCSM
+    # ONLY for an estate whose UCS domains are not registered with UCS
+    # Central at all.
+    managementModes: "Intersight,IntersightStandalone"
+
+    # ConfigMap with a `ca-bundle.crt` key, for an on-prem appliance
+    # using an internal CA. Empty uses the image's system trust store,
+    # which is correct for the public SaaS endpoint.
+    caBundleConfigMap: ""
+
+    # `$top`. 1000 is the API's documented maximum. Lower it only if a
+    # tenant turns out to throttle — Cisco publishes no rate limit, so
+    # the collector backs off on 429 rather than assuming a number.
+    pageSize: 1000
+
+    connectTimeoutSeconds: 10
+    # A fleet-wide page is a large response, bounded separately from
+    # reaching the endpoint at all.
+    readTimeoutSeconds: 60
+
+    # Hourly. One run covers the whole tenant in a flat number of
+    # requests, so this is cheap on both sides of the wire — unlike the
+    # per-BMC Redfish sweep, which must not be scheduled this often.
+    schedule: "0 * * * *"
+    backoffLimit: 1
+
+    # In-process budget, so a throttled run ends with a summary naming
+    # what it never reached. Keep activeDeadlineSeconds ~300s above it:
+    # that one kills the pod with no reason logged at all.
+    runBudgetSeconds: 1800
+    activeDeadlineSeconds: 2100
+
+    resources:
+      requests:
+        cpu: 200m
+        memory: 256Mi
+      limits:
+        # The join tables are held for the length of the run and scale
+        # with the fleet — the one collector whose memory does. `$select`
+        # keeps them to mapped fields only; 1Gi covers ~10,000 servers.
+        memory: 1Gi
