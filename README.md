@@ -191,6 +191,43 @@ cd frontend && npm install && npm run dev
 Then open http://localhost:5173 for the inventory UI, or
 http://localhost:8080/docs for the API's OpenAPI docs.
 
+When you are done, stop the UI and API processes and bring the stack
+down with `scripts/dev-up.sh down` — a leftover container is the usual
+cause of a later `pytest` run hanging.
+
+### Fake data
+
+`tools/seed_inventory.py` is the only way to get a fleet without vendor
+hardware. It runs the *real* ingestion pipeline — the same
+`ProviderServer` -> classify -> health-evaluate -> audit -> upsert path a
+collector drives — so seeded data exercises what production does rather
+than a shortcut that writes documents directly.
+
+```bash
+uv run python -m tools.seed_inventory --count 1000 --seed 42
+```
+
+`--count` defaults to 1000 and `--seed` to 42; the same pair always
+produces the same fleet, field for field.
+
+What you get mirrors the two collectors that exist: Cisco servers arrive
+as `source_provider=UCS_CENTRAL` with Central-rooted DNs, service-profile
+org paths and fabric attachments, and everything else — Dell, HPE, and
+`standalone` whiteboxes — arrives as `REDFISH_STANDALONE` with
+`redfish://` addresses and GPUs. Both filters in the UI therefore have
+real data behind them. Names span the estate's real shapes, including a
+deliberate minority carrying no site token, so "Unassigned" is reachable.
+
+**Re-seeding needs an empty database.** Servers correlate on
+`(vendor, serial)`, so seeding a different `--count`/`--seed` (or a fleet
+generated before a change to the generator) over an existing one reports
+errors rather than replacing it. Wipe first:
+
+```bash
+scripts/dev-up.sh down && scripts/dev-up.sh up
+uv run python -m tools.seed_inventory --count 1000 --seed 42
+```
+
 ### Tests
 
 ```bash
