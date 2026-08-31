@@ -5,19 +5,19 @@ import { ApiError } from "@/api/client";
 import type { ServerListParams } from "@/api/servers";
 import type { SortableField } from "@/features/inventory/InventoryTable";
 import { InventoryTable } from "@/features/inventory/InventoryTable";
-import { SITE_CODES, VENDORS } from "@/api/sites";
+import { siteOptions, SOURCE_PROVIDERS, VENDORS } from "@/api/sites";
 import { useServersQuery } from "@/features/inventory/hooks";
+import { useSitesQuery } from "@/features/sites/hooks";
 import { useDebouncedValue } from "@/lib/useDebouncedValue";
 
-const SITE_LABELS: Record<string, string> = {
-  one: "One",
-  two: "Two",
-  three: "Three",
-  four: "Four",
-  five: "Five",
-};
 const INSTALLATION_TYPES = ["HOSTED_CLUSTER", "UPI", "UNCLASSIFIED"] as const;
-const HEALTH_SEVERITIES = ["UNKNOWN", "HEALTHY", "INFO", "WARNING", "CRITICAL"] as const;
+const HEALTH_SEVERITIES = [
+  "UNKNOWN",
+  "HEALTHY",
+  "INFO",
+  "WARNING",
+  "CRITICAL",
+] as const;
 // One class string for every filter control so the bar reads as a single
 // row of peers rather than a set of slightly different boxes.
 const FIELD_CLASS =
@@ -45,6 +45,11 @@ function isSortableField(value: string): value is SortableField {
 export function InventoryPage() {
   const [searchParams, setSearchParams] = useSearchParams();
 
+  // The site dropdown's options come from the sites endpoint, never from a
+  // list held here: the backend enum is the only definition of which sites
+  // exist and what each is called.
+  const sites = siteOptions(useSitesQuery().data?.items);
+
   // The backend only gives us a forward cursor, so "Previous" is backed by
   // a locally-tracked stack of visited cursors. It resets whenever filters
   // change (a new filter set invalidates the whole cursor chain) and does
@@ -59,9 +64,12 @@ export function InventoryPage() {
   const siteId = searchParams.get("site_id") ?? "";
   const installationType = searchParams.get("installation_type") ?? "";
   const healthOverall = searchParams.get("health_overall") ?? "";
+  const sourceProvider = searchParams.get("source_provider") ?? "";
   const maintenanceOnly = searchParams.get("maintenance") === "true";
   const sortParam = searchParams.get("sort") ?? "";
-  const sortField: SortableField = isSortableField(sortParam) ? sortParam : DEFAULT_SORT;
+  const sortField: SortableField = isSortableField(sortParam)
+    ? sortParam
+    : DEFAULT_SORT;
   const sortDesc = searchParams.get("sort_desc") === "true";
   const cursor = searchParams.get("cursor") ?? undefined;
 
@@ -74,6 +82,7 @@ export function InventoryPage() {
     if (debouncedSearch) params.search = debouncedSearch;
     if (vendor) params.vendor = vendor;
     if (siteId) params.site_id = siteId;
+    if (sourceProvider) params.source_provider = sourceProvider;
     if (installationType) params.installation_type = installationType;
     if (healthOverall) params.health_overall = healthOverall;
     if (maintenanceOnly) params.maintenance = true;
@@ -84,6 +93,7 @@ export function InventoryPage() {
     debouncedSearch,
     vendor,
     siteId,
+    sourceProvider,
     installationType,
     healthOverall,
     maintenanceOnly,
@@ -92,7 +102,8 @@ export function InventoryPage() {
     cursor,
   ]);
 
-  const { data, isPending, isError, error, isFetching } = useServersQuery(queryParams);
+  const { data, isPending, isError, error, isFetching } =
+    useServersQuery(queryParams);
 
   /** Apply a filter patch to the URL and drop any in-flight cursor — the
    * backend rejects a cursor from before a filter change, so the UI
@@ -160,7 +171,9 @@ export function InventoryPage() {
 
   return (
     <main className="mx-auto max-w-7xl px-8 py-8">
-      <h1 className="text-xl font-semibold tracking-tight text-[var(--text-primary)]">Servers</h1>
+      <h1 className="text-xl font-semibold tracking-tight text-[var(--text-primary)]">
+        Servers
+      </h1>
       <p className="mt-1 text-sm text-[var(--text-secondary)]">
         {typeof data?.page.count === "number"
           ? `${data.page.count} server${data.page.count === 1 ? "" : "s"}`
@@ -204,6 +217,27 @@ export function InventoryPage() {
           </select>
         </label>
 
+        {/* How a server is reached, which is a different question from who
+            built it. `REDFISH_STANDALONE` means the machine has no manager,
+            so there is no point looking for it in OpenManage or UCS. */}
+        <label className="flex flex-col text-xs font-medium text-[var(--text-secondary)]">
+          Source
+          <select
+            value={sourceProvider}
+            onChange={(e) => {
+              updateFilters({ source_provider: e.target.value });
+            }}
+            className={FIELD_CLASS}
+          >
+            <option value="">All</option>
+            {SOURCE_PROVIDERS.map((s) => (
+              <option key={s.value} value={s.value}>
+                {s.label}
+              </option>
+            ))}
+          </select>
+        </label>
+
         <label className="flex flex-col text-xs font-medium text-[var(--text-secondary)]">
           Site
           <select
@@ -214,9 +248,9 @@ export function InventoryPage() {
             className={FIELD_CLASS}
           >
             <option value="">All sites</option>
-            {SITE_CODES.map((code) => (
-              <option key={code} value={code}>
-                {SITE_LABELS[code] ?? code}
+            {sites.map((site) => (
+              <option key={site.value} value={site.value}>
+                {site.label}
               </option>
             ))}
           </select>
@@ -271,7 +305,11 @@ export function InventoryPage() {
       </form>
 
       <div className="mt-4">
-        {isPending && <p className="py-12 text-center text-sm text-[var(--text-muted)]">Loading servers…</p>}
+        {isPending && (
+          <p className="py-12 text-center text-sm text-[var(--text-muted)]">
+            Loading servers…
+          </p>
+        )}
 
         {isError && (
           <p className="rounded border border-red-300 bg-red-50 p-3 text-red-700 dark:border-red-800 dark:bg-red-950 dark:text-red-300">
@@ -285,7 +323,9 @@ export function InventoryPage() {
 
         {!isPending && !isError && (
           <>
-            {isFetching && <p className="mb-2 text-xs text-gray-400">Updating…</p>}
+            {isFetching && (
+              <p className="mb-2 text-xs text-gray-400">Updating…</p>
+            )}
             <InventoryTable
               servers={servers}
               sortField={sortField}

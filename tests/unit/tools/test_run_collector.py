@@ -101,7 +101,7 @@ class FakeCredentialResolver:
 class TestBuildProvider:
     @pytest.mark.parametrize(
         "manager_type",
-        [ManagerType.OPENMANAGE, ManagerType.INTERSIGHT, ManagerType.ONEVIEW],
+        [ManagerType.OPENMANAGE, ManagerType.ONEVIEW],
     )
     async def test_unimplemented_vendors_fail_loudly(self, manager_type: ManagerType) -> None:
         """A missing collector must be an explicit error, never a silent
@@ -190,9 +190,11 @@ class FakeIngestService:
     def __init__(self, *, error: Exception | None = None) -> None:
         self._error = error
         self.ingested = 0
+        self.managers: list[Any] = []
 
-    async def ingest(self, provider: Any) -> Any:
+    async def ingest(self, provider: Any, *, managers: Any = (), sites: Any = ()) -> Any:
         self.ingested += 1
+        self.managers = list(managers)
         if self._error is not None:
             raise self._error
         return "summary"
@@ -241,6 +243,22 @@ class TestRunOneManager:
         assert result is not None
         assert result.collection_errors == ("domain 'b' (10.0.0.2) failed: bad credentials",)
 
+    async def test_upserts_the_manager_projection(self) -> None:
+        """`IngestService` only writes managers it is handed, so omitting
+        `managers=` left every collected server pointing at a
+        `manager_id` no document had — see docs/adr/0016.
+        """
+        ingest = FakeIngestService()
+        manager = _manager()
+        await _run_one_manager(
+            manager,
+            ingest_service=ingest,  # type: ignore[arg-type]
+            credential_resolver=FakeCredentialResolver(),  # type: ignore[arg-type]
+            timeout_seconds=5.0,
+            settings=_central_settings(),
+        )
+        assert [m.id for m in ingest.managers] == [manager.id]
+
     async def test_does_not_health_check_separately_from_ingest(self) -> None:
         """`IngestService.ingest()` health-checks as its first step, and a
         UCS login is ~4 round trips — collecting the health check here too
@@ -249,7 +267,7 @@ class TestRunOneManager:
         calls: list[str] = []
 
         class RecordingIngest(FakeIngestService):
-            async def ingest(self, provider: Any) -> Any:
+            async def ingest(self, provider: Any, *, managers: Any = (), sites: Any = ()) -> Any:
                 calls.append("ingest")
                 return "summary"
 
@@ -329,7 +347,7 @@ class TestDryRun:
                 return None
 
             async def list_servers(self) -> Any:
-                for name in ("ocp4-prod-one-infra-01", "ocp4-hypershift-five-01"):
+                for name in ("ocp4-prod-tlv-infra-01", "ocp4-hypershift-five-01"):
                     yield ProviderServer(external_id=f"dn/{name}", vendor="cisco", name=name)
 
         count = await _dry_run_one_manager(
@@ -343,10 +361,90 @@ class TestDryRun:
         out = capsys.readouterr().out
         # The site each name resolves to is shown, since that is derived
         # at ingest and is otherwise invisible until after a real write.
-        assert "ocp4-prod-one-infra-01" in out
-        assert "one" in out
+        assert "ocp4-prod-tlv-infra-01" in out
+        assert "tlv" in out
         assert "five" in out
         assert "Nothing was written" in out
+
+    async def test_dry_run_falls_back_to_the_org_dn_for_the_site(self, capsys: Any) -> None:
+        """A UCS server whose name carries no site token still gets one
+        when its service profile lives under a site-named org.
+        """
+
+        class FakeProvider:
+            provider_type = "UCS_CENTRAL"
+
+            async def health_check(self) -> None:
+                return None
+
+            async def list_servers(self) -> Any:
+                yield ProviderServer(
+                    external_id="compute/sys-1/blade-1",
+                    vendor="cisco",
+                    name="blade-1",
+                    profile_dn="org-root/org_bat-yam/ls-worker-01",
+                )
+
+        await _dry_run_one_manager(
+            _manager(),
+            credential_resolver=FakeCredentialResolver(),  # type: ignore[arg-type]
+            timeout_seconds=5.0,
+            limit=None,
+            provider_factory=_factory(FakeProvider()),
+        )
+        assert "bat-yam" in capsys.readouterr().out
+
+    async def test_dry_run_shows_gpu_detail(self, capsys: Any) -> None:
+        """The dry-run print has to show every field a collector reports,
+        not just count them — this is the one place a naming/data problem
+        is visible before a write.
+        """
+
+        class FakeProvider:
+            provider_type = "REDFISH_STANDALONE"
+
+            async def health_check(self) -> None:
+                return None
+
+            async def list_servers(self) -> Any:
+                yield ProviderServer(
+                    external_id="redfish://10.0.0.5/redfish/v1/Systems/1",
+                    vendor="standalone",
+                    name="dgx-h100-01",
+                    gpus=(
+                        {
+                            "vendor": "Nvidia(R) Corporation",
+                            "model": "H100",
+                            "serial": "GPU-ABC123",
+                            "memory_bytes": 80 * 1024**3,
+                            "memory_type": "HBM3",
+                            "ecc_mode_enabled": True,
+                            "correctable_error_count": 2,
+                            "uncorrectable_error_count": 0,
+                            "temperature_celsius": 58.0,
+                            "power_watts": 350.0,
+                            "health": "HEALTHY",
+                            "pci_address": None,
+                            "firmware_version": "96.00.5E.00.02",
+                        },
+                    ),
+                )
+
+        await _dry_run_one_manager(
+            _manager(),
+            credential_resolver=FakeCredentialResolver(),  # type: ignore[arg-type]
+            timeout_seconds=5.0,
+            limit=None,
+            provider_factory=_factory(FakeProvider()),
+        )
+        out = capsys.readouterr().out
+        assert "gpus        : 1" in out
+        assert "gpu H100  vendor=Nvidia(R) Corporation  serial=GPU-ABC123" in out
+        assert "HBM3" in out
+        assert "ecc=True" in out
+        assert "errors=2c/0u" in out
+        assert "temp=58°C" in out
+        assert "power=350W" in out
 
     async def test_dry_run_respects_limit(self, capsys: Any) -> None:
         class FakeProvider:
@@ -397,12 +495,12 @@ class TestNameFilter:
     async def test_keeps_only_matching_servers(self) -> None:
         kept = await self._names_through(
             "^ocp",
-            "ocp4-prod-one-infra-01",
+            "ocp4-prod-tlv-infra-01",
             "vmhost-two-14",
             "ocp4-hypershift-five-01",
             "db-prod-03",
         )
-        assert kept == ["ocp4-prod-one-infra-01", "ocp4-hypershift-five-01"]
+        assert kept == ["ocp4-prod-tlv-infra-01", "ocp4-hypershift-five-01"]
 
     async def test_the_anchor_is_the_operators_to_write(self) -> None:
         """`re.search`, not `re.match` — so `^ocp` means "starts with" and
@@ -442,11 +540,11 @@ class TestNameFilter:
             timeout_seconds=5.0,
             limit=None,
             name_pattern="^ocp",
-            provider_factory=_factory(self._Fake("ocp4-prod-one-infra-01", "vmhost-two-14")),
+            provider_factory=_factory(self._Fake("ocp4-prod-tlv-infra-01", "vmhost-two-14")),
         )
         assert count == 1
         out = capsys.readouterr().out
-        assert "ocp4-prod-one-infra-01" in out
+        assert "ocp4-prod-tlv-infra-01" in out
         assert "vmhost-two-14" not in out
         assert "^ocp" in out
 

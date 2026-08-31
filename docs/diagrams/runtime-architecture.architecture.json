@@ -1,0 +1,383 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Server Inventory \u2014 Runtime Architecture",
+    "output": "runtime-architecture.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/team-redbull/server_scan",
+      "revision": "4c116b2fe59a69e8daa6c42614f440ea56ab04ea"
+    },
+    "views": [
+      {
+        "id": "primary-path",
+        "label": "Primary path",
+        "focus": [
+          "collectors",
+          "ingest",
+          "mongo",
+          "api",
+          "ui"
+        ],
+        "note": "Inventory travels vendor to browser through exactly one write per server."
+      },
+      {
+        "id": "collection",
+        "label": "Collection edge",
+        "focus": [
+          "ucscentral",
+          "intersight",
+          "bmcs",
+          "collectors"
+        ],
+        "note": "Three read-only collectors, one CronJob per manager type."
+      },
+      {
+        "id": "engines",
+        "label": "Decision engines",
+        "focus": [
+          "ingest",
+          "classify",
+          "healtheval"
+        ],
+        "note": "Classification and health run inside the ingest write, not after it."
+      },
+      {
+        "id": "serving",
+        "label": "Serving path",
+        "focus": [
+          "mongo",
+          "redis",
+          "api",
+          "ui"
+        ],
+        "note": "Redis is cache-aside only; every read degrades to MongoDB."
+      }
+    ],
+    "viewBox": [
+      1370,
+      470
+    ]
+  },
+  "components": [
+    {
+      "id": "ucscentral",
+      "type": "external",
+      "label": "Cisco UCS Central",
+      "sublabel": "+ domain UCS Managers",
+      "pos": [
+        70,
+        70
+      ],
+      "size": [
+        160,
+        66
+      ]
+    },
+    {
+      "id": "intersight",
+      "type": "external",
+      "label": "Cisco Intersight",
+      "sublabel": "on-prem appliance",
+      "pos": [
+        70,
+        200
+      ],
+      "size": [
+        160,
+        66
+      ]
+    },
+    {
+      "id": "bmcs",
+      "type": "external",
+      "label": "Standalone BMCs",
+      "sublabel": "iDRAC \u00b7 iLO \u00b7 CIMC",
+      "pos": [
+        70,
+        330
+      ],
+      "size": [
+        160,
+        66
+      ]
+    },
+    {
+      "id": "collectors",
+      "type": "backend",
+      "label": "Collector CronJobs",
+      "sublabel": "one per manager type",
+      "pos": [
+        380,
+        200
+      ],
+      "size": [
+        160,
+        66
+      ],
+      "sources": [
+        {
+          "path": "tools/run_collector.py",
+          "label": "collector entry point"
+        }
+      ]
+    },
+    {
+      "id": "classify",
+      "type": "backend",
+      "label": "Classification Engine",
+      "sublabel": "declarative rules",
+      "pos": [
+        630,
+        70
+      ],
+      "size": [
+        160,
+        66
+      ],
+      "sources": [
+        {
+          "path": "backend/app/domain/services/classification.py",
+          "label": "classify()"
+        }
+      ]
+    },
+    {
+      "id": "ingest",
+      "type": "backend",
+      "label": "Ingest Pipeline",
+      "sublabel": "normalize \u00b7 upsert",
+      "pos": [
+        630,
+        200
+      ],
+      "size": [
+        160,
+        66
+      ],
+      "sources": [
+        {
+          "path": "backend/app/application/services/ingest.py",
+          "label": "IngestService"
+        }
+      ]
+    },
+    {
+      "id": "healtheval",
+      "type": "backend",
+      "label": "Health Policy Engine",
+      "sublabel": "policy_key families",
+      "pos": [
+        630,
+        330
+      ],
+      "size": [
+        160,
+        66
+      ],
+      "sources": [
+        {
+          "path": "backend/app/domain/services/health/evaluate.py",
+          "label": "resolve_families"
+        }
+      ]
+    },
+    {
+      "id": "mongo",
+      "type": "database",
+      "label": "MongoDB",
+      "sublabel": "source of truth",
+      "pos": [
+        880,
+        200
+      ],
+      "size": [
+        160,
+        66
+      ]
+    },
+    {
+      "id": "redis",
+      "type": "database",
+      "label": "Redis",
+      "sublabel": "cache-aside only",
+      "pos": [
+        1130,
+        70
+      ],
+      "size": [
+        160,
+        66
+      ]
+    },
+    {
+      "id": "api",
+      "type": "backend",
+      "label": "FastAPI Backend",
+      "sublabel": "/api/v1 \u00b7 keyset",
+      "pos": [
+        1130,
+        200
+      ],
+      "size": [
+        160,
+        66
+      ],
+      "sources": [
+        {
+          "path": "backend/app/api/v1/servers.py",
+          "label": "server routes"
+        }
+      ]
+    },
+    {
+      "id": "ui",
+      "type": "frontend",
+      "label": "Admin UI",
+      "sublabel": "React 19 \u00b7 nginx",
+      "pos": [
+        1130,
+        330
+      ],
+      "size": [
+        160,
+        66
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "security-group",
+      "label": "Vendor management plane (read-only)",
+      "wraps": [
+        "ucscentral",
+        "intersight",
+        "bmcs"
+      ],
+      "pad": 30
+    },
+    {
+      "kind": "region",
+      "label": "Air-gapped OpenShift namespace",
+      "wraps": [
+        "collectors",
+        "classify",
+        "ingest",
+        "healtheval",
+        "mongo",
+        "redis",
+        "api",
+        "ui"
+      ],
+      "pad": 40
+    }
+  ],
+  "connections": [
+    {
+      "id": "ucs-read",
+      "from": "ucscentral",
+      "to": "collectors",
+      "label": "XML API",
+      "variant": "security"
+    },
+    {
+      "id": "isight-read",
+      "from": "intersight",
+      "to": "collectors",
+      "label": "OData",
+      "variant": "security",
+      "labelDx": -25
+    },
+    {
+      "id": "bmc-read",
+      "from": "bmcs",
+      "to": "collectors",
+      "label": "Redfish",
+      "variant": "security"
+    },
+    {
+      "id": "normalize",
+      "from": "collectors",
+      "to": "ingest",
+      "label": "ProviderServer",
+      "variant": "emphasis"
+    },
+    {
+      "id": "classify-in-write",
+      "from": "ingest",
+      "to": "classify",
+      "label": "classify"
+    },
+    {
+      "id": "health-in-write",
+      "from": "ingest",
+      "to": "healtheval",
+      "label": "evaluate",
+      "labelDy": 55
+    },
+    {
+      "id": "upsert",
+      "from": "ingest",
+      "to": "mongo",
+      "label": "upsert",
+      "variant": "emphasis"
+    },
+    {
+      "id": "read-truth",
+      "from": "mongo",
+      "to": "api",
+      "label": "queries",
+      "variant": "emphasis"
+    },
+    {
+      "id": "cache-aside",
+      "from": "api",
+      "to": "redis",
+      "label": "cache-aside",
+      "variant": "dashed"
+    },
+    {
+      "id": "serve",
+      "from": "api",
+      "to": "ui",
+      "label": "REST",
+      "variant": "emphasis",
+      "labelDy": 55
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Primary path",
+      "items": [
+        "Vendor \u2192 collector \u2192 ingest \u2192 MongoDB \u2192 API \u2192 UI.",
+        "Classify and health-evaluate happen inside that one upsert."
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Trust boundaries",
+      "items": [
+        "Collectors initiate every vendor call and are strictly read-only.",
+        "No API authentication yet \u2014 deferred, and the release gate."
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Collectors",
+      "items": [
+        "One CronJob per manager type; OPENMANAGE and ONEVIEW unbuilt.",
+        "Intersight ~120 requests per fleet; Redfish ~25 per BMC."
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Failure behaviour",
+      "items": [
+        "An unread field is None, never 0 \u2014 the stored value survives.",
+        "A partial run exits 3; Redis loss degrades latency only."
+      ]
+    }
+  ]
+}

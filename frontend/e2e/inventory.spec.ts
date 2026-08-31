@@ -11,7 +11,9 @@ test.describe("Inventory", () => {
     const unfilteredCount = await rows.count();
 
     const searchResponse = page.waitForResponse(
-      (res) => res.url().includes("/api/v1/servers?") && res.url().includes("search=ocp-dell"),
+      (res) =>
+        res.url().includes("/api/v1/servers?") &&
+        res.url().includes("search=ocp-dell"),
     );
     await page.getByPlaceholder("Name, serial, tag…").fill("ocp-dell");
     await searchResponse;
@@ -28,21 +30,35 @@ test.describe("Inventory", () => {
     expect(filteredCount).toBeLessThanOrEqual(unfilteredCount);
   });
 
-  test("navigates to a server's detail page and renders every tab", async ({ page }) => {
+  test("navigates to a server's detail page and renders every tab", async ({
+    page,
+  }) => {
     await page.goto("/servers");
     const firstLink = page.locator("tbody tr").first().getByRole("link");
     const name = await firstLink.innerText();
     await firstLink.click();
 
-    await expect(page.getByRole("heading", { name, exact: true })).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name, exact: true }),
+    ).toBeVisible();
 
     for (const tab of ["Overview", "Hardware", "Network", "Connectivity"]) {
       await page.getByRole("button", { name: tab, exact: true }).click();
-      await expect(page.getByRole("button", { name: tab, exact: true })).toHaveAttribute(
-        "aria-current",
-        "page",
-      );
+      await expect(
+        page.getByRole("button", { name: tab, exact: true }),
+      ).toHaveAttribute("aria-current", "page");
     }
+
+    // The BMC reads as a plain host: no scheme, no port, no Redfish path.
+    await page.getByRole("button", { name: "Network", exact: true }).click();
+    const bmcAddress = page
+      .getByText("Address", { exact: true })
+      .locator("xpath=following-sibling::dd[1]");
+    await expect(bmcAddress).toBeVisible();
+    await expect(bmcAddress).not.toContainText("://");
+    await page
+      .getByRole("button", { name: "Connectivity", exact: true })
+      .click();
 
     // Connectivity is the tab most worth a content assertion (slice 1's
     // "renders a variable number of fabric groups, not a hardcoded two"

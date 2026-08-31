@@ -3,8 +3,10 @@
 This file orients a Claude Code session picking up this repository —
 whether that's a fresh session or one resuming after a break. Read this
 before making changes. `README.md` is the human-facing quickstart;
-`docs/architecture.md` and `docs/adr/*` are the technical deep-dives this
-file points into rather than duplicates.
+`docs/arc42.md` is the structured architecture overview (goals,
+constraints, context, deployment, quality scenarios, and the risk and
+technical-debt register); `docs/architecture.md` and `docs/adr/*` are the
+technical deep-dives both of those point into rather than duplicate.
 
 ## What this is
 
@@ -62,8 +64,12 @@ is a real mistake, not a style preference.
    gitignored** and is what you actually edit for local dev — don't
    recreate `.env.example` as if it were the working config.
 6. **Real authentication is deliberately deferred to the very last
-   slice.** The `AuthProvider`/RBAC scaffolding exists now (permissive,
-   not enforcing), but do not wire up real auth unless the user
+   slice.** Be precise about what that means, because an earlier version
+   of this file was not: there is **no** `AuthProvider` class and no RBAC
+   scaffolding. What exists is `app.dependencies.get_current_actor`,
+   which returns a fixed `unauthenticated` `Actor` so audit events have
+   an actor to record. Every endpoint, writes included, is open to anyone
+   who can reach the Route. Do not wire up real auth unless the user
    explicitly asks for it — they've confirmed this deferral more than
    once, most recently mid-collector-work ("lets leave the auth for now
    what else is there to make this production and really run?").
@@ -126,6 +132,44 @@ is a real mistake, not a style preference.
    reads in the older style; convert a file when you are already
    changing it, not as a sweep of its own.
 
+9. **Every release says what changed and what is new — keep
+   `CHANGELOG.md`'s `## Unreleased` section current as you work.**
+   Added 2026-08-30 at the user's request.
+
+   Releases are automatic: every push to `main` that passes CI tags the
+   commit and publishes both images, with the version derived from
+   Conventional Commits (ADR-0010). That gives a correct version number
+   and says nothing about *why* the release matters, which is what this
+   file supplies.
+
+   The rule is not "write release notes at release time" — by then the
+   reasoning is gone and it degrades into a `git log` dump. **Add the
+   line in the same commit as the change**, in the same pass as the
+   quality gate (convention 7):
+
+   - Anything that changes behaviour, configuration or the operational
+     contract gets a line. Pure internals — a refactor, a test, a doc
+     typo — get nothing. If nobody outside the repo could notice it,
+     leave it out.
+   - Write for whoever deploys it, not whoever wrote it: name the
+     environment variable, the endpoint, the exit code, the Helm value.
+   - **Breaking changes lead**, under `### Breaking`, and say what an
+     operator has to *do* — including "nothing, the default is
+     unchanged" when that is true, since that is the most useful thing
+     to know.
+   - Group under `### Breaking` / `### New features` / `### Fixed` /
+     `### Documentation`. State the version the range will produce when
+     it is knowable (a `feat!:` in the range means the next tag is a
+     major).
+   - When a tag is cut, the `## Unreleased` heading becomes that
+     version with its date, and a fresh empty `## Unreleased` goes above
+     it.
+
+   Entries below the reconstructed history line in `CHANGELOG.md` were
+   generated from tag history and read as commit subjects. Do not treat
+   them as the standard — the `Unreleased` section written on 2026-08-30
+   is the standard.
+
 ## Current status
 
 Phase 1 slices 0–7 are done (see `docs/architecture.md`'s "What's
@@ -147,7 +191,8 @@ always zero, and servers named after their chassis slot rather than
 their service profile (which silently defeated both site parsing and
 classification).
 
-Also since: sites and vendors are closed enums, a server's site is parsed
+Also since: vendors are a closed enum and sites a closed set loaded
+from configuration, a server's site is parsed
 from its own name, vendor manager connections come from environment
 configuration rather than MongoDB documents plus mounted secrets, and the
 UI was rebuilt around a per-site overview as the landing page.
@@ -204,74 +249,75 @@ vendor manager. MongoDB is the only thing connecting them. See
 validation sections record what a live UCS Platform Emulator proved,
 disproved and could not settle.
 
-**One collector exists: `UCS_CENTRAL`, and it covers the whole Cisco
-fleet.** `OPENMANAGE`, `INTERSIGHT` and `ONEVIEW` have configuration
-slots but no implementation — `tools/run_collector.py`'s
+**Three collectors exist: `UCS_CENTRAL` (the UCS-managed Cisco fleet),
+`INTERSIGHT` (Cisco servers no UCS domain owns) and `REDFISH_STANDALONE`
+(every machine no aggregator owns).** `OPENMANAGE` and `ONEVIEW` have
+configuration slots but no implementation — `tools/run_collector.py`'s
 `_PROVIDER_FACTORIES` raises a clear `NotImplementedError` for them, not
-a silent no-op. Building the next one means: implement
-`ServerInventoryProvider` for it under
-`app.infrastructure.providers.<vendor>`, add it to `_PROVIDER_FACTORIES`,
-and add a CronJob template mirroring
-`deploy/helm/server-inventory/templates/ucs-central-collector-cronjob.yaml`.
+a silent no-op.
 
-**How it works: Central discovers, UCS Manager collects.** Two queries go
-to Central regardless of fleet size — `computeSystem` for the registered
-domains and their addresses, `lsServer` for profile names and each one's
-domain. Everything else is read live from each domain's own UCS Manager
-through `..providers.ucs_manager` unchanged, up to
-`INVENTORY_UCS_CENTRAL_DOMAIN_CONCURRENCY` domains at once, using
-`INVENTORY_UCS_MANAGER_USERNAME`/`_PASSWORD` as the login for every
-domain. So `UcsManagerProvider` is not dead code — it is the engine, and
-ADR-0009's UCSPE validation is exactly why it was reused rather than
-reimplemented against Central's replica.
+**`INTERSIGHT` is the first collector that actually reaches the 10,000
+target**, and the first with three properties nothing else here has —
+read `docs/adr/0017-intersight-collector.md` before touching it:
 
-Two behaviours worth knowing before you touch it. A domain is skipped
-**only** when Central lists profiles for it and none match
-`INVENTORY_COLLECTOR_NAME_PATTERN` — a domain with no known profiles is
-always collected, so an incomplete replica can never silently prune the
-fleet. And collected servers get their `external_id` rewritten from the
-domain-local `sys/...` (which repeats in every domain) to
-`compute/sys-<domainId>/...`, so it identifies one machine and names its
-domain.
+1. **It is not a login.** Intersight has no username/password path for
+   its REST API at all; every request is signed (HTTP Signature
+   `hs2019`). Its credential variables are named for what they are —
+   `INVENTORY_INTERSIGHT_API_KEY_ID` and `_API_KEY_PEM`, not the
+   USERNAME/PASSWORD pair every other vendor takes. The PEM rides in the
+   environment variable — the signing library takes the key as a string,
+   so there is **no key file to mount** and ADR-0012's rule holds.
+   Signing is hand-rolled on `httpx` + `cryptography` rather than using
+   the official SDK, which is a 57.6 MB wheel of 10,112 generated model
+   modules for the eight we would touch. The RSA construction was
+   verified byte-identical against that SDK.
+2. **Its cost is flat in fleet size.** Every child managed object carries
+   an inverse reference to its owner, so each sub-resource is listed once
+   for the whole estate and joined in memory — ~120 requests for 10,000
+   servers. The trade is memory: the join tables are held for the length
+   of the run and scale with the fleet, which no other collector's do.
+   `$select` on every query is what keeps that affordable, not a
+   micro-optimisation.
+3. **It deliberately does not collect `ManagementMode == UCSM`.** Those
+   are exactly the servers `UCS_CENTRAL` already owns, and since
+   `IngestService` correlates on `(vendor, serial_normalized)`,
+   collecting both would make one document's `source_provider` and every
+   mapped field flip on whichever CronJob ran last.
+   `INVENTORY_INTERSIGHT_MANAGEMENT_MODES` overrides it, for an estate
+   whose UCS domains are not registered with Central at all.
 
-**The cost, accepted knowingly: a domain not registered with Central is
-uncollectable, and Central is a hard single point of failure for all
-Cisco collection.** There is no standalone UCS Manager entry point any
-more — `--manager-type UCS_MANAGER` was removed along with its CronJob
-and `INVENTORY_UCS_MANAGER_IP`. Don't "restore" it as a fix without
-asking; it was deleted deliberately.
+**It has never been run against a live Intersight.** The DevNet sandbox
+went offline 2026-08-01 with no committed return before ~Q1 2027, and
+there is no downloadable emulator equivalent to UCSPE, so everything was
+built against the OpenAPI contract as rendered by the installed SDK's
+generated models. `TotalMemory` carries **no documented unit anywhere**
+and is assumed MiB; if that is wrong every server's memory is 4.86% high,
+silently. `uv run python -m tools.verify_intersight` settles it in one
+query by summing a real server's DIMMs — run it before scheduling
+anything, and record the result in ADR-0017.
 
-`docs/adr/0014` has the full evidence trail, including its 2026-08-17
-and 2026-08-18 updates. **It is now validated against a live UCS
-Central** — 152 registered domains, ~3346 equipped servers, real
-`verify_ucs_central` and `run_collector --dry-run` runs. The open
-question of whether Central replicates domain-*local* service
-profiles — the source of a server's name and hence of site parsing,
-classification and the `^ocp` match — is answered for that fleet: it
-uses **zero** local profiles; every one is `global-controlled` (owned by
-Central itself), which makes Central's `lsServer` copy authoritative by
-construction there and settles pruning as safe for it. The SDK schema
-still supports `localized` profiles (`LsSPMeta.ownership_state`), and a
-fleet that actually uses them remains untested here — run
-`uv run python -m tools.verify_ucs_central` against any new deployment
-before trusting it there too: read-only, writes nothing, prints a
-GOOD/PARTIAL/BAD verdict plus the `ownership_state` breakdown. Update
-ADR-0014 with the result. At runtime the provider also logs
-`ucs_central.domain_summary` and warns
-`ucs_central.domain_without_profiles`.
-
-**Shared Cisco logic lives in `app.infrastructure.providers.ucs_common`**
-(`is_equipped`, `group_by_owning_server_dn`, `bmc_interface`,
-`partition_profiles`), and `ucs_manager.mapping` serves both providers.
-`ucscsdk` and `ucsmsdk` describe the same object model with the same
-attribute names — only the DN root differs — so duplicating any of it
-means the next emulator-found fix lands in one copy only. Everything
-there works on relative DN structure, never an absolute root.
+An air-gapped site reaches Intersight **only** through an on-prem
+Intersight; `intersight.com` is public internet and a *Connected* Virtual
+Appliance still calls home. The user has one reachable from the
+air-gapped environment (not the flavour Cisco brands a "Private Virtual
+Appliance" — the product ships under several names). **So this collector
+is testable there, and its first real run is the outstanding action**:
+`docs/field-test-checklist.md` says exactly what to run and what to bring
+back — three exported variables and `uv run python -m
+tools.verify_intersight`. The `TotalMemory` unit is the answer to look
+for.
 
 ### What's explicitly NOT done yet (in rough priority order the user has confirmed)
 
-1. **Dell OpenManage / Cisco Intersight / HPE OneView collectors.** Not
-   started. Before picking one: research each vendor's *current* API
+0. **Staleness detection for the Redfish collector.** A CronJob pod is
+   never scraped by Prometheus, so no collector-side metric can report
+   its own absence — the only thing that can answer "40 hosts have been
+   failing for two weeks" is the API exposing gauges derived from
+   MongoDB's `last_seen_at` (written on every ingest, currently read by
+   nothing). Until that lands, staleness is the manual query in
+   `docs/test-redfish-standalone-collector.md` §6.
+1. **Dell OpenManage / HPE OneView collectors.** Not started. (Cisco
+   Intersight is done — see above.) Before picking one: research each vendor's *current* API
    docs directly (don't trust this file's or any older research's
    specifics without reconfirming) — UCS Manager's build researched
    Cisco's official XML API guide and cross-checked every attribute name
@@ -306,14 +352,46 @@ non-obvious enough to bite you.
 
 - **A server's site is parsed from its name**
   (`app.domain.value_objects.site.parse_site_code`), never taken from
-  configuration — `ocp4-prod-one-infra-01` -> `one`. Token-based, not a
-  substring search (`ocp4-stone-01` contains "one" but names no site),
+  configuration — `ocp4-prod-tlv-infra-01` -> `tlv`. Token-based, not a
+  substring search (`ocp4-tlvx-01` contains "tlv" but names no site),
   and an ambiguous name yields `None` rather than a guess. `None` is a
-  real state the UI shows as "Unassigned".
-- **`Vendor` is exactly dell/cisco/hp — there is no `UNKNOWN`.** Every
-  server arrives through a vendor-specific collector, so the vendor is
-  known by construction; an unrecognized value raises and is counted in
-  `IngestSummary.errors` rather than polluting per-vendor counts.
+  real state the UI shows as "Unassigned". A code spelled with a
+  separator (`bat-yam`) matches consecutive tokens.
+
+  **Which sites exist is `INVENTORY_SITES`, not code** (ADR-0018).
+  `SiteCode` is gone; the set is a `SiteCatalog` parsed from
+  `"nyc:New York City,tlv:Tel Aviv,bat-yam:Bat Yam,five:Site Five"` —
+  that string is the shipped default, and an estate sets its own. The
+  set is still *closed*, just closed at runtime, and it is still the
+  server's own name that picks from it. Three things follow. The catalog
+  is threaded explicitly (`IngestService(sites=...)`,
+  `parse_site_code(name, catalog)`, `default_system_rules(catalog)`) —
+  the domain never reads `Settings`. `Server.site_id` is a plain `str`,
+  deliberately, so a document written before a site was renamed away
+  still loads. And `INVENTORY_SITES` lives in the shared `api-config`
+  ConfigMap because the API *and* every collector must agree on it — a
+  collector derives each server's site at ingest. **A Cisco server whose name carries no site
+  token falls back to its service profile's org DN**
+  (`org-root/org_tlv/ls-worker-01` -> `tlv`) — the name is still the
+  authority, the org path is only consulted when it says nothing.
+- **`Vendor` is dell/cisco/hp/standalone — there is still no `UNKNOWN`.**
+  `STANDALONE` means *a manufacturer this platform does not model*
+  (Lenovo, Supermicro, a whitebox) **or one the BMC did not report at
+  all** (`ComputerSystem.Manufacturer` absent/null maps to `STANDALONE`
+  too, since 2026-08-23 — a deliberate reversal of the original
+  fail-the-system design, accepting a real correlation-key risk to keep
+  every listed BMC ingested; see ADR-0016's dated update), **not**
+  "collected without a manager": a Dell reached at its own BMC is still
+  `dell`, because `IngestService` correlates on `(vendor,
+  serial_normalized)` and moving a machine between vendors splits it
+  into two documents. Which collector found a server is
+  `Server.source_provider`, which is filterable.
+- **A provider reports `None` for a field it could not read**, which is
+  not the same as zero or empty. `IngestService` carries the stored value
+  forward for a `None` and overwrites for a real value. Before this
+  existed, a sub-resource that 404'd wrote zeros over good data — which
+  took a server from CRITICAL to HEALTHY by reporting no drives, and
+  logged an audit event saying the drive had recovered.
 - **A collector only ingests servers whose name matches
   `INVENTORY_COLLECTOR_NAME_PATTERN`** (`^ocp` in `.env.example` and
   `values.yaml`; empty = collect everything). A vendor manager holds the
@@ -325,6 +403,9 @@ non-obvious enough to bite you.
   make dry runs lie. A non-matching server is never fetched: no document,
   no health state, no audit trail. This is **not** the UPI-vs-hosted
   distinction — that's classification rules over what *is* collected.
+  **`REDFISH_STANDALONE` is exempt** (`_UNFILTERED_TYPES`): a BMC does not
+  know the server's `ocp4-...` name, so the pattern would discard every
+  host the operator listed. Its inventory file is the filter instead.
 - **A collector's whole connection config is env** — one endpoint and
   login per `ManagerType`. No `Manager` document is read to decide where
   to connect and there is no credentials directory; see the collector
@@ -343,6 +424,8 @@ non-obvious enough to bite you.
   Redis a hard dependency for correctness.
 - Pagination is keyset (HMAC-signed cursor for `/servers`), never
   `skip`/`offset`.
+- Sites from configuration rather than an enum is `docs/adr/0018`,
+  which supersedes part of `0011`.
 - Sites/vendors as closed sets, name-derived sites and the UI rebuild are
   `docs/adr/0011`; env-based manager connections and the single manifest
   set are `docs/adr/0012`; CI action pinning, the removed Dependabot and
@@ -441,11 +524,17 @@ in the order the user has been steering toward:
    of a boot policy, vNICs and a UUID pool), and the original scope cuts
    — CPU model string, per-drive storage detail, fabric interconnect
    identity. Real hardware settles those.
-2. Build the next vendor collector. Ask the user which one before
-   assuming — their last stated preference was "easiest to actually
-   test," which favored UCS's real emulator; re-evaluate that tradeoff
-   fresh for whichever vendor comes next rather than assuming the same
-   research still holds.
-3. Once collectors are further along (or if the user redirects), the
+2. ~~Build the Cisco Intersight collector~~ — **done** (ADR-0017), but
+   **unvalidated against live hardware**, which is a different state from
+   every collector before it. The highest-value next action on it is not
+   more code: it is running `tools/verify_intersight.py` against the real
+   appliance and recording what it settles.
+3. Build the next vendor collector — Dell OpenManage or HPE OneView. Ask
+   the user which one before assuming. Their earlier preference was
+   "easiest to actually test," which favored UCS's real emulator;
+   Intersight was then built with *no* test target at all, so that
+   criterion is no longer the only one in play. Re-evaluate the tradeoff
+   fresh rather than assuming the same research still holds.
+4. Once collectors are further along (or if the user redirects), the
    deployment/CD and auth gaps above are the rest of what "production
    and really run" means for this platform.

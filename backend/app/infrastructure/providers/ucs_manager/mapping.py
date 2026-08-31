@@ -13,7 +13,11 @@ from collections.abc import Iterable
 from typing import Any
 
 from app.domain.ports.provider import ProviderAttachment, ProviderServer
-from app.infrastructure.providers.ucs_common import is_equipped
+from app.infrastructure.providers.ucs_common import (
+    is_equipped,
+    normalize_admin_state,
+    normalize_oper_state,
+)
 
 _BYTES_PER_MB = 1024 * 1024
 _NOT_APPLICABLE = "not-applicable"
@@ -164,24 +168,10 @@ def _nic_macs(*, host_eth_ifs: list[Any], ext_eth_ifs: list[Any]) -> tuple[str, 
     return host_macs if host_macs else _extract_macs(ext_eth_ifs)
 
 
+# The vocabulary itself lives in `..ucs_common`: Intersight reports the
+# same values, and one fleet-found mapping must reach both collectors.
 # See docs/cisco-collectors.md, "Adapter interfaces, MACs and fabric
 # attachments".
-_OPER_STATE_MAP = {
-    "operable": "UP",
-    "up": "UP",
-    "link-up": "UP",
-    "admin-down": "DISABLED",
-    "disabled": "DISABLED",
-    "inoperable": "DOWN",
-    "down": "DOWN",
-    "link-down": "DOWN",
-    "failed": "DOWN",
-    "sfp-not-present": "DOWN",
-}
-
-_ADMIN_STATE_MAP = {"enabled": "ENABLED", "disabled": "DISABLED"}
-
-
 def _oper_state(mo: Any) -> str:
     """
     Map UCS's operational-state vocabulary onto the platform's.
@@ -192,7 +182,7 @@ def _oper_state(mo: Any) -> str:
     Returns:
         str: UP, DOWN, DISABLED, or UNKNOWN for an unrecognized value.
     """
-    return _OPER_STATE_MAP.get(str(getattr(mo, "oper_state", "") or "").lower(), "UNKNOWN")
+    return normalize_oper_state(getattr(mo, "oper_state", None))
 
 
 def _admin_state(mo: Any) -> str:
@@ -205,20 +195,37 @@ def _admin_state(mo: Any) -> str:
     Returns:
         str: ENABLED, DISABLED, or UNKNOWN for an unrecognized value.
     """
-    return _ADMIN_STATE_MAP.get(str(getattr(mo, "admin_state", "") or "").lower(), "UNKNOWN")
+    return normalize_admin_state(getattr(mo, "admin_state", None))
 
 
 def _attachments(
-    adapter_ifs: Iterable[Any], *, provider_type: str
+    adapter_ifs: Iterable[Any],
+    *,
+    provider_type: str,
+    interface_kind: str,
+    switches_by_id: dict[str, Any],
 ) -> tuple[ProviderAttachment, ...]:
     """
     Build fabric-interconnect attachments from adapter interfaces.
 
     Args:
-        adapter_ifs (Iterable[Any]): `adaptorExtEthIf` and/or
-            `adaptorHostEthIf` MOs.
+        adapter_ifs (Iterable[Any]): Either every `adaptorExtEthIf` (the
+            physical uplinks) or every `adaptorHostEthIf` (the OS-facing
+            vNICs) for one server — never both in the same call, so every
+            attachment this call produces gets the same `interface_kind`.
         provider_type (str): Which collector observed the attachment, not
             which product owns the fabric.
+        interface_kind (str): `"PHYSICAL"` or `"VNIC"`, stamped onto every
+            attachment produced from `adapter_ifs`.
+        switches_by_id (dict[str, Any]): `networkElement` MOs keyed by
+            `id` (`"A"`/`"B"`), from `ucs_manager.provider`'s domain-wide
+            query. Supplies each attachment's `fabric_model`/
+            `fabric_serial` — the two identifying facts UCS Manager
+            actually exposes per Fabric Interconnect; there is no
+            separate configured hostname distinct from the domain's own
+            shared cluster name in `topSystem.name`. See
+            docs/cisco-collectors.md, "Adapter interfaces, MACs and
+            fabric attachments".
 
     Returns:
         tuple[ProviderAttachment, ...]: One attachment per interface with a
@@ -232,6 +239,7 @@ def _attachments(
         switch_id = getattr(mo, "switch_id", None)
         if not switch_id or switch_id.upper() == "NONE":
             continue
+        switch = switches_by_id.get(switch_id)
         attachments.append(
             ProviderAttachment(
                 type="FABRIC_INTERCONNECT",
@@ -239,14 +247,15 @@ def _attachments(
                 fabric=switch_id,
                 fabric_name=None,
                 fabric_id=None,
-                fabric_model=None,
-                fabric_serial=None,
+                fabric_model=getattr(switch, "model", None) if switch is not None else None,
+                fabric_serial=getattr(switch, "serial", None) if switch is not None else None,
                 server_interface=getattr(mo, "name", None) or getattr(mo, "id", None),
                 server_port=None,
                 fabric_port=getattr(mo, "peer_dn", None) or None,
                 admin_state=_admin_state(mo),
                 oper_state=_oper_state(mo),
                 speed_mbps=None,
+                interface_kind=interface_kind,
             )
         )
     return tuple(attachments)
@@ -392,6 +401,7 @@ def compute_unit_to_provider_server(
     host_eth_ifs: list[Any],
     cpu_units: list[Any],
     disk_units: list[Any],
+    switches_by_id: dict[str, Any],
     provider_type: str = "UCS_MANAGER",
 ) -> ProviderServer:
     """
@@ -409,10 +419,14 @@ def compute_unit_to_provider_server(
         mgmt_ip_by_parent_dn (dict[str, Any]): Every domain
             `vnicIpV4PooledAddr`/`vnicIpV4StaticAddr` with a real address,
             from `ucs_common.management_ip_by_parent_dn`.
-        ext_eth_ifs (list[Any]): Its `adaptorExtEthIf` MOs.
-        host_eth_ifs (list[Any]): Its `adaptorHostEthIf` MOs.
+        ext_eth_ifs (list[Any]): Its `adaptorExtEthIf` MOs (physical
+            uplinks).
+        host_eth_ifs (list[Any]): Its `adaptorHostEthIf` MOs (OS-facing
+            vNICs).
         cpu_units (list[Any]): Its `processorUnit` MOs.
         disk_units (list[Any]): Its `storageLocalDisk` MOs.
+        switches_by_id (dict[str, Any]): Domain `networkElement` MOs
+            keyed by `id` (`"A"`/`"B"`), passed through to `_attachments`.
         provider_type (str): Which collector observed this server.
 
     Returns:
@@ -452,7 +466,20 @@ def compute_unit_to_provider_server(
         memory_total_bytes=total_memory_mb * _BYTES_PER_MB,
         storage_total_bytes=storage_total_bytes,
         storage_drives=storage_drives,
-        attachments=_attachments((*ext_eth_ifs, *host_eth_ifs), provider_type=provider_type),
+        attachments=(
+            _attachments(
+                ext_eth_ifs,
+                provider_type=provider_type,
+                interface_kind="PHYSICAL",
+                switches_by_id=switches_by_id,
+            )
+            + _attachments(
+                host_eth_ifs,
+                provider_type=provider_type,
+                interface_kind="VNIC",
+                switches_by_id=switches_by_id,
+            )
+        ),
         tags=(),
     )
 

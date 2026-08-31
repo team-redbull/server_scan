@@ -26,6 +26,7 @@ from app.application.services.ingest import IngestService
 from app.config import get_settings
 from app.domain.services.health.metrics import build_default_registry
 from app.domain.services.regex_engine import RegexModuleEngine
+from app.domain.value_objects.site import site_catalog
 from app.infrastructure.logging import configure_logging
 from app.infrastructure.mongodb import MongoClientHolder
 from app.infrastructure.mongodb.audit_event_repository import MongoAuditEventRepository
@@ -38,7 +39,7 @@ from app.infrastructure.mongodb.manager_repository import MongoManagerRepository
 from app.infrastructure.mongodb.server_repository import MongoServerRepository
 from app.infrastructure.mongodb.site_repository import MongoSiteRepository
 from app.infrastructure.providers.fake.generator import list_managers, list_sites
-from app.infrastructure.providers.fake.provider import FakeProvider
+from app.infrastructure.providers.fake.provider import fake_providers
 
 logger = structlog.get_logger(__name__)
 
@@ -72,7 +73,8 @@ async def _run(*, count: int, seed: int) -> None:
         # ever having run against it.
         rule_repo = MongoClassificationRuleRepository(mongo)
         policy_repo = MongoHealthPolicyRepository(mongo)
-        await ensure_default_classification_rules(rule_repo)
+        sites = site_catalog(settings.sites)
+        await ensure_default_classification_rules(rule_repo, sites)
         await ensure_default_health_policies(policy_repo)
 
         regex_engine = RegexModuleEngine(
@@ -83,6 +85,7 @@ async def _run(*, count: int, seed: int) -> None:
             server_repo=MongoServerRepository(mongo, cursor_secret=settings.cursor_secret),
             site_repo=MongoSiteRepository(mongo),
             manager_repo=MongoManagerRepository(mongo),
+            sites=sites,
             classification_service=ClassificationService(
                 rule_repo=rule_repo, engine=regex_engine, mongo=mongo
             ),
@@ -93,22 +96,28 @@ async def _run(*, count: int, seed: int) -> None:
             ),
             audit=AuditService(repo=MongoAuditEventRepository(mongo)),
         )
-        provider = FakeProvider(seed=seed, count=count)
-
-        summary = await ingest_service.ingest(
-            provider, sites=list_sites(), managers=list_managers()
-        )
+        # One pass per collector: `Server.source_provider` is stamped from
+        # the provider, so a single pass would label the whole fake fleet
+        # with one collector that never found most of it.
+        fetched = created = updated = errors = 0
+        for provider in fake_providers(seed=seed, count=count, sites=sites):
+            summary = await ingest_service.ingest(
+                provider, sites=list_sites(sites), managers=list_managers()
+            )
+            fetched += summary.fetched
+            created += summary.created
+            updated += summary.updated
+            errors += summary.errors
 
         logger.info(
             "seed.completed",
-            fetched=summary.fetched,
-            created=summary.created,
-            updated=summary.updated,
-            errors=summary.errors,
+            fetched=fetched,
+            created=created,
+            updated=updated,
+            errors=errors,
         )
         print(  # CLI output, distinct from the structured log line above
-            f"fetched={summary.fetched} created={summary.created} "
-            f"updated={summary.updated} errors={summary.errors}"
+            f"fetched={fetched} created={created} updated={updated} errors={errors}"
         )
     finally:
         await mongo.close()

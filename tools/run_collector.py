@@ -44,7 +44,7 @@ from app.domain.ports.provider import ProviderServer, ServerInventoryProvider
 from app.domain.services.health.metrics import build_default_registry
 from app.domain.services.regex_engine import RegexModuleEngine
 from app.domain.value_objects.bmc_address import parse_bmc_address
-from app.domain.value_objects.site import parse_site_code
+from app.domain.value_objects.site import parse_site_code, site_catalog
 from app.infrastructure.credentials import EnvConnectionResolver
 from app.infrastructure.credentials.env import resolve_login
 from app.infrastructure.logging import configure_logging
@@ -58,10 +58,29 @@ from app.infrastructure.mongodb.indexes import ensure_indexes
 from app.infrastructure.mongodb.manager_repository import MongoManagerRepository
 from app.infrastructure.mongodb.server_repository import MongoServerRepository
 from app.infrastructure.mongodb.site_repository import MongoSiteRepository
+from app.infrastructure.providers.intersight.provider import IntersightProvider
 from app.infrastructure.providers.openmanage.provider import OpenManageProvider
+from app.infrastructure.providers.redfish.provider import RedfishStandaloneProvider
+from app.infrastructure.providers.redfish.targets import load_targets
 from app.infrastructure.providers.ucs_central.provider import UcsCentralProvider
 
 logger = structlog.get_logger(__name__)
+
+_DEBUG_HTTP_VAR = "INVENTORY_REDFISH_DEBUG_HTTP"
+
+
+def _debug_http_enabled() -> bool:
+    """
+    Report whether `--debug-http` was passed.
+
+    Threaded through the environment rather than the factory signature so
+    it reaches every client the run constructs, matching how `--debug-xml`
+    already reaches `UcsManagerClient`.
+
+    Returns:
+        bool: True when HTTP tracing is on.
+    """
+    return os.environ.get(_DEBUG_HTTP_VAR) == "1"
 
 
 def _openmanage_provider(
@@ -137,12 +156,125 @@ def _ucs_central_provider(
 # `_build_provider` says so in its own words instead of claiming no
 # collector exists.
 #
+# REDFISH_STANDALONE is the one entry that names no manager at all: it
+# reaches machines no aggregator owns, one BMC at a time, from an
+# inventory file. See docs/adr/0016-redfish-standalone-collector.md.
+#
 # Annotated rather than inferred: mypy would otherwise widen the value
 # type, and the annotation is also what pins the factory contract every
 # future provider must match.
+def _redfish_provider(
+    *,
+    manager: Manager,
+    credentials: ManagerConnection,
+    timeout_seconds: float,
+    settings: Settings,
+) -> ServerInventoryProvider:
+    """The standalone Redfish collector — one BMC at a time, from a file.
+
+    `timeout_seconds` is deliberately unused. This collector splits
+    connect from read (`INVENTORY_REDFISH_CONNECT_TIMEOUT_SECONDS` /
+    `_READ_TIMEOUT_SECONDS`), because one value cannot serve both a fleet
+    with dead hosts in it and a BMC that answers slowly. Named here so a
+    parameter this factory ignores is documented rather than surprising.
+    """
+    return RedfishStandaloneProvider(
+        manager=manager,
+        # Parsed and fully validated before any connection is opened: a
+        # fan-out collector must not find a typo on host 380 of 400, and a
+        # credential must never reach a host a mistake put in front of.
+        targets=load_targets(
+            inventory_path=settings.redfish_inventory_file,
+            credentials_path=settings.redfish_credentials_file,
+            fallback_login=_optional_login(settings, ManagerType.REDFISH_STANDALONE),
+            ca_bundle=settings.redfish_ca_bundle or None,
+        ),
+        connect_timeout=settings.redfish_connect_timeout_seconds,
+        read_timeout=settings.redfish_read_timeout_seconds,
+        host_budget_seconds=settings.redfish_host_budget_seconds,
+        run_budget_seconds=settings.redfish_run_budget_seconds,
+        fleet_concurrency=settings.redfish_fleet_concurrency,
+        auth_failure_threshold=settings.redfish_auth_failure_threshold,
+        auth_failure_budget=settings.redfish_auth_failure_budget,
+        tls_min_version=settings.redfish_tls_min_version,
+        debug_http=_debug_http_enabled(),
+    )
+
+
+def _intersight_provider(
+    *,
+    manager: Manager,
+    credentials: ManagerConnection,
+    timeout_seconds: float,
+    settings: Settings,
+) -> ServerInventoryProvider:
+    """The Intersight collector — one endpoint, fleet-wide list queries.
+
+    `timeout_seconds` is the connect timeout only. Reading one page of a
+    fleet-wide query is a different question from reaching the endpoint
+    at all, so it has its own setting, the same split the Redfish
+    collector makes.
+    """
+    modes = tuple(
+        mode.strip() for mode in settings.intersight_management_modes.split(",") if mode.strip()
+    )
+    # `ManagerConnection` carries a username/password pair because most
+    # vendors have one. Intersight does not: the resolver filled those two
+    # slots from INVENTORY_INTERSIGHT_API_KEY_ID/_PEM, and they are named
+    # for what they are from here on.
+    return IntersightProvider(
+        manager=manager,
+        endpoint=credentials.endpoint,
+        api_key_id=credentials.username,
+        api_key_pem=credentials.password,
+        connect_timeout=timeout_seconds,
+        read_timeout=settings.intersight_read_timeout_seconds,
+        page_size=settings.intersight_page_size,
+        management_modes=modes,
+        run_budget_seconds=settings.intersight_run_budget_seconds,
+        debug_http=_debug_http_enabled(),
+    )
+
+
+def _optional_login(settings: Settings, manager_type: ManagerType) -> tuple[str, str] | None:
+    """A type's fleet-wide login, or None when it has none configured.
+
+    Unlike `resolve_login`, a missing value is not an error here: an
+    estate where every BMC has its own account configures no fleet-wide
+    fallback at all, and `load_targets` then produces a far better message
+    naming the specific host whose credential could not be resolved.
+    """
+    try:
+        return resolve_login(settings, manager_type)
+    except ManagerNotConfiguredError:
+        return None
+
+
+# Types reached without a single configured endpoint. Both resolve a
+# login only; their addresses come from elsewhere at runtime — UCS Central
+# reports its domains, and the Redfish collector reads an inventory file.
+# `EnvConnectionResolver.resolve` would otherwise demand an `_IP` variable
+# that deliberately does not exist.
+_ENDPOINTLESS_TYPES = frozenset({ManagerType.REDFISH_STANDALONE})
+
+# `INVENTORY_COLLECTOR_NAME_PATTERN` is not applied to these. The pattern
+# exists because a vendor manager holds the whole datacenter and the name
+# is the only discriminator; a standalone collector's inventory file is
+# already that filter, and a far more precise one. Applying `^ocp` over a
+# name a BMC does not know would discard every host the operator listed.
+_UNFILTERED_TYPES = frozenset({ManagerType.REDFISH_STANDALONE})
+
+
 _PROVIDER_FACTORIES: dict[ManagerType, Callable[..., ServerInventoryProvider]] = {
     ManagerType.UCS_CENTRAL: _ucs_central_provider,
     ManagerType.OPENMANAGE: _openmanage_provider,
+    ManagerType.REDFISH_STANDALONE: _redfish_provider,
+    # INTERSIGHT is in neither `_ENDPOINTLESS_TYPES` nor
+    # `_UNFILTERED_TYPES`, deliberately: it has a real configured
+    # endpoint, and the servers it reports carry the `ocp4-...` names
+    # `INVENTORY_COLLECTOR_NAME_PATTERN` exists to filter. See
+    # docs/adr/0017-intersight-collector.md.
+    ManagerType.INTERSIGHT: _intersight_provider,
 }
 
 
@@ -162,6 +294,15 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help=(
             "Print what each manager reports and exit without writing anything. "
             "Nothing is classified, health-evaluated, audited or upserted."
+        ),
+    )
+    parser.add_argument(
+        "--debug-http",
+        action="store_true",
+        help=(
+            "Log one line per Redfish request: method, path and status only. "
+            "Headers and bodies are never logged, and the session exchange is "
+            "skipped entirely rather than redacted."
         ),
     )
     parser.add_argument(
@@ -312,13 +453,82 @@ async def _build_provider(
         raise NotImplementedError(
             f"No collector implemented yet for manager type {manager.type!r}."
         )
-    connection = credential_resolver.resolve(manager.type)
+    connection = (
+        ManagerConnection(endpoint="", username="", password="")
+        if manager.type in _ENDPOINTLESS_TYPES
+        else credential_resolver.resolve(manager.type)
+    )
     return factory(
         manager=manager,
         credentials=connection,
         timeout_seconds=timeout_seconds,
         settings=settings if settings is not None else get_settings(),
     )
+
+
+# What a dry run prints for a field the provider could not read, as
+# distinct from `—` for a field it read and found empty. See
+# `app.domain.ports.provider.ProviderServer`.
+_UNREAD = "not read"
+
+
+def _bmc_host(address_raw: str | None) -> str:
+    """
+    The BMC's address as an operator reads it: host only.
+
+    The scheme, port and Redfish path a collector reports are protocol
+    detail nobody checks by eye, and they push the one thing that matters
+    — the address you would ping or open — off to the middle of a line.
+    The full URI is still what gets stored, for the Metal3 `BareMetalHost`
+    round-trip.
+
+    Args:
+        address_raw (str | None): The collector's raw BMC address.
+
+    Returns:
+        str: The host, the raw string when it cannot be parsed, or an em
+            dash when there is none.
+    """
+    parsed = parse_bmc_address(address_raw)
+    if parsed is None:
+        return "—"
+    return parsed.host or parsed.raw
+
+
+def _or_unread(value: object) -> str:
+    """
+    Render an optionally-reported value for the dry-run print.
+
+    Args:
+        value (object): The reported value, or `None` if the provider
+            could not read it.
+
+    Returns:
+        str: The value as text, or `"not read"` for `None`.
+    """
+    return _UNREAD if value is None else str(value)
+
+
+def _format_capacity(capacity_bytes: int) -> str:
+    """
+    Render a byte count as GiB, or TiB once it is large enough that GiB
+    stops being readable at a glance.
+
+    Binary (base-1024), and kept for GPU VRAM specifically: Redfish reports
+    it in MiB, so a 80 GiB card reads as its nameplate size only in binary
+    units. Disk capacity uses `_format_tb`/`_format_disk_size` instead —
+    drives are marketed and reported decimal.
+
+    Args:
+        capacity_bytes (int): The capacity to render, in bytes.
+
+    Returns:
+        str: e.g. `"512.0 GiB"` below 1024 GiB, `"9.6 TiB"` at or above it.
+    """
+    gib = capacity_bytes / 1024**3
+    if gib >= 1024:
+        return f"{gib / 1024:.1f} TiB"
+    return f"{gib:.1f} GiB"
 
 
 def _format_tb(capacity_bytes: int) -> str:
@@ -384,6 +594,7 @@ async def _dry_run_one_manager(
         ),
         name_pattern,
     )
+    sites = site_catalog(settings.sites if settings is not None else get_settings().sites)
     print(f"\n=== {manager.name} ({manager.type.value} @ {manager.endpoint}) ===")
     if name_pattern:
         print(f"    (only servers whose name matches {name_pattern!r} are shown/collected)")
@@ -394,33 +605,49 @@ async def _dry_run_one_manager(
             print(f"  … stopped at --limit {limit}")
             break
         count += 1
-        site = parse_site_code(ps.name)
-        bmc = parse_bmc_address(ps.bmc_address_raw)
+        site = parse_site_code(ps.name, sites) or parse_site_code(ps.profile_dn, sites)
+        memory = (
+            f"{ps.memory_total_bytes / 1024**3:.1f} GiB"
+            if ps.memory_total_bytes is not None
+            else _UNREAD
+        )
+        storage = (
+            _format_tb(ps.storage_total_bytes) if ps.storage_total_bytes is not None else _UNREAD
+        )
+        drive_count = _or_unread(None if ps.storage_drives is None else len(ps.storage_drives))
+        macs = _UNREAD if ps.nic_macs is None else (", ".join(ps.nic_macs) or "—")
         print(
             f"\n[{count}] {ps.name}"
-            f"\n     serial      : {ps.serial or '—'}"
-            f"\n     site (from name): {site.value if site else '— none in name'}"
-            f"\n     vendor      : {ps.vendor}"
-            f"\n     model       : {ps.model or '—'}"
-            f"\n     cpu         : {ps.cpu_sockets} sockets, {ps.cpu_cores} cores,"
-            f" {ps.cpu_threads} threads ({ps.cpu_model or 'model unknown'})"
-            f"\n     memory      : {ps.memory_total_bytes / 1024**3:.1f} GiB"
-            f"\n     storage     : {_format_tb(ps.storage_total_bytes)} total across"
-            f" {len(ps.storage_drives)} drive(s)"
-            f"\n     bmc         : {(bmc.host if bmc else None) or '—'}"
+            f"\n     external_id : {ps.external_id}"
+            f"\n     site (from name): {site or '— none in name'}"
+            f"\n     vendor/model: {ps.vendor} / {ps.model}"
+            f"\n     serial/uuid : {ps.serial} / {ps.system_uuid}"
+            f"\n     cpu         : {_or_unread(ps.cpu_sockets)} sockets,"
+            f" {_or_unread(ps.cpu_cores)} cores,"
+            f" {_or_unread(ps.cpu_threads)} threads ({ps.cpu_model or 'model unknown'})"
+            f"\n     memory      : {memory}"
+            f"\n     storage     : {storage} total across {drive_count} drive(s)"
+            f"\n     bmc         : {_bmc_host(ps.bmc_address_raw)} (mac {ps.bmc_mac or '—'})"
+            f"\n     profile     : {ps.profile_dn or '—'}"
             f"\n     profile tmpl: {ps.profile_template_name or '—'}"
             f" [{ps.profile_template_external_id or '—'}]"
-            f"\n     nics        : {len(ps.nics) if ps.nics else len(ps.nic_macs)}"
+            f"\n     nic macs    : {macs}"
+            f"\n     attachments : {len(ps.attachments)}"
+            f"\n     gpus        : {_or_unread(None if ps.gpus is None else len(ps.gpus))}"
         )
+        for a in ps.attachments:
+            print(
+                f"        [{a.interface_kind:8}] fabric {a.fabric}  if={a.server_interface}"
+                f"  admin={a.admin_state} oper={a.oper_state}"
+                f"  peer={a.fabric_port or '—'}"
+                f"  FI model/serial={a.fabric_model or '—'}/{a.fabric_serial or '—'}"
+            )
+        # Per-NIC detail for the providers that report it (OpenManage);
+        # the flat `nic macs` line above is all a provider without it has.
         for nic in ps.nics:
             speed = f"  {nic.speed_mbps}mbps" if nic.speed_mbps else ""
             print(f"        nic {nic.name}  mac={nic.mac or '—'}  {nic.link_state}{speed}")
-        # Providers that report only a flat MAC list (no per-NIC link
-        # state) still get their MACs shown, just without an up/down.
-        if not ps.nics:
-            for mac in ps.nic_macs:
-                print(f"        nic —  mac={mac}  (link state not reported)")
-        for drive in ps.storage_drives:
+        for drive in ps.storage_drives or ():
             capacity_bytes = drive.get("capacity_bytes")
             size = (
                 _format_disk_size(capacity_bytes)
@@ -431,6 +658,24 @@ async def _dry_run_one_manager(
                 f"        disk {drive.get('id')}  {drive.get('model') or '—'}"
                 f"  serial={drive.get('serial') or '—'}"
                 f"  {drive.get('media_type')}  {size}  health={drive.get('health')}"
+            )
+        for gpu in ps.gpus or ():
+            gpu_memory = gpu.get("memory_bytes")
+            gpu_size = (
+                _format_capacity(gpu_memory) if isinstance(gpu_memory, int) else "VRAM unknown"
+            )
+            temp = gpu.get("temperature_celsius")
+            power = gpu.get("power_watts")
+            print(
+                f"        gpu {gpu.get('model') or '—'}  vendor={gpu.get('vendor') or '—'}"
+                f"  serial={gpu.get('serial') or '—'}"
+                f"  {gpu_size} ({gpu.get('memory_type') or 'memory type unknown'})"
+                f"  ecc={gpu.get('ecc_mode_enabled')}"
+                f"  errors={gpu.get('correctable_error_count')}c/"
+                f"{gpu.get('uncorrectable_error_count')}u"
+                f"  temp={f'{temp:.0f}°C' if isinstance(temp, (int, float)) else '—'}"
+                f"  power={f'{power:.0f}W' if isinstance(power, (int, float)) else '—'}"
+                f"  health={gpu.get('health')}"
             )
     print(f"\n{manager.name}: {count} server(s) reported. Nothing was written.")
     return count
@@ -480,7 +725,11 @@ async def _run_one_manager(
         # too would double that cost per manager and burn a second session
         # against UCS Manager's per-user session cap for nothing — this
         # `except` handles a health-check failure identically either way.
-        summary = await ingest_service.ingest(provider)
+        # `managers=[manager]` is what actually writes the `Manager`
+        # projection `manager_for()` builds. Without it every collected
+        # server carried a `manager_id` pointing at a document that was
+        # never created — see docs/adr/0016.
+        summary = await ingest_service.ingest(provider, managers=[manager])
         return _RunOutcome(summary=summary, collection_errors=collection_errors_of(provider))
     except Exception:
         logger.exception(
@@ -508,7 +757,19 @@ async def _run(
         # One manager per type, straight from configuration — nothing is
         # read from the `managers` collection to decide where to connect.
         try:
-            connection = credential_resolver.resolve(manager_type)
+            if manager_type in _ENDPOINTLESS_TYPES:
+                # No `_IP` variable exists for these, so `resolve()` would
+                # exit 2 naming a variable that cannot be set. The
+                # `Manager` projection carries the inventory path instead,
+                # which is the most informative answer to "where did these
+                # servers come from".
+                connection = ManagerConnection(
+                    endpoint=settings.redfish_inventory_file,
+                    username="",
+                    password="",
+                )
+            else:
+                connection = credential_resolver.resolve(manager_type)
             # Pre-flight for the one collector that needs a *second* set of
             # credentials: UCS Central also logs into each domain's UCS
             # Manager. Checked here, beside the endpoint resolution, so a
@@ -523,6 +784,9 @@ async def _run(
             print(f"{exc}")
             return 2
         manager = manager_for(manager_type, connection)
+        # Computed once, so the reason lives in one place rather than
+        # being duplicated at both call sites below.
+        name_pattern = "" if manager_type in _UNFILTERED_TYPES else settings.collector_name_pattern
 
         if dry_run:
             # No indexes, no ingest pipeline, no repositories at all.
@@ -532,7 +796,7 @@ async def _run(
                     credential_resolver=credential_resolver,
                     timeout_seconds=settings.collector_connect_timeout_seconds,
                     limit=limit,
-                    name_pattern=settings.collector_name_pattern,
+                    name_pattern=name_pattern,
                     settings=settings,
                 )
             except Exception:
@@ -554,6 +818,7 @@ async def _run(
             server_repo=server_repo,
             site_repo=MongoSiteRepository(mongo),
             manager_repo=manager_repo,
+            sites=site_catalog(settings.sites),
             classification_service=ClassificationService(
                 rule_repo=rule_repo, engine=regex_engine, mongo=mongo
             ),
@@ -567,7 +832,7 @@ async def _run(
             ingest_service=ingest_service,
             credential_resolver=credential_resolver,
             timeout_seconds=settings.collector_connect_timeout_seconds,
-            name_pattern=settings.collector_name_pattern,
+            name_pattern=name_pattern,
             settings=settings,
         )
         if outcome is None:
@@ -607,6 +872,8 @@ def main(argv: list[str] | None = None) -> None:
         # Read by `UcsManagerClient`; set here so it covers every provider
         # this run constructs.
         os.environ["INVENTORY_UCS_DUMP_XML"] = "1"
+    if args.debug_http:
+        os.environ[_DEBUG_HTTP_VAR] = "1"
     exit_code = asyncio.run(
         _run(
             manager_type=ManagerType(args.manager_type),

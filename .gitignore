@@ -20,6 +20,15 @@ dist/
 *.local
 
 # Env / secrets
+# Real Redfish inventories and BMC credential files. Only the
+# `*.example.toml` under docs/examples/ is ever committed — a raw
+# inventory discloses the estate's topology, and a credentials file is a
+# fleet-wide root-equivalent secret. See docs/adr/0016.
+redfish-inventory.toml
+redfish-inventory.d/
+**/redfish-credentials*.toml
+!docs/examples/redfish-credentials.example.toml
+deploy/secrets*.yaml
 .env
 .env.*
 !.env.example
@@ -39,3 +48,12 @@ playwright-report/
 test-results/
 
 **/.claude-flow/
+# Probe output carried back from a site (docs/field-test-checklist.md):
+# holds server names, serials and management addresses, never committed.
+intersight-verify.txt
+intersight-dryrun.txt
+ucs-dryrun.txt
+
+# archify visual-check evidence: regenerable screenshots and receipts,
+# not the deliverable. The .architecture.json spec and .html are committed.
+docs/diagrams/*.visual-check.*

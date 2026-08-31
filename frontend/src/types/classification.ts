@@ -7,7 +7,13 @@
 
 import type { InstallationType, Vendor } from "@/types/server";
 
-export type ManagerType = "OPENMANAGE" | "UCS_MANAGER" | "UCS_CENTRAL" | "INTERSIGHT" | "ONEVIEW";
+export type ManagerType =
+  | "OPENMANAGE"
+  | "UCS_MANAGER"
+  | "UCS_CENTRAL"
+  | "INTERSIGHT"
+  | "ONEVIEW"
+  | "REDFISH_STANDALONE";
 
 export type RuleSource =
   | "SITE_CUSTOM"

@@ -1,0 +1,99 @@
+{{- /*
+The Cisco Intersight collector: one CronJob covering a whole tenant or
+on-prem appliance.
+
+Unlike every other collector here, its cost does not scale with the
+fleet. Each sub-resource is listed once for the entire estate and joined
+in memory against `compute.PhysicalSummary`, so a run is on the order of
+a hundred requests whether the tenant holds fifty servers or ten
+thousand. That is why this can be scheduled hourly where the per-BMC
+Redfish sweep cannot. See docs/adr/0017-intersight-collector.md.
+
+Servers reporting `ManagementMode == UCSM` are NOT collected by default:
+they are exactly the set the ucsCentral collector already owns, and
+collecting both would make one document's fields flip on whichever job
+ran last.
+
+There is no key file to mount. Intersight signs each request with an API
+key whose PEM private half rides in the shared collector Secret like any
+other credential, because the signing library accepts the key as a
+string.
+
+This collector never verifies the endpoint's TLS certificate — no CA
+bundle to mount, no verify flag to set. Unconditional, by explicit user
+decision. See app.infrastructure.providers.intersight.client.
+IntersightClient.
+*/ -}}
+{{- if .Values.collectors.intersight.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ .Release.Name }}-collector-intersight
+  labels:
+    app.kubernetes.io/name: {{ .Release.Name }}-collector-intersight
+    app.kubernetes.io/component: collector
+    app.kubernetes.io/part-of: server-inventory
+spec:
+  schedule: {{ .Values.collectors.intersight.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 5
+  jobTemplate:
+    spec:
+      backoffLimit: {{ .Values.collectors.intersight.backoffLimit }}
+      activeDeadlineSeconds: {{ .Values.collectors.intersight.activeDeadlineSeconds }}
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: collector
+              image: "{{ .Values.backend.image.repository }}:{{ .Values.backend.image.tag }}"
+              imagePullPolicy: {{ .Values.backend.image.pullPolicy }}
+              command: ["python3", "-m", "tools.run_collector", "--manager-type", "INTERSIGHT"]
+              env:
+                - name: INVENTORY_ENVIRONMENT
+                  value: production
+                # Which servers this collector may ingest at all, matched
+                # against the server's name. Applies here, unlike the
+                # standalone Redfish collector: Intersight knows a
+                # server's real name through its service profile.
+                - name: INVENTORY_COLLECTOR_NAME_PATTERN
+                  value: {{ .Values.collectors.namePattern | quote }}
+                # The partition between this collector and ucsCentral.
+                - name: INVENTORY_INTERSIGHT_MANAGEMENT_MODES
+                  value: {{ .Values.collectors.intersight.managementModes | quote }}
+                - name: INVENTORY_INTERSIGHT_PAGE_SIZE
+                  value: {{ .Values.collectors.intersight.pageSize | quote }}
+                - name: INVENTORY_COLLECTOR_CONNECT_TIMEOUT_SECONDS
+                  value: {{ .Values.collectors.intersight.connectTimeoutSeconds | quote }}
+                - name: INVENTORY_INTERSIGHT_READ_TIMEOUT_SECONDS
+                  value: {{ .Values.collectors.intersight.readTimeoutSeconds | quote }}
+                - name: INVENTORY_INTERSIGHT_RUN_BUDGET_SECONDS
+                  value: {{ .Values.collectors.intersight.runBudgetSeconds | quote }}
+                - name: INVENTORY_MONGO_URI
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.db.secretName }}
+                      key: mongo-uri
+                - name: INVENTORY_REDIS_URI
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.db.secretName }}
+                      key: redis-uri
+              envFrom:
+                - configMapRef:
+                    name: {{ .Release.Name }}-api-config
+                # Endpoint plus the API Key ID and its PEM, as INVENTORY_*
+                # env vars. `envFrom` a Secret rather than inline `env` so
+                # the private key isn't readable in the pod spec.
+                - secretRef:
+                    name: {{ .Values.collectors.existingSecret | default (printf "%s-collector-credentials" .Release.Name) }}
+              resources:
+                {{- toYaml .Values.collectors.intersight.resources | nindent 16 }}
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: ["ALL"]
+                readOnlyRootFilesystem: true
+                runAsNonRoot: true
+{{- end }}

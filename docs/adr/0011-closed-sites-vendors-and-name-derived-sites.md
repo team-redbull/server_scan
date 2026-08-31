@@ -1,5 +1,14 @@
 # ADR-0011: Sites and vendors are closed sets, and a server's site comes from its name
 
+> **Partly superseded by
+> [ADR-0018](0018-sites-from-configuration.md) (2026-08-30).** The
+> decision that the site set is *closed* stands, and so does deriving a
+> server's site from its own name. What changed is where the set lives:
+> `SiteCode` is no longer a Python enum but a `SiteCatalog` loaded from
+> `INVENTORY_SITES`, so an estate names its own sites without a code
+> change. Read that ADR before acting on this one's enum details.
+
+
 ## Status
 
 Accepted

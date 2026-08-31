@@ -127,6 +127,12 @@ class UcsManagerProvider:
             host_eth_ifs_all = await client.query_classid("adaptorHostEthIf")
             cpu_units_all = await client.query_classid("processorUnit")
             disk_units_all = await client.query_classid("storageLocalDisk")
+            # Exactly two per domain in practice (the redundant FI pair),
+            # so this is cheap regardless of fleet size.
+            network_elements = await client.query_classid("networkElement")
+            switches_by_id = {
+                str(getattr(mo, "id", "")): mo for mo in network_elements if getattr(mo, "id", "")
+            }
 
             profile_by_dn, template_dn_by_name = _partition_profiles(ls_servers)
 
@@ -156,6 +162,7 @@ class UcsManagerProvider:
                     host_eth_ifs=host_eth_ifs_by_server[server_mo.dn],
                     cpu_units=cpu_units_by_server[server_mo.dn],
                     disk_units=disk_units_by_server[server_mo.dn],
+                    switches_by_id=switches_by_id,
                 )
         finally:
             await client.logout()

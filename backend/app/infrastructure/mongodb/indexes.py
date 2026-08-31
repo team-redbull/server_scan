@@ -4,10 +4,19 @@ Indexes are declared here, as data, rather than issued as ad-hoc
 `create_index` calls scattered through repository code — `ensure_indexes`
 is called once per process at startup (see `app.main`'s lifespan) and is
 safe to call every time: `create_indexes` is idempotent when an index
-already exists with an identical spec, and raises loudly
-(`OperationFailure`) if an existing index's spec has actually drifted from
-what's declared here, which is a schema-drift bug we want surfaced
-immediately rather than silently ignored.
+already exists with an identical spec.
+
+When a declared spec *has* changed, `ensure_indexes` drops the stored
+index and recreates it, logging `mongo.index_respecified`. It originally
+let MongoDB's `IndexKeySpecsConflict` propagate, on the reasoning that
+drift is a bug worth surfacing — but that reasoning had the direction
+backwards. The conflict is raised by the deployment applying the *new,
+correct* spec, so propagating it means a corrected index takes the API
+and every collector down on startup instead of migrating. Drift between
+this file and a database is not a mystery to investigate; this file is
+the declaration, and the database is what follows it. See
+docs/adr/0016-redfish-standalone-collector.md, where correcting
+`uniq_system_uuid` surfaced this.
 
 Every compound index on `servers` ends in `_id` (ascending or descending
 to match the leading field's sort direction) specifically to support
@@ -29,8 +38,12 @@ from __future__ import annotations
 
 from typing import Any
 
+import structlog
 from pymongo import ASCENDING, DESCENDING, IndexModel
 from pymongo.asynchronous.database import AsyncDatabase
+from pymongo.errors import OperationFailure
+
+logger = structlog.get_logger(__name__)
 
 SERVERS_COLLECTION = "servers"
 SITES_COLLECTION = "sites"
@@ -44,7 +57,13 @@ SERVER_INDEXES: list[IndexModel] = [
         [("identity.system_uuid", ASCENDING)],
         name="uniq_system_uuid",
         unique=True,
-        partialFilterExpression={"identity.system_uuid": {"$exists": True}},
+        # `$type: "string"`, not `$exists: true`: MongoDB's `$exists` is
+        # true for a field that is *present and null*, and `model_dump(
+        # mode="json")` always emits `identity.system_uuid`. So `$exists`
+        # admitted every UUID-less server into a unique index keyed on
+        # null, letting exactly one of them exist fleet-wide. See
+        # docs/adr/0016-redfish-standalone-collector.md.
+        partialFilterExpression={"identity.system_uuid": {"$type": "string"}},
     ),
     IndexModel(
         [("identity.vendor", ASCENDING), ("identity.serial_normalized", ASCENDING)],
@@ -87,6 +106,18 @@ SERVER_INDEXES: list[IndexModel] = [
     IndexModel(
         [("maintenance.enabled", ASCENDING), ("name_normalized", ASCENDING), ("_id", ASCENDING)],
         name="maintenance_enabled_name_id",
+    ),
+    IndexModel(
+        [("source_provider", ASCENDING), ("name_normalized", ASCENDING), ("_id", ASCENDING)],
+        name="source_provider_name_id",
+    ),
+    # Backs "which servers from this collector have not been seen lately",
+    # which is the only way a fleet of standalone BMCs surfaces a host that
+    # quietly stopped answering — a CronJob pod is never scraped, so no
+    # collector-side metric can report its own absence.
+    IndexModel(
+        [("source_provider", ASCENDING), ("last_seen_at", ASCENDING)],
+        name="source_provider_last_seen",
     ),
     IndexModel([("updated_at", DESCENDING), ("_id", DESCENDING)], name="updated_at_id"),
     # Unfiltered sorts (no `FILTER_FIELDS` value supplied) still need a
@@ -185,13 +216,70 @@ AUDIT_EVENT_INDEXES: list[IndexModel] = [
 ]
 
 
+_INDEX_KEY_SPECS_CONFLICT = 86
+
+
+async def _create_indexes(
+    db: AsyncDatabase[dict[str, Any]], collection: str, indexes: list[IndexModel]
+) -> None:
+    """
+    Create a collection's declared indexes, replacing any whose stored
+    specification has since changed.
+
+    MongoDB rejects `createIndexes` outright (`IndexKeySpecsConflict`)
+    when an index of the same name exists with different options, so
+    without this a changed specification does not merely fail to apply —
+    it raises on every process startup and every collector run, taking
+    the deployment down rather than migrating it. See
+    docs/adr/0016-redfish-standalone-collector.md, where correcting
+    `uniq_system_uuid`'s partial filter first surfaced this.
+
+    Args:
+        db (AsyncDatabase[dict[str, Any]]): The database to act on.
+        collection (str): Collection whose indexes are being ensured.
+        indexes (list[IndexModel]): The declared indexes.
+
+    Raises:
+        OperationFailure: For any failure other than a specification
+            conflict, which is left to surface rather than be retried
+            blindly.
+    """
+    try:
+        await db[collection].create_indexes(indexes)
+        return
+    except OperationFailure as exc:
+        if exc.code != _INDEX_KEY_SPECS_CONFLICT:
+            raise
+
+    # Rebuilt one at a time so a single changed specification cannot drop
+    # indexes that were already correct.
+    for index in indexes:
+        name = index.document.get("name")
+        try:
+            await db[collection].create_indexes([index])
+        except OperationFailure as exc:
+            if exc.code != _INDEX_KEY_SPECS_CONFLICT or not name:
+                raise
+            logger.warning(
+                "mongo.index_respecified",
+                collection=collection,
+                index=name,
+                hint=(
+                    "The stored index specification differs from the declared one; "
+                    "dropping and recreating it. Expect a brief window with no index."
+                ),
+            )
+            await db[collection].drop_index(name)
+            await db[collection].create_indexes([index])
+
+
 async def ensure_indexes(db: AsyncDatabase[dict[str, Any]]) -> None:
     """Create every declared index if missing. Safe to call on every
     process startup — see module docstring.
     """
-    await db[SERVERS_COLLECTION].create_indexes(SERVER_INDEXES)
-    await db[SITES_COLLECTION].create_indexes(SITE_INDEXES)
-    await db[MANAGERS_COLLECTION].create_indexes(MANAGER_INDEXES)
-    await db[HEALTH_POLICIES_COLLECTION].create_indexes(HEALTH_POLICY_INDEXES)
-    await db[CLASSIFICATION_RULES_COLLECTION].create_indexes(CLASSIFICATION_RULE_INDEXES)
-    await db[AUDIT_EVENTS_COLLECTION].create_indexes(AUDIT_EVENT_INDEXES)
+    await _create_indexes(db, SERVERS_COLLECTION, SERVER_INDEXES)
+    await _create_indexes(db, SITES_COLLECTION, SITE_INDEXES)
+    await _create_indexes(db, MANAGERS_COLLECTION, MANAGER_INDEXES)
+    await _create_indexes(db, HEALTH_POLICIES_COLLECTION, HEALTH_POLICY_INDEXES)
+    await _create_indexes(db, CLASSIFICATION_RULES_COLLECTION, CLASSIFICATION_RULE_INDEXES)
+    await _create_indexes(db, AUDIT_EVENTS_COLLECTION, AUDIT_EVENT_INDEXES)

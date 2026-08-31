@@ -26,38 +26,42 @@ class Vendor(StrEnum):
 
     `HP`, not `HPE`: the platform reports the vendor the way operators
     here refer to it.
+
+    `STANDALONE` means **a manufacturer this platform does not model** —
+    Lenovo, Supermicro, a whitebox — not "collected without a manager".
+    That distinction matters: a Dell reached over Redfish with no
+    aggregator is still `DELL`, because `IngestService` correlates on
+    `(vendor, serial_normalized)` and moving a machine between vendors
+    splits it into two documents. Which collector found a server is
+    carried by `Server.source_provider`. See
+    docs/adr/0016-redfish-standalone-collector.md.
+
+    It is not the `UNKNOWN` this docstring argues against: it is never
+    guessed from a payload. A provider that cannot read `Manufacturer` at
+    all reports a collection failure rather than defaulting here.
     """
 
     DELL = "dell"
     CISCO = "cisco"
     HP = "hp"
-
-
-class SiteCode(StrEnum):
-    """The closed set of sites. Servers are assigned to one by parsing
-    their name (`app.domain.value_objects.site.parse_site_code`) — the
-    site token is embedded in every production hostname, e.g.
-    `ocp4-prod-one-infra-01`.
-
-    A closed enum rather than free-form strings because the previous
-    free-form `site_id` let a caller filter on a value no document could
-    ever hold and get a silent empty result back, with nothing to
-    distinguish "no such site" from "no servers there".
-    """
-
-    ONE = "one"
-    TWO = "two"
-    THREE = "three"
-    FOUR = "four"
-    FIVE = "five"
+    STANDALONE = "standalone"
 
 
 class ManagerType(StrEnum):
+    """How this platform reaches a server.
+
+    `REDFISH_STANDALONE` is the odd one out and deliberately so: it names
+    no manager at all. It is the collector for machines no aggregator
+    owns, reached one BMC at a time over DMTF Redfish. See
+    docs/adr/0016-redfish-standalone-collector.md.
+    """
+
     OPENMANAGE = "OPENMANAGE"
     UCS_MANAGER = "UCS_MANAGER"
     UCS_CENTRAL = "UCS_CENTRAL"
     INTERSIGHT = "INTERSIGHT"
     ONEVIEW = "ONEVIEW"
+    REDFISH_STANDALONE = "REDFISH_STANDALONE"
 
 
 class InstallationType(StrEnum):

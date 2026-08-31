@@ -91,6 +91,7 @@ class TestComputeUnitToProviderServer:
             template_dn_by_name={template.name: template.dn},
             mgmt_if=mgmt_if,
             mgmt_ip_by_parent_dn={},
+            switches_by_id={},
             ext_eth_ifs=[adapter_if],
             host_eth_ifs=[],
             cpu_units=[],
@@ -116,6 +117,7 @@ class TestComputeUnitToProviderServer:
         assert len(result.attachments) == 1
         assert result.attachments[0].fabric == "A"
         assert result.attachments[0].server_interface == "eth0"
+        assert result.attachments[0].interface_kind == "PHYSICAL"
 
     def test_no_assigned_profile_leaves_template_fields_none(self) -> None:
         blade = _blade(assigned_to_dn="")
@@ -126,6 +128,7 @@ class TestComputeUnitToProviderServer:
             template_dn_by_name={},
             mgmt_if=None,
             mgmt_ip_by_parent_dn={},
+            switches_by_id={},
             ext_eth_ifs=[],
             host_eth_ifs=[],
             cpu_units=[],
@@ -144,6 +147,7 @@ class TestComputeUnitToProviderServer:
             template_dn_by_name={},
             mgmt_if=None,
             mgmt_ip_by_parent_dn={},
+            switches_by_id={},
             ext_eth_ifs=[],
             host_eth_ifs=[],
             cpu_units=[],
@@ -162,6 +166,7 @@ class TestComputeUnitToProviderServer:
             template_dn_by_name={},  # no lsServiceProfileTemplate matched
             mgmt_if=None,
             mgmt_ip_by_parent_dn={},
+            switches_by_id={},
             ext_eth_ifs=[],
             host_eth_ifs=[],
             cpu_units=[],
@@ -178,6 +183,7 @@ class TestComputeUnitToProviderServer:
             template_dn_by_name={},
             mgmt_if=None,
             mgmt_ip_by_parent_dn={},
+            switches_by_id={},
             ext_eth_ifs=[],
             host_eth_ifs=[],
             cpu_units=[],
@@ -195,6 +201,7 @@ class TestComputeUnitToProviderServer:
             template_dn_by_name={},
             mgmt_if=_mgmt_if(ext_ip=unset_ip),
             mgmt_ip_by_parent_dn={},
+            switches_by_id={},
             ext_eth_ifs=[],
             host_eth_ifs=[],
             cpu_units=[],
@@ -218,6 +225,7 @@ class TestComputeUnitToProviderServer:
             template_dn_by_name={},
             mgmt_if=_mgmt_if(ext_ip="0.0.0.0"),  # noqa: S104 - sentinel, not a bind
             mgmt_ip_by_parent_dn={profile.dn: _mgmt_ip_addr(addr="10.9.8.7")},
+            switches_by_id={},
             ext_eth_ifs=[],
             host_eth_ifs=[],
             cpu_units=[],
@@ -237,6 +245,7 @@ class TestComputeUnitToProviderServer:
             template_dn_by_name={},
             mgmt_if=None,
             mgmt_ip_by_parent_dn={"sys/chassis-1/blade-3/mgmt": _mgmt_ip_addr(addr="10.5.5.5")},
+            switches_by_id={},
             ext_eth_ifs=[],
             host_eth_ifs=[],
             cpu_units=[],
@@ -252,6 +261,7 @@ class TestComputeUnitToProviderServer:
             template_dn_by_name={},
             mgmt_if=_mgmt_if(ext_ip="10.1.2.3"),
             mgmt_ip_by_parent_dn={},
+            switches_by_id={},
             ext_eth_ifs=[],
             host_eth_ifs=[],
             cpu_units=[],
@@ -268,6 +278,7 @@ class TestComputeUnitToProviderServer:
             template_dn_by_name={},
             mgmt_if=None,
             mgmt_ip_by_parent_dn={},
+            switches_by_id={},
             ext_eth_ifs=[],
             host_eth_ifs=[],
             cpu_units=[],
@@ -283,6 +294,7 @@ class TestComputeUnitToProviderServer:
             template_dn_by_name={},
             mgmt_if=None,
             mgmt_ip_by_parent_dn={},
+            switches_by_id={},
             ext_eth_ifs=[],
             host_eth_ifs=[],
             cpu_units=[],
@@ -298,6 +310,7 @@ class TestComputeUnitToProviderServer:
             template_dn_by_name={},
             mgmt_if=None,
             mgmt_ip_by_parent_dn={},
+            switches_by_id={},
             ext_eth_ifs=[_adapter_if(switch_id="NONE")],
             host_eth_ifs=[],
             cpu_units=[],
@@ -316,6 +329,7 @@ class TestComputeUnitToProviderServer:
             template_dn_by_name={},
             mgmt_if=None,
             mgmt_ip_by_parent_dn={},
+            switches_by_id={},
             ext_eth_ifs=[
                 _adapter_if(name="eth0", mac="AA:00:00:00:00:00", switch_id="A"),
                 _adapter_if(name="eth1", mac="AA:00:00:00:00:01", switch_id="B"),
@@ -326,6 +340,66 @@ class TestComputeUnitToProviderServer:
         )
         assert result.nic_macs == ("AA:00:00:00:00:00", "AA:00:00:00:00:01")
         assert [a.fabric for a in result.attachments] == ["A", "B"]
+
+    def test_physical_and_vnic_attachments_are_both_present_and_labeled(self) -> None:
+        """A physical port and the vNIC carved from it can report the same
+        fabric — `interface_kind` is what tells them apart, since
+        `len(attachments)` alone would overcount physical uplinks.
+        """
+        result = compute_unit_to_provider_server(
+            _blade(),
+            manager_id="mgr_1",
+            profile_by_dn={},
+            template_dn_by_name={},
+            mgmt_if=None,
+            mgmt_ip_by_parent_dn={},
+            switches_by_id={},
+            ext_eth_ifs=[_adapter_if(name="ext-eth-1", switch_id="A")],
+            host_eth_ifs=[_adapter_if(name="eth0", switch_id="A")],
+            cpu_units=[],
+            disk_units=[],
+        )
+        assert [(a.interface_kind, a.server_interface) for a in result.attachments] == [
+            ("PHYSICAL", "ext-eth-1"),
+            ("VNIC", "eth0"),
+        ]
+
+    def test_fabric_model_and_serial_come_from_the_matching_network_element(self) -> None:
+        switch_a = SimpleNamespace(id="A", model="UCS-FI-6454", serial="FCH2222A")
+        result = compute_unit_to_provider_server(
+            _blade(),
+            manager_id="mgr_1",
+            profile_by_dn={},
+            template_dn_by_name={},
+            mgmt_if=None,
+            mgmt_ip_by_parent_dn={},
+            switches_by_id={"A": switch_a},
+            ext_eth_ifs=[_adapter_if(switch_id="A")],
+            host_eth_ifs=[],
+            cpu_units=[],
+            disk_units=[],
+        )
+        [attachment] = result.attachments
+        assert attachment.fabric_model == "UCS-FI-6454"
+        assert attachment.fabric_serial == "FCH2222A"
+
+    def test_no_matching_network_element_leaves_fabric_identity_none(self) -> None:
+        result = compute_unit_to_provider_server(
+            _blade(),
+            manager_id="mgr_1",
+            profile_by_dn={},
+            template_dn_by_name={},
+            mgmt_if=None,
+            mgmt_ip_by_parent_dn={},
+            switches_by_id={},
+            ext_eth_ifs=[_adapter_if(switch_id="A")],
+            host_eth_ifs=[],
+            cpu_units=[],
+            disk_units=[],
+        )
+        [attachment] = result.attachments
+        assert attachment.fabric_model is None
+        assert attachment.fabric_serial is None
 
     def test_nic_macs_prefer_the_logical_vnic_over_the_physical_port(self) -> None:
         """The OS binds to the vNIC's MAC (`eno1`/`eno2`), not the
@@ -338,6 +412,7 @@ class TestComputeUnitToProviderServer:
             template_dn_by_name={},
             mgmt_if=None,
             mgmt_ip_by_parent_dn={},
+            switches_by_id={},
             ext_eth_ifs=[_adapter_if(mac="6C:B2:AE:00:00:01", switch_id="A")],
             host_eth_ifs=[_adapter_if(mac="00:25:B5:00:00:01", switch_id="A")],
             cpu_units=[],
@@ -357,6 +432,7 @@ class TestComputeUnitToProviderServer:
             template_dn_by_name={},
             mgmt_if=None,
             mgmt_ip_by_parent_dn={},
+            switches_by_id={},
             ext_eth_ifs=[_adapter_if(mac="6C:B2:AE:00:00:01", switch_id="A")],
             host_eth_ifs=[],
             cpu_units=[],
@@ -376,6 +452,7 @@ class TestComputeUnitToProviderServer:
             template_dn_by_name={},
             mgmt_if=None,
             mgmt_ip_by_parent_dn={},
+            switches_by_id={},
             ext_eth_ifs=[_adapter_if(name="eth0", switch_id="A")],
             host_eth_ifs=[_adapter_if(name="vnic0", switch_id="B")],
             cpu_units=[],
@@ -394,6 +471,7 @@ class TestComputeUnitToProviderServer:
             template_dn_by_name={},
             mgmt_if=None,
             mgmt_ip_by_parent_dn={},
+            switches_by_id={},
             ext_eth_ifs=[],
             host_eth_ifs=[],
             cpu_units=[],
@@ -427,6 +505,7 @@ class TestComputeUnitToProviderServer:
             template_dn_by_name={},
             mgmt_if=None,
             mgmt_ip_by_parent_dn={},
+            switches_by_id={},
             ext_eth_ifs=[],
             host_eth_ifs=[],
             cpu_units=[],
@@ -470,6 +549,7 @@ class TestCpuAndStorage:
             template_dn_by_name={},
             mgmt_if=None,
             mgmt_ip_by_parent_dn={},
+            switches_by_id={},
             ext_eth_ifs=[],
             host_eth_ifs=[],
             cpu_units=[
@@ -488,6 +568,7 @@ class TestCpuAndStorage:
             template_dn_by_name={},
             mgmt_if=None,
             mgmt_ip_by_parent_dn={},
+            switches_by_id={},
             ext_eth_ifs=[],
             host_eth_ifs=[],
             cpu_units=[_processor_unit(presence="empty")],
@@ -503,6 +584,7 @@ class TestCpuAndStorage:
             template_dn_by_name={},
             mgmt_if=None,
             mgmt_ip_by_parent_dn={},
+            switches_by_id={},
             ext_eth_ifs=[],
             host_eth_ifs=[],
             cpu_units=[],
@@ -528,6 +610,7 @@ class TestCpuAndStorage:
             template_dn_by_name={},
             mgmt_if=None,
             mgmt_ip_by_parent_dn={},
+            switches_by_id={},
             ext_eth_ifs=[],
             host_eth_ifs=[],
             cpu_units=[],
@@ -544,6 +627,7 @@ class TestCpuAndStorage:
             template_dn_by_name={},
             mgmt_if=None,
             mgmt_ip_by_parent_dn={},
+            switches_by_id={},
             ext_eth_ifs=[],
             host_eth_ifs=[],
             cpu_units=[],
@@ -572,6 +656,7 @@ class TestCpuAndStorage:
             template_dn_by_name={},
             mgmt_if=None,
             mgmt_ip_by_parent_dn={},
+            switches_by_id={},
             ext_eth_ifs=[],
             host_eth_ifs=[],
             cpu_units=[],
@@ -587,6 +672,7 @@ class TestCpuAndStorage:
             template_dn_by_name={},
             mgmt_if=None,
             mgmt_ip_by_parent_dn={},
+            switches_by_id={},
             ext_eth_ifs=[],
             host_eth_ifs=[],
             cpu_units=[],

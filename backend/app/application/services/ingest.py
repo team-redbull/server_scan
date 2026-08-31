@@ -49,7 +49,7 @@ from app.domain.models.connectivity import (
     ConnectivityAttachment,
     compute_connectivity_facts,
 )
-from app.domain.models.hardware import Cpu, Hardware, Memory, Power, Storage, StorageDrive
+from app.domain.models.hardware import Cpu, Gpu, Hardware, Memory, Power, Storage, StorageDrive
 from app.domain.models.manager import Manager
 from app.domain.models.network import BmcInfo, NetworkInfo, NetworkInterface
 from app.domain.models.server import Identity, ProfileTemplate, Server
@@ -61,7 +61,7 @@ from app.domain.services.normalize import normalize_text
 from app.domain.services.search_tokens import build_search_tokens
 from app.domain.value_objects.bmc_address import parse_bmc_address
 from app.domain.value_objects.mac_address import normalize_mac
-from app.domain.value_objects.site import parse_site_code
+from app.domain.value_objects.site import SiteCatalog, parse_site_code
 from app.utils.ids import new_id
 from app.utils.timeutil import utcnow
 
@@ -125,6 +125,76 @@ def _link_state(value: str) -> LinkState:
         return LinkState.UNKNOWN
 
 
+def _opt_float(value: object) -> float | None:
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    try:
+        return float(str(value))
+    except ValueError:
+        return None
+
+
+def _opt_bool(value: object) -> bool | None:
+    return value if isinstance(value, bool) else None
+
+
+def _carry_forward[T](reported: T | None, previous: T | None, *, default: T) -> T:
+    """
+    Resolve one optionally-reported field against what is already stored.
+
+    A provider reports `None` for a field it could not read on this run
+    (see `app.domain.ports.provider.ProviderServer`). Overwriting a stored
+    value with the zero value in that case silently destroys good data —
+    and, for storage, silently clears the seeded `storage.failed_drive`
+    health policy. See docs/adr/0016-redfish-standalone-collector.md.
+
+    Args:
+        reported (T | None): What the provider reported, or `None` if it
+            could not read the field.
+        previous (T | None): The value on the existing document, or `None`
+            for a server being created.
+        default (T): The value for a new server whose provider reported
+            nothing.
+
+    Returns:
+        T: The reported value when there is one, else the stored value,
+            else `default`.
+    """
+    if reported is not None:
+        return reported
+    return previous if previous is not None else default
+
+
+def _gpu_from_dict(data: dict[str, object]) -> Gpu:
+    """
+    Build a `Gpu` from the untyped dict a provider reports.
+
+    Args:
+        data (dict[str, object]): One entry from `ProviderServer.gpus`.
+
+    Returns:
+        Gpu: The domain model. `memory_bytes` is already in bytes — the
+            provider converts, since Redfish reports GPU memory in MiB.
+    """
+    return Gpu(
+        vendor=_opt_str(data.get("vendor")),
+        model=_opt_str(data.get("model")),
+        serial=_opt_str(data.get("serial")),
+        memory_bytes=_opt_int(data.get("memory_bytes")),
+        health=_opt_str(data.get("health")),
+        pci_address=_opt_str(data.get("pci_address")),
+        firmware_version=_opt_str(data.get("firmware_version")),
+        memory_type=_opt_str(data.get("memory_type")),
+        ecc_mode_enabled=_opt_bool(data.get("ecc_mode_enabled")),
+        correctable_error_count=_opt_int(data.get("correctable_error_count")),
+        uncorrectable_error_count=_opt_int(data.get("uncorrectable_error_count")),
+        temperature_celsius=_opt_float(data.get("temperature_celsius")),
+        power_watts=_opt_float(data.get("power_watts")),
+    )
+
+
 def _drive_from_dict(data: dict[str, object]) -> StorageDrive:
     media_raw = data.get("media_type")
     try:
@@ -152,11 +222,13 @@ class IngestService:
         server_repo: ServerRepository,
         site_repo: SiteRepositoryPort,
         manager_repo: ManagerRepositoryPort,
+        sites: SiteCatalog,
         classification_service: ClassificationService | None = None,
         health_service: HealthPolicyService | None = None,
         audit: AuditService | None = None,
     ) -> None:
         self._server_repo = server_repo
+        self._sites = sites
         self._site_repo = site_repo
         self._manager_repo = manager_repo
         self._classification_service = classification_service
@@ -345,9 +417,17 @@ class IngestService:
         created_at = existing.created_at if existing is not None else now
         revision = existing.revision + 1 if existing is not None else 1
 
+        existing_hardware = existing.hardware if existing is not None else None
+
         bmc_parsed = parse_bmc_address(ps.bmc_address_raw)
         bmc_mac = normalize_mac(ps.bmc_mac)
-        nic_macs = [mac for mac in (normalize_mac(m) for m in ps.nic_macs) if mac is not None]
+        nic_macs = _carry_forward(
+            [mac for mac in (normalize_mac(m) for m in ps.nic_macs) if mac is not None]
+            if ps.nic_macs is not None
+            else None,
+            existing.identity.nic_macs if existing is not None else None,
+            default=[],
+        )
 
         identity = Identity(
             vendor=vendor,
@@ -402,6 +482,7 @@ class IngestService:
                 admin_state=a.admin_state,
                 oper_state=a.oper_state,
                 speed_mbps=a.speed_mbps,
+                interface_kind=a.interface_kind,
                 last_seen=now,
             )
             for a in ps.attachments
@@ -412,20 +493,54 @@ class IngestService:
 
         hardware = Hardware(
             cpu=Cpu(
-                sockets=ps.cpu_sockets,
-                cores=ps.cpu_cores,
-                threads=ps.cpu_threads,
-                model=ps.cpu_model,
+                sockets=_carry_forward(
+                    ps.cpu_sockets,
+                    existing_hardware.cpu.sockets if existing_hardware else None,
+                    default=0,
+                ),
+                cores=_carry_forward(
+                    ps.cpu_cores,
+                    existing_hardware.cpu.cores if existing_hardware else None,
+                    default=0,
+                ),
+                threads=_carry_forward(
+                    ps.cpu_threads,
+                    existing_hardware.cpu.threads if existing_hardware else None,
+                    default=0,
+                ),
+                model=_carry_forward(
+                    ps.cpu_model,
+                    existing_hardware.cpu.model if existing_hardware else None,
+                    default=None,
+                ),
             ),
-            memory=Memory(total_bytes=ps.memory_total_bytes, modules=[]),
+            memory=Memory(
+                total_bytes=_carry_forward(
+                    ps.memory_total_bytes,
+                    existing_hardware.memory.total_bytes if existing_hardware else None,
+                    default=0,
+                ),
+                modules=[],
+            ),
             storage=Storage(
-                total_bytes=ps.storage_total_bytes,
-                drives=[_drive_from_dict(d) for d in ps.storage_drives],
+                total_bytes=_carry_forward(
+                    ps.storage_total_bytes,
+                    existing_hardware.storage.total_bytes if existing_hardware else None,
+                    default=0,
+                ),
+                drives=_carry_forward(
+                    [_drive_from_dict(d) for d in ps.storage_drives]
+                    if ps.storage_drives is not None
+                    else None,
+                    existing_hardware.storage.drives if existing_hardware else None,
+                    default=[],
+                ),
             ),
-            # `ProviderServer` has no GPU field (see
-            # `app.infrastructure.providers.fake.generator`'s docstring) —
-            # nothing to populate this from until the port grows one.
-            gpus=[],
+            gpus=_carry_forward(
+                [_gpu_from_dict(g) for g in ps.gpus] if ps.gpus is not None else None,
+                existing_hardware.gpus if existing_hardware else None,
+                default=[],
+            ),
             power=Power(psus=[]),
         )
 
@@ -444,9 +559,13 @@ class IngestService:
             }
 
         # The name is the authority on site, not the collector's config —
-        # see `app.domain.value_objects.site`. `None` (a name with no site
-        # token) is a real, surfaced state, never defaulted to a site.
-        site_id = parse_site_code(ps.name)
+        # see `app.domain.value_objects.site`. A UCS server whose name
+        # carries no site token falls back to the org path of its service
+        # profile (`org-root/org_tlv/...`); `None` (neither says) is a
+        # real, surfaced state, never defaulted to a site.
+        site_id = parse_site_code(ps.name, self._sites) or parse_site_code(
+            ps.profile_dn, self._sites
+        )
 
         server = Server(
             _id=server_id,

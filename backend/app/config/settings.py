@@ -73,6 +73,23 @@ class Settings(BaseSettings):
     # must override via INVENTORY_CURSOR_SECRET.
     cursor_secret: str = "dev-insecure-cursor-secret-change-in-production"  # noqa: S105 - dev default, not a real secret
 
+    # --- Sites ---
+    #
+    # Which sites this deployment has, as `code:Display Name` pairs:
+    #
+    #     INVENTORY_SITES="nyc:New York City,tlv:Tel Aviv,bat-yam:Bat Yam"
+    #
+    # The code is the token that appears inside a hostname
+    # (`ocp4-prod-tlv-infra-01` -> `tlv`), so it must be lowercase
+    # letters, digits and single hyphens. The display half is optional;
+    # `nyc,tlv` gives title-cased names.
+    #
+    # Configuration rather than an enum in the source, because which
+    # sites exist is a property of one estate's naming convention — see
+    # docs/adr/0018-sites-from-configuration.md. Empty uses the shipped
+    # default, so dev and CI need set nothing.
+    sites: str = ""
+
     # --- Regex / classification safety ---
     regex_max_pattern_length: int = 200
     regex_match_timeout_seconds: float = 0.25
@@ -106,13 +123,13 @@ class Settings(BaseSettings):
     # `INVENTORY_UCS_MANAGER_IP`. In Kubernetes these arrive from a
     # Secret via `envFrom` — see `deploy/helm/server-inventory/values.yaml`.
     #
-    # Cisco Intersight keeps the same three fields for a uniform values
-    # file, but they mean something different there: it signs requests
-    # with an API key rather than logging in, so `username` carries the
-    # API Key ID and `password` the secret key. `ip` is `intersight.com`
-    # for the SaaS tenant, or the appliance FQDN for Connected Virtual
-    # Appliance. Called out here and in values.yaml because handing
-    # Intersight an account password would look plausible and never work.
+    # Cisco Intersight does not have a login at all, and its settings say
+    # so rather than reusing the username/password shape every other
+    # vendor here uses: it signs each request with an API key, so it needs
+    # a key id and a PEM, and calling those a username and a password
+    # made an operator's first guess — an account password — look
+    # plausible. `ip` is `intersight.com` for the SaaS tenant, or the
+    # appliance FQDN for an on-prem appliance.
     ucs_manager_username: str = ""
     ucs_manager_password: str = ""
 
@@ -128,12 +145,105 @@ class Settings(BaseSettings):
     ome_username: str = ""
     ome_password: str = ""
 
-    # username = API Key ID, password = secret key — see the note above.
     intersight_ip: str = ""
-    intersight_username: str = ""
-    intersight_password: str = ""
+    # The API Key ID exactly as Intersight shows it beside the key: a
+    # `/`-joined string, not a username.
+    intersight_api_key_id: str = ""
+    # That key's PEM private half, unencrypted. Multi-line, and it rides
+    # in the environment like any other value — there is no key file to
+    # mount, because the signer accepts the key as a string. See
+    # docs/adr/0017-intersight-collector.md, "Decision 2".
+    intersight_api_key_pem: str = ""
+
+    # Which `ManagementMode` values the Intersight collector ingests, as
+    # a comma-separated list. `UCSM` is excluded by default and that is
+    # the whole point: those servers are exactly the ones the UCS Central
+    # collector already owns, and collecting both makes one document's
+    # fields flip on whichever CronJob ran last. Add `UCSM` only for an
+    # estate whose UCS domains are not registered with Central at all.
+    intersight_management_modes: str = "Intersight,IntersightStandalone"
+
+    # Deliberately no `intersight_ca_bundle` / `intersight_tls_verify`
+    # setting: `IntersightClient` never verifies the endpoint's TLS
+    # certificate, unconditionally, by explicit user decision. There is
+    # no environment variable that changes this. See
+    # `app.infrastructure.providers.intersight.client.IntersightClient`.
+
+    # `$top`. 1000 is the API's documented maximum and the default
+    # because every query here is a fleet-wide list — lower it only if a
+    # tenant turns out to throttle, since Cisco publishes no rate limit.
+    intersight_page_size: int = 1000
+
+    # A fleet-wide page is a large response, so reading one is bounded
+    # separately from establishing the connection — the same split, for
+    # the same reason, as the Redfish collector's two timeouts.
+    intersight_read_timeout_seconds: float = 60.0
+
+    # Wall clock for one run, enforced in-process so a throttled run ends
+    # with a summary naming what it never reached. A hard kill by the
+    # CronJob's `activeDeadlineSeconds` reports nothing.
+    intersight_run_budget_seconds: float = 1800.0
 
     collector_connect_timeout_seconds: float = 15.0
+
+    # --- Standalone Redfish collector ---
+    #
+    # A fleet-wide fallback login and **no endpoint**, the same shape
+    # UCS_MANAGER has: the endpoints are the hosts in the inventory file.
+    # Most estates give each BMC its own account, so the inventory's own
+    # per-host credential names are the normal path and these two are the
+    # fallback. See docs/adr/0016-redfish-standalone-collector.md.
+    redfish_username: str = ""
+    redfish_password: str = ""
+
+    # TOML, mounted read-only from a ConfigMap. Accepts a file or a
+    # directory of `*.toml` — a directory is what lets a large estate be
+    # sharded per site without a format change.
+    redfish_inventory_file: str = ""
+    # TOML, mounted read-only from a Secret, mapping credential names to
+    # username/password. Optional: a fleet on one account needs only the
+    # two variables above.
+    redfish_credentials_file: str = ""
+
+    # PEM bundle trusted in addition to the system store. The scalable
+    # answer for self-signed BMC certificates — Dell's custom signing
+    # certificate, or an internal CA imported to every BMC. Empty uses the
+    # system trust store alone, which correctly rejects a factory
+    # self-signed certificate.
+    redfish_ca_bundle: str = ""
+    redfish_tls_min_version: Literal["TLSv1", "TLSv1_1", "TLSv1_2", "TLSv1_3"] = "TLSv1_2"
+
+    # Connect and read are split because they answer different questions:
+    # connect bounds "is this host there at all" and wants to fail fast
+    # across a fleet with dead hosts in it, while read bounds a BMC that
+    # answered but is slow. 30s for read is evidence-led — a documented
+    # iLO fleet failed at 3s and was fixed at 20s.
+    redfish_connect_timeout_seconds: float = 10.0
+    redfish_read_timeout_seconds: float = 30.0
+
+    # Total wall clock for one host, all requests. Neither timeout above
+    # can bound this: a BMC that answers every packet slowly consumes
+    # unbounded time without ever tripping a socket timeout.
+    redfish_host_budget_seconds: float = 180.0
+    # Total wall clock for the run, enforced in-process so it trips before
+    # the CronJob's `activeDeadlineSeconds` and can report what it
+    # collected. A hard kill reports nothing.
+    redfish_run_budget_seconds: float = 3600.0
+
+    # BMCs read at once. They are independent devices, so this is bounded
+    # by our own sockets and by how much management traffic the network
+    # tolerates, not by any one BMC.
+    redfish_fleet_concurrency: int = 16
+
+    # Distinct hosts that may reject the *same* credential before it is
+    # disabled for the rest of the run.
+    redfish_auth_failure_threshold: int = 3
+    # Authentication failures across *all* credentials before the run
+    # aborts. This is the one that matters on an estate where every BMC
+    # has its own account, since the per-credential threshold above can
+    # never be reached there. Ten 401s across ten credentials is a stale
+    # Secret, not ten unrelated mistakes.
+    redfish_auth_failure_budget: int = 10
 
     # How many domains the UCS Central collector talks to at once. It uses
     # Central only to enumerate registered domains and their service-profile

@@ -23,6 +23,27 @@ db:
   secretName: server-inventory-db
 
 config:
+  # The sites this deployment has, as `code:Display Name` pairs. The code
+  # is the token that appears inside a hostname (`ocp4-prod-tlv-infra-01`
+  # -> `tlv`), so it must be lowercase letters, digits and single hyphens.
+  #
+  # This is the only place sites are defined: changing this list renames or
+  # adds a site across the API, the UI's site cards, the inventory filter,
+  # the policy editors and the seeded classification rules at once, with no
+  # code change and no image rebuild. It reaches both the API and every
+  # collector, because a collector derives each server's site at ingest.
+  #
+  # Empty uses the shipped default
+  # ("nyc:New York City,tlv:Tel Aviv,bat-yam:Bat Yam,five:Site Five").
+  # A malformed entry fails the pod at startup rather than silently
+  # producing a site no server can ever be assigned to.
+  # See docs/adr/0018-sites-from-configuration.md.
+  #
+  # Set it here, or in a values file. NOT with a bare `--set`: helm reads
+  # the commas as its own separators and silently splits the list into
+  # several keys. From the command line it has to be
+  #     --set-string 'config.sites=nyc:New York City\,tlv:Tel Aviv'
+  sites: ""
   logLevel: INFO
   metricsEnabled: "true"
   defaultPageSize: "50"
@@ -117,6 +138,115 @@ collectors:
         # once, not one domain's.
         memory: 1Gi
 
+  # Standalone Redfish BMCs — the collector for machines no aggregator
+  # owns. Any conformant Redfish BMC: a Cisco CIMC that Intersight cannot
+  # manage, an iDRAC, a current iLO. HPE iLO 4 is out of scope on
+  # conformance grounds, not vendor grounds.
+  #
+  # There is no `ip`. The fleet is the inventory file below, and that file
+  # is also the ONLY collection filter — `namePattern` deliberately does
+  # not apply here, because a BMC does not know the server's `ocp4-...`
+  # name. Treat the inventory as a production-critical, review-gated,
+  # GitOps-owned artifact: write access to it is equivalent to write
+  # access to the credential Secret, since it decides where credentials
+  # are sent.
+  #
+  # Cost is per *server* here, not per manager: ~25 HTTP round trips
+  # against each BMC, so 400 hosts is ~10,000 requests against embedded
+  # hardware that degrades when polled. Do not copy ucsCentral's numbers.
+  redfishStandalone:
+    enabled: false
+
+    # Deployed but not scheduled. Un-suspend only after the manual steps
+    # in docs/test-redfish-standalone-collector.md have run green against
+    # the real inventory — that is the last step of a rollout, not the
+    # first.
+    suspend: true
+
+    # Every 6 hours. Inventory does not change hourly, every sweep is
+    # thousands of requests against the estate's management plane, and
+    # <=6h freshness is ample to drive a 24h staleness check. Rule if you
+    # change it: keep the interval at least 4x the measured p95 sweep
+    # (`redfish.run_summary`), or `Forbid` starts silently dropping runs.
+    schedule: "0 */6 * * *"
+
+    # 1, not 0: a ConfigMap mount can lag at pod start and read as
+    # "inventory absent", and with no retry that loses a whole collection
+    # cycle. The retry-sprays-credentials risk that argues for 0 is
+    # already covered by the credential breaker and the failure budget.
+    #
+    # NOTE: exit 3 (PARTIAL) is the NORMAL outcome for a fleet of
+    # independent BMCs, so this Job will be red routinely and by design.
+    # Alert on staleness, never on Job status.
+    backoffLimit: 1
+
+    # Outer backstop only. runBudgetSeconds below trips first and exits
+    # with a summary naming what it never reached, where this kills the
+    # pod with no reason logged at all. Keep it ~300s above the run budget.
+    activeDeadlineSeconds: 3900
+
+    # --- Pacing. Arithmetic in docs/test-redfish-standalone-collector.md.
+    # 400 hosts x ~20s each / 16 at a time = ~8 min typical.
+    fleetConcurrency: 16
+    connectTimeoutSeconds: 10
+    # 30, not the 15 the other collectors use: a documented iLO fleet
+    # failed every 10-15 minutes at 3s and was fixed at 20s.
+    readTimeoutSeconds: 30
+    hostBudgetSeconds: 180
+    runBudgetSeconds: 3600
+
+    # Estate protection. A rejected login is never retried. After this
+    # many DISTINCT hosts reject the SAME credential it is disabled for
+    # the rest of the run; the budget is the total across all credentials,
+    # and is the one that matters when every BMC has its own account.
+    authFailureThreshold: 3
+    authFailureBudget: 10
+
+    tls:
+      # ConfigMap with a `ca-bundle.crt` key. Empty means the image's
+      # system trust store, which correctly rejects a factory self-signed
+      # BMC certificate — the fix is an internal CA imported to every BMC
+      # (all vendors in scope support CSR/import), or Dell's custom
+      # signing certificate. Disabling verification is per-host, in the
+      # inventory file, and requires a written reason.
+      caBundleConfigMap: ""
+      minVersion: "TLSv1_2"
+
+    # ConfigMap holding the fleet list under an `inventory.toml` key.
+    # Defaults to `<release>-redfish-inventory`, which this chart does NOT
+    # create — it is GitOps-owned. See
+    # docs/examples/redfish-inventory.example.toml.
+    inventoryConfigMap: ""
+
+    # Secret holding per-host logins under a `credentials.toml` key.
+    # Leave empty for a fleet sharing one account, which uses
+    # INVENTORY_REDFISH_USERNAME/_PASSWORD from the collector Secret
+    # instead. At a few hundred entries this belongs to a secrets operator
+    # (Vault, External Secrets), not to `--set`.
+    credentialsSecret: ""
+
+    resources:
+      requests:
+        cpu: 200m
+        memory: 128Mi
+      limits:
+        # The provider streams — it yields each host as it completes and
+        # never holds the fleet. Tight enough that a regression which
+        # buffers everything fails loudly at 400 hosts rather than
+        # silently working until 10,000.
+        memory: 512Mi
+
+    # The fleet-wide fallback login, rendered into the shared collector
+    # Secret. Any host with no per-host credential uses this.
+    username: ""
+    password: ""
+
+  # Cisco Redfish note: a standalone CIMC is collected by
+  # `redfishStandalone` above, NOT by restoring a UCS Manager entry point.
+  # `--manager-type UCS_MANAGER` remains deleted (ADR-0014) — reaching a
+  # CIMC over Redfish is a different protocol to a different endpoint that
+  # knows nothing about domains or service profiles.
+
   # HPE OneView. No collector yet.
   oneview:
     ip: ""
@@ -149,12 +279,85 @@ collectors:
       limits:
         memory: 1Gi
 
-  # Cisco Intersight. No collector yet, and note these three fields mean
-  # something different here: Intersight signs each request with an API
-  # key instead of logging in, so `username` is the API Key ID and
-  # `password` is the secret key. `ip` is "intersight.com" for the SaaS
-  # tenant, or the appliance FQDN for a Connected Virtual Appliance.
+  # Cisco Intersight — the only collector that reaches the platform's
+  # 10,000-server target without qualification. Every sub-resource is
+  # listed once for the whole estate and joined in memory, so one run
+  # costs on the order of a hundred requests regardless of fleet size.
+  # See docs/adr/0017-intersight-collector.md.
+  #
+  # AIR-GAP: `intersight.com` is on the public internet. An air-gapped
+  # site must point `ip` at an on-prem Private Virtual Appliance instead;
+  # the Connected Virtual Appliance still calls home and does not help.
+  #
+  # THERE IS NO LOGIN HERE. Intersight signs every request with an API
+  # key, so the credential is `apiKeyId` + `apiKeyPem`, not a username
+  # and a password. Mint the key under Settings > API Keys with a
+  # Read-Only role. Everything the collector needs is in this file — no
+  # pre-existing Secret, and no key file to mount.
   intersight:
+    enabled: false
+
+    # "intersight.com" for the SaaS tenant, or the appliance FQDN.
+    # A bare hostname: no scheme, no port, no path.
     ip: ""
-    username: ""
-    password: ""
+
+    # The API Key ID exactly as Intersight displays it beside the key.
+    # A `/`-joined string, not a username.
+    apiKeyId: ""
+
+    # That key's PEM private half, unencrypted, as a YAML literal block
+    # (`apiKeyPem: |`, then the whole PEM including its BEGIN and END
+    # lines, indented). Both API key generations work — v2 keys are RSA,
+    # v3 keys are EC — and the collector picks the signing algorithm from
+    # the PEM header itself, so there is nothing else to configure.
+    #
+    # Prefer NOT pasting the key here at all: pass it at install time
+    # with `--set-file collectors.intersight.apiKeyPem=/path/to/key.pem`,
+    # or from a `-f secrets.yaml` that is not in git. A committed PEM
+    # fails `tests/unit/test_no_committed_secrets.py`, deliberately.
+    apiKeyPem: ""
+
+    # Which servers to collect, by how Intersight manages them. `UCSM` is
+    # deliberately absent: those servers are exactly the ones the
+    # ucsCentral collector above already owns, and collecting both makes
+    # one document's fields flip on whichever CronJob ran last. Add UCSM
+    # ONLY for an estate whose UCS domains are not registered with UCS
+    # Central at all.
+    managementModes: "Intersight,IntersightStandalone"
+
+    # No CA bundle setting here: the collector never verifies the
+    # endpoint's TLS certificate, unconditionally, by explicit user
+    # decision. See app.infrastructure.providers.intersight.client.
+    # IntersightClient.
+
+    # `$top`. 1000 is the API's documented maximum. Lower it only if a
+    # tenant turns out to throttle — Cisco publishes no rate limit, so
+    # the collector backs off on 429 rather than assuming a number.
+    pageSize: 1000
+
+    connectTimeoutSeconds: 10
+    # A fleet-wide page is a large response, bounded separately from
+    # reaching the endpoint at all.
+    readTimeoutSeconds: 60
+
+    # Hourly. One run covers the whole tenant in a flat number of
+    # requests, so this is cheap on both sides of the wire — unlike the
+    # per-BMC Redfish sweep, which must not be scheduled this often.
+    schedule: "0 * * * *"
+    backoffLimit: 1
+
+    # In-process budget, so a throttled run ends with a summary naming
+    # what it never reached. Keep activeDeadlineSeconds ~300s above it:
+    # that one kills the pod with no reason logged at all.
+    runBudgetSeconds: 1800
+    activeDeadlineSeconds: 2100
+
+    resources:
+      requests:
+        cpu: 200m
+        memory: 256Mi
+      limits:
+        # The join tables are held for the length of the run and scale
+        # with the fleet — the one collector whose memory does. `$select`
+        # keeps them to mapped fields only; 1Gi covers ~10,000 servers.
+        memory: 1Gi

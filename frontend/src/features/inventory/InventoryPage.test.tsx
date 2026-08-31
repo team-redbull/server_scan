@@ -12,13 +12,19 @@ function makeServer(overrides: Partial<ServerSummary> = {}): ServerSummary {
     name: "ocp-dell-worker-001",
     vendor: "dell",
     model: "PowerEdge R760",
-    site_id: "one",
+    site_id: "tlv",
     manager_id: "mgr_ome_tlv_01",
+    source_provider: "UCS_CENTRAL",
     classification: { installation_type: "HOSTED_CLUSTER" },
     health: { overall: "HEALTHY" },
     maintenance: { enabled: false },
     connectivity: {
-      facts: { fabric_paths_total: 2, fabric_paths_up: 2, fabric_paths_down: 0, fabrics_present: ["A", "B"] },
+      facts: {
+        fabric_paths_total: 2,
+        fabric_paths_up: 2,
+        fabric_paths_down: 0,
+        fabrics_present: ["A", "B"],
+      },
     },
     last_seen_at: "2026-08-12T10:00:00Z",
     updated_at: "2026-08-12T10:00:00Z",
@@ -43,6 +49,21 @@ function pageResponse(
   };
 }
 
+/** The site filter reads `GET /api/v1/sites` — the only definition of
+ * which sites exist — so every test has to answer it. */
+const SITES_RESPONSE = {
+  items: [
+    {
+      site_id: "tlv",
+      name: "Tel Aviv",
+      total: 1,
+      by_vendor: [],
+      by_health: { UNKNOWN: 0, HEALTHY: 1, INFO: 0, WARNING: 0, CRITICAL: 0 },
+      in_maintenance: 0,
+    },
+  ],
+};
+
 function jsonResponse(body: unknown) {
   return Promise.resolve({
     ok: true,
@@ -52,10 +73,15 @@ function jsonResponse(body: unknown) {
 }
 
 function renderInventoryPage() {
-  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  const router = createMemoryRouter([{ path: "/", element: <InventoryPage /> }], {
-    initialEntries: ["/"],
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
   });
+  const router = createMemoryRouter(
+    [{ path: "/", element: <InventoryPage /> }],
+    {
+      initialEntries: ["/"],
+    },
+  );
 
   render(
     <QueryClientProvider client={queryClient}>
@@ -67,16 +93,30 @@ function renderInventoryPage() {
 }
 
 function lastRequestUrl(fetchMock: ReturnType<typeof vi.fn>): URL {
-  const calls = fetchMock.mock.calls;
-  const lastCall = calls.at(-1) as [string, RequestInit] | undefined;
-  if (!lastCall) {
-    throw new Error("fetch was never called");
+  const urls = (fetchMock.mock.calls as [string, RequestInit][])
+    .map(([input]) => new URL(input, "http://localhost"))
+    .filter((url) => url.pathname !== "/api/v1/sites");
+  const last = urls.at(-1);
+  if (!last) {
+    throw new Error("fetch was never called for the server list");
   }
-  return new URL(lastCall[0], "http://localhost");
+  return last;
 }
 
 describe("InventoryPage", () => {
   let fetchMock: ReturnType<typeof vi.fn>;
+
+  /** Route the sites request to the fixed list and everything else to the
+   * test's own handler, so no test has to restate the site filter's data. */
+  function mockServerList(handler: (url: URL) => unknown) {
+    fetchMock.mockImplementation((input: string) => {
+      const url = new URL(input, "http://localhost");
+      if (url.pathname === "/api/v1/sites") {
+        return jsonResponse(SITES_RESPONSE);
+      }
+      return handler(url);
+    });
+  }
 
   beforeEach(() => {
     fetchMock = vi.fn();
@@ -88,11 +128,16 @@ describe("InventoryPage", () => {
   });
 
   it("renders rows from the mocked API response", async () => {
-    fetchMock.mockImplementation(() =>
+    mockServerList(() =>
       jsonResponse(
         pageResponse([
           makeServer(),
-          makeServer({ id: "srv_2", name: "ucs-cisco-worker-002", vendor: "cisco", model: "UCS C240" }),
+          makeServer({
+            id: "srv_2",
+            name: "ucs-cisco-worker-002",
+            vendor: "cisco",
+            model: "UCS C240",
+          }),
         ]),
       ),
     );
@@ -113,7 +158,7 @@ describe("InventoryPage", () => {
   });
 
   it("updates the URL search params when a filter changes", async () => {
-    fetchMock.mockImplementation(() => jsonResponse(pageResponse([makeServer()])));
+    mockServerList(() => jsonResponse(pageResponse([makeServer()])));
 
     const { router } = renderInventoryPage();
 
@@ -129,17 +174,25 @@ describe("InventoryPage", () => {
     });
 
     await waitFor(() => {
-      expect(lastRequestUrl(fetchMock).searchParams.get("vendor")).toBe("cisco");
+      expect(lastRequestUrl(fetchMock).searchParams.get("vendor")).toBe(
+        "cisco",
+      );
     });
   });
 
   it("resets the cursor in the URL when a filter changes", async () => {
-    fetchMock.mockImplementation((input: string) => {
-      const url = new URL(input, "http://localhost");
+    mockServerList((url) => {
       if (url.searchParams.get("cursor") === "cursor-1") {
-        return jsonResponse(pageResponse([makeServer({ id: "srv_2", name: "page-two-server" })]));
+        return jsonResponse(
+          pageResponse([makeServer({ id: "srv_2", name: "page-two-server" })]),
+        );
       }
-      return jsonResponse(pageResponse([makeServer()], { has_more: true, next_cursor: "cursor-1" }));
+      return jsonResponse(
+        pageResponse([makeServer()], {
+          has_more: true,
+          next_cursor: "cursor-1",
+        }),
+      );
     });
 
     const { router } = renderInventoryPage();
@@ -163,8 +216,7 @@ describe("InventoryPage", () => {
   });
 
   it("paginates with the next_cursor and disables Next once has_more is false", async () => {
-    fetchMock.mockImplementation((input: string) => {
-      const url = new URL(input, "http://localhost");
+    mockServerList((url) => {
       if (url.searchParams.get("cursor") === "cursor-1") {
         return jsonResponse(
           pageResponse([makeServer({ id: "srv_2", name: "page-two-server" })], {
@@ -173,7 +225,12 @@ describe("InventoryPage", () => {
           }),
         );
       }
-      return jsonResponse(pageResponse([makeServer()], { has_more: true, next_cursor: "cursor-1" }));
+      return jsonResponse(
+        pageResponse([makeServer()], {
+          has_more: true,
+          next_cursor: "cursor-1",
+        }),
+      );
     });
 
     renderInventoryPage();
@@ -191,12 +248,14 @@ describe("InventoryPage", () => {
       expect(screen.getByText("page-two-server")).toBeInTheDocument();
     });
 
-    expect(lastRequestUrl(fetchMock).searchParams.get("cursor")).toBe("cursor-1");
+    expect(lastRequestUrl(fetchMock).searchParams.get("cursor")).toBe(
+      "cursor-1",
+    );
     expect(screen.getByRole("button", { name: "Next" })).toBeDisabled();
   });
 
   it("shows the API error detail when the request fails", async () => {
-    fetchMock.mockImplementation(() =>
+    mockServerList(() =>
       Promise.resolve({
         ok: false,
         status: 422,

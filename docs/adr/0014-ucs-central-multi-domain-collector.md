@@ -296,7 +296,7 @@ domain with.
    definitions prove the model *can express* those objects, not that a
    given Central populates them. Nothing needs that to be true now.
 
-The cost, stated plainly: one login plus 10 queries per collected domain
+The cost, stated plainly: one login plus 11 queries per collected domain
 (pinned by `test_scales_query_count_independently_of_fleet_size`) instead
 of 9 queries in total, and a UCS Manager account that works on every
 domain. For the ~8-domain fleet this was built for that is a minute or

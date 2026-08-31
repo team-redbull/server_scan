@@ -121,7 +121,7 @@ def build_default_registry() -> MetricRegistry:
             name="storage.failed_drive_count",
             type=MetricType.INT,
             category="storage",
-            description="Count of drives with health == FAILED",
+            description="Count of drives with health == CRITICAL",
             resolver=lambda f: _get(f, "storage.failed_drive_count", 0),
         )
     )

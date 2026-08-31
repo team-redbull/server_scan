@@ -111,6 +111,10 @@ async def test_list_returns_expected_items(
         "model",
         "site_id",
         "manager_id",
+        # Which collector produced the record. Distinct from `vendor`:
+        # a Dell reached at its own BMC is still vendor `dell`, and what
+        # makes it unmanaged is source_provider REDFISH_STANDALONE.
+        "source_provider",
         "classification",
         "health",
         "maintenance",
@@ -150,16 +154,16 @@ async def test_search_matches_by_token(
 async def test_filter_by_site_id(app_context: tuple[AsyncClient, MongoServerRepository]) -> None:
     client, repo = app_context
     for i in range(3):
-        await repo.upsert(_make_server(i, site_id="one"))
+        await repo.upsert(_make_server(i, site_id="tlv"))
     for i in range(3, 5):
-        await repo.upsert(_make_server(i, site_id="two"))
+        await repo.upsert(_make_server(i, site_id="nyc"))
 
-    resp = await client.get("/api/v1/servers", params={"site_id": "one"})
+    resp = await client.get("/api/v1/servers", params={"site_id": "tlv"})
 
     assert resp.status_code == 200
     body = resp.json()
     assert len(body["items"]) == 3
-    assert all(item["site_id"] == "one" for item in body["items"])
+    assert all(item["site_id"] == "tlv" for item in body["items"])
 
 
 async def test_filter_by_maintenance_bool(
@@ -250,18 +254,18 @@ async def test_stale_cursor_after_filter_change_returns_400(
 ) -> None:
     client, repo = app_context
     for i in range(5):
-        await repo.upsert(_make_server(i, site_id="one"))
+        await repo.upsert(_make_server(i, site_id="tlv"))
     for i in range(5, 8):
-        await repo.upsert(_make_server(i, site_id="two"))
+        await repo.upsert(_make_server(i, site_id="nyc"))
 
-    first = await client.get("/api/v1/servers", params={"site_id": "one", "page_size": "2"})
+    first = await client.get("/api/v1/servers", params={"site_id": "tlv", "page_size": "2"})
     assert first.status_code == 200
     cursor = first.json()["page"]["next_cursor"]
     assert cursor is not None
 
     second = await client.get(
         "/api/v1/servers",
-        params={"site_id": "two", "page_size": "2", "cursor": cursor},
+        params={"site_id": "nyc", "page_size": "2", "cursor": cursor},
     )
 
     assert second.status_code == 400

@@ -108,8 +108,8 @@ class TestResolve:
         """
         settings = _settings(
             intersight_ip="intersight.com",
-            intersight_username="key-id-123",
-            intersight_password="secret-key",
+            intersight_api_key_id="key-id-123",
+            intersight_api_key_pem="-----BEGIN EC PRIVATE KEY-----",
         )
         connection = EnvConnectionResolver(settings).resolve(ManagerType.INTERSIGHT)
         assert connection.endpoint == "intersight.com"

@@ -33,6 +33,7 @@ from app.application.services.bootstrap import (
     ensure_default_health_policies,
 )
 from app.config import get_settings
+from app.domain.value_objects.site import site_catalog
 from app.exception_handlers import register_exception_handlers
 from app.infrastructure.logging import configure_logging
 from app.infrastructure.mongodb import MongoClientHolder
@@ -63,7 +64,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await ensure_indexes(mongo.db)
     # Idempotent — see `ensure_default_*`'s docstring for why "seed only
     # if missing by name" is required here, not just convenient.
-    await ensure_default_classification_rules(MongoClassificationRuleRepository(mongo))
+    await ensure_default_classification_rules(
+        MongoClassificationRuleRepository(mongo), site_catalog(settings.sites)
+    )
     await ensure_default_health_policies(MongoHealthPolicyRepository(mongo))
     app.state.mongo = mongo
 

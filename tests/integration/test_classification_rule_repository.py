@@ -14,8 +14,10 @@ import json
 import pytest
 from pymongo.errors import DuplicateKeyError
 
+from app.application.services.bootstrap import ensure_default_classification_rules
 from app.domain.enums import InstallationType
 from app.domain.models.classification_rule import ClassificationRule, RuleScope
+from app.domain.value_objects.site import site_catalog
 from app.infrastructure.mongodb import MongoClientHolder
 from app.infrastructure.mongodb.classification_rule_repository import (
     MongoClassificationRuleRepository,
@@ -24,6 +26,8 @@ from app.infrastructure.mongodb.classification_rule_repository import (
 from app.infrastructure.mongodb.indexes import CLASSIFICATION_RULES_COLLECTION
 from app.utils.ids import new_id
 from app.utils.timeutil import utcnow
+
+SITES = site_catalog("")
 
 pytestmark = pytest.mark.integration
 
@@ -145,16 +149,16 @@ async def test_list_all_sorts_by_priority_desc_order_asc_id_asc(
 
 async def test_default_system_rules_round_trip(mongo_holder: MongoClientHolder) -> None:
     repo = MongoClassificationRuleRepository(mongo_holder)
-    for rule in default_system_rules():
+    for rule in default_system_rules(SITES):
         await repo.upsert(rule)
 
     rules = await repo.list_all(enabled_only=True)
-    assert len(rules) == len(default_system_rules())
+    assert len(rules) == len(default_system_rules(SITES))
     # Round-tripping must preserve the pattern verbatim — these are regexes
     # with alternations and anchors, and a mangled one silently
     # misclassifies rather than erroring.
     stored = {r.name: r for r in rules}
-    for original in default_system_rules():
+    for original in default_system_rules(SITES):
         assert stored[original.name].pattern == original.pattern
         assert stored[original.name].installation_type == original.installation_type
 
@@ -202,3 +206,36 @@ async def test_load_enabled_rules_in_resolution_order_uses_index_scan(
     # No blocking in-memory sort stage: the index itself must already
     # produce the requested order.
     assert '"stage": "SORT"' not in explain_str
+
+
+async def test_bootstrap_resyncs_a_stale_system_rule_but_keeps_its_enabled_flag(
+    mongo_holder: MongoClientHolder,
+) -> None:
+    """A default rule's pattern is generated from `SiteCode`, so renaming a
+    site changes it. Seeding only when missing would leave every existing
+    deployment matching hostnames for sites that no longer exist.
+    """
+    repo = MongoClassificationRuleRepository(mongo_holder)
+    generated = default_system_rules(SITES)[0]
+    stale = generated.model_copy(
+        update={"pattern": r"^ocp4-(one|two|three|four|five)-\d+$", "enabled": False}
+    )
+    await repo.upsert(stale)
+
+    written = await ensure_default_classification_rules(repo, SITES)
+
+    assert written >= 1
+    stored = await repo.get_by_name(generated.name)
+    assert stored is not None
+    assert stored.pattern == generated.pattern
+    assert stored.id == stale.id  # same document, not a second one
+    assert stored.enabled is False  # the one field an admin owns survives
+    assert stored.revision == stale.revision + 1
+
+
+async def test_bootstrap_is_a_no_op_once_the_rules_match_the_code(
+    mongo_holder: MongoClientHolder,
+) -> None:
+    repo = MongoClassificationRuleRepository(mongo_holder)
+    await ensure_default_classification_rules(repo, SITES)
+    assert await ensure_default_classification_rules(repo, SITES) == 0

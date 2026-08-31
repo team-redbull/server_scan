@@ -4,7 +4,6 @@ from app.domain.enums.core import (
     LinkState,
     ManagerType,
     MediaType,
-    SiteCode,
     Vendor,
 )
 
@@ -14,6 +13,5 @@ __all__ = [
     "LinkState",
     "ManagerType",
     "MediaType",
-    "SiteCode",
     "Vendor",
 ]

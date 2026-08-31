@@ -207,7 +207,7 @@ def _events(events: list[dict[str, Any]], name: str) -> list[dict[str, Any]]:
         # Global objects live outside any domain's subtree — an org's
         # service profiles, for instance — and must not be attributed to
         # one.
-        ("org-root/ls-ocp4-prod-one-infra-01", None),
+        ("org-root/ls-ocp4-prod-tlv-infra-01", None),
         ("extpol/reg/clients/client-1009", None),
         ("compute", None),
         ("", None),
@@ -238,7 +238,7 @@ class TestCentralExternalId:
             ("compute/sys-1010/chassis-1/blade-1", "compute/sys-1010/chassis-1/blade-1"),
             # What `profile_template_external_id` carries; org DNs are
             # global in Central and already correct.
-            ("org-root/ls-ocp4-prod-one-infra-01", "org-root/ls-ocp4-prod-one-infra-01"),
+            ("org-root/ls-ocp4-prod-tlv-infra-01", "org-root/ls-ocp4-prod-tlv-infra-01"),
             ("", ""),
         ],
     )
@@ -261,7 +261,7 @@ class TestDomainsToCollect:
     def test_skips_a_domain_whose_profiles_all_fail_the_pattern(self) -> None:
         domains = [_domain("1009", "dc1-a"), _domain("1010", "dc1-b")]
         ls_servers = [
-            _profile("ocp4-prod-one-infra-01", "dc1-a"),
+            _profile("ocp4-prod-tlv-infra-01", "dc1-a"),
             _profile("vmware-esx-07", "dc1-b"),
         ]
         collect, skipped = domains_to_collect(domains, ls_servers, name_pattern="^ocp")
@@ -277,7 +277,7 @@ class TestDomainsToCollect:
         ls_servers = [
             _profile("vmware-esx-01", "dc1-a"),
             _profile("vmware-esx-02", "dc1-a"),
-            _profile("ocp4-prod-one-infra-01", "dc1-a"),
+            _profile("ocp4-prod-tlv-infra-01", "dc1-a"),
         ]
         collect, skipped = domains_to_collect(domains, ls_servers, name_pattern="^ocp")
 
@@ -291,7 +291,7 @@ class TestDomainsToCollect:
         and the inventory would come back mysteriously small.
         """
         domains = [_domain("1009", "dc1-a"), _domain("1010", "no-profiles-in-central")]
-        ls_servers = [_profile("ocp4-prod-one-infra-01", "dc1-a")]
+        ls_servers = [_profile("ocp4-prod-tlv-infra-01", "dc1-a")]
         collect, skipped = domains_to_collect(domains, ls_servers, name_pattern="^ocp")
 
         assert [t.domain_id for t in collect] == ["1009", "1010"]
@@ -405,7 +405,7 @@ class TestListServers:
         client = FakeCentralClient(
             {
                 "computeSystem": [_domain("1009", "a")],
-                "lsServer": [_profile("ocp4-prod-one-infra-01", "a")],
+                "lsServer": [_profile("ocp4-prod-tlv-infra-01", "a")],
             }
         )
         await _collect(_provider(client))
@@ -419,7 +419,7 @@ class TestListServers:
             {
                 "computeSystem": [_domain("1009", "a"), _domain("1010", "b")],
                 "lsServer": [
-                    _profile("ocp4-prod-one-infra-01", "a"),
+                    _profile("ocp4-prod-tlv-infra-01", "a"),
                     _profile("ocp4-prod-two-infra-01", "b"),
                 ],
             }
@@ -429,7 +429,7 @@ class TestListServers:
                 client,
                 {
                     "10.0.0.9": FakeDomainProvider(
-                        [_server("sys/chassis-1/blade-1", "ocp4-prod-one-infra-01")]
+                        [_server("sys/chassis-1/blade-1", "ocp4-prod-tlv-infra-01")]
                     ),
                     "10.0.0.0": FakeDomainProvider(
                         [_server("sys/chassis-1/blade-1", "ocp4-prod-two-infra-01")]
@@ -445,7 +445,7 @@ class TestListServers:
             "compute/sys-1010/chassis-1/blade-1",
         ]
         assert sorted(s.name for s in servers) == [
-            "ocp4-prod-one-infra-01",
+            "ocp4-prod-tlv-infra-01",
             "ocp4-prod-two-infra-01",
         ]
 
@@ -473,7 +473,7 @@ class TestListServers:
             {
                 "computeSystem": [_domain("1009", "a"), _domain("1010", "b")],
                 "lsServer": [
-                    _profile("ocp4-prod-one-infra-01", "a"),
+                    _profile("ocp4-prod-tlv-infra-01", "a"),
                     _profile("vmware-esx-07", "b"),
                 ],
             }
@@ -561,7 +561,7 @@ class TestListServers:
             {
                 "computeSystem": [_domain("1009", "a")],
                 "lsServer": [
-                    _profile("ocp4-prod-one-infra-01", "a"),
+                    _profile("ocp4-prod-tlv-infra-01", "a"),
                     _profile("ocp4-prod-nine-infra-01", "decommissioned-dc"),
                 ],
             }
@@ -635,7 +635,7 @@ class TestCollectionErrors:
             {
                 "computeSystem": [_domain("1009", "a"), _domain("1010", "b")],
                 "lsServer": [
-                    _profile("ocp4-prod-one-infra-01", "a"),
+                    _profile("ocp4-prod-tlv-infra-01", "a"),
                     _profile("vmware-esx-07", "b"),
                 ],
             }

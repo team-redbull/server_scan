@@ -22,8 +22,9 @@ from typing import Any
 from pymongo import ASCENDING, DESCENDING
 from pymongo.asynchronous.collection import AsyncCollection
 
-from app.domain.enums import InstallationType, SiteCode
+from app.domain.enums import InstallationType
 from app.domain.models.classification_rule import ClassificationRule, RuleScope
+from app.domain.value_objects.site import SiteCatalog
 from app.infrastructure.mongodb.client import MongoClientHolder
 from app.infrastructure.mongodb.indexes import CLASSIFICATION_RULES_COLLECTION
 from app.utils.ids import new_id
@@ -76,22 +77,24 @@ class MongoClassificationRuleRepository:
         return result.deleted_count > 0
 
 
-# The site token, as one alternation, built from `SiteCode` so adding a
-# site to the enum can't leave these patterns silently behind.
-_SITE_ALTERNATION = "|".join(member.value for member in SiteCode)
-
 # Each pattern is fully anchored and names the exact shape it accepts,
 # rather than a loose prefix. That matters because HOSTED_CLUSTER and UPI
 # hostnames share the `ocp4-` prefix — only a later token tells them
 # apart — so a prefix rule like the old `^ocp-.*` would match both and
 # leave the outcome depending on rule ordering. Anchored, mutually
 # exclusive patterns make the classification independent of order.
-_HYPERSHIFT_PATTERN = rf"^ocp4-hypershift(-data)?-({_SITE_ALTERNATION})-\d+$"
-_HARDWARE_SPEC_PATTERN = rf"^ocp-[a-z]+-[a-z0-9]+-({_SITE_ALTERNATION})-\d+c-\d+gb-.+$"
-_UPI_PATTERN = rf"^ocp4-([a-z]+-)?({_SITE_ALTERNATION})-(compute|control-plane|infra)-\d+$"
+#
+# The site token is interpolated from the configured `SiteCatalog` rather
+# than hardcoded, so reconfiguring the sites cannot leave these patterns
+# behind. `app.application.services.bootstrap` re-syncs a seeded system
+# rule whose definition has drifted, which is what makes a site change
+# reach a database that was seeded before it.
+_HYPERSHIFT_TEMPLATE = r"^ocp4-hypershift(-data)?-({sites})-\d+$"
+_HARDWARE_SPEC_TEMPLATE = r"^ocp-[a-z]+-[a-z0-9]+-({sites})-\d+c-\d+gb-.+$"
+_UPI_TEMPLATE = r"^ocp4-([a-z]+-)?({sites})-(compute|control-plane|infra)-\d+$"
 
 
-def default_system_rules() -> list[ClassificationRule]:
+def default_system_rules(sites: SiteCatalog) -> list[ClassificationRule]:
     """The three unscoped SYSTEM_DEFAULT rules that cover this estate's
     real hostname conventions, as ready-to-persist `ClassificationRule`s:
     two shapes of hosted cluster and one of UPI.
@@ -110,7 +113,16 @@ def default_system_rules() -> list[ClassificationRule]:
     `name` index means a second seed attempt fails loudly
     (`DuplicateKeyError`) rather than silently double-inserting, which is
     the intended "call this exactly once" contract.
+
+    Args:
+        sites (SiteCatalog): The configured sites. Their codes are
+            interpolated into every pattern, so reconfiguring
+            `INVENTORY_SITES` changes what these rules match.
+
+    Returns:
+        list[ClassificationRule]: The three seeded rules.
     """
+    alternation = sites.alternation()
     now = utcnow()
     return [
         ClassificationRule(
@@ -125,7 +137,7 @@ def default_system_rules() -> list[ClassificationRule]:
             installation_type=InstallationType.HOSTED_CLUSTER,
             scope=RuleScope(),
             field="name",
-            pattern=_HYPERSHIFT_PATTERN,
+            pattern=_HYPERSHIFT_TEMPLATE.format(sites=alternation),
             source="SYSTEM_DEFAULT",
             priority=100,
             order=0,
@@ -144,7 +156,7 @@ def default_system_rules() -> list[ClassificationRule]:
             installation_type=InstallationType.HOSTED_CLUSTER,
             scope=RuleScope(),
             field="name",
-            pattern=_HARDWARE_SPEC_PATTERN,
+            pattern=_HARDWARE_SPEC_TEMPLATE.format(sites=alternation),
             source="SYSTEM_DEFAULT",
             priority=100,
             order=1,
@@ -163,7 +175,7 @@ def default_system_rules() -> list[ClassificationRule]:
             installation_type=InstallationType.UPI,
             scope=RuleScope(),
             field="name",
-            pattern=_UPI_PATTERN,
+            pattern=_UPI_TEMPLATE.format(sites=alternation),
             source="SYSTEM_DEFAULT",
             priority=100,
             order=2,

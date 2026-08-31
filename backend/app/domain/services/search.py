@@ -46,6 +46,10 @@ FILTER_FIELDS: dict[str, str] = {
     "installation_type": "classification.installation_type",
     "health_overall": "health.overall",
     "maintenance": "maintenance.enabled",
+    # Which collector produced a server, and so how it is reached.
+    # `?source_provider=REDFISH_STANDALONE` is what answers "these have
+    # no manager — do not look for them in OpenManage or UCS".
+    "source_provider": "source_provider",
 }
 
 # API sort query-param name -> real Mongo field path. Every value here

@@ -74,7 +74,7 @@ def default_system_policies() -> list[HealthPolicy]:
     failed_drive = HealthPolicy(
         id=new_id("health_policy"),
         name="Failed drive present",
-        description="Fires when one or more storage drives report a FAILED health state.",
+        description="Fires when one or more storage drives report a CRITICAL health state.",
         policy_key="storage.failed_drive",
         category="storage",
         severity=HealthSeverity.CRITICAL,

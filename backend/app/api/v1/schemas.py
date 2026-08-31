@@ -62,6 +62,7 @@ class ServerSummary(BaseModel):
     model: str | None
     site_id: str | None
     manager_id: str | None
+    source_provider: str | None
     classification: Classification
     health: Health
     maintenance: Maintenance
@@ -78,6 +79,7 @@ class ServerSummary(BaseModel):
             model=server.model,
             site_id=server.site_id,
             manager_id=server.manager_id,
+            source_provider=server.source_provider,
             classification=server.classification,
             health=server.health,
             maintenance=server.maintenance,

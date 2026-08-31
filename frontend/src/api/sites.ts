@@ -10,9 +10,12 @@ import type { HealthSeverity, SiteCode, Vendor } from "@/types/server";
  * separate list of "known sites": the response IS the list.
  */
 
-/** A site card's id: one of the five fixed sites, or the bucket for
- * servers whose name carries no site token. */
-export type SiteStatsId = SiteCode | "unassigned";
+/** A site card's id: a site code, or `UNASSIGNED_SITE_ID` for the bucket
+ * of servers whose name carries no site token. */
+export type SiteStatsId = SiteCode;
+
+/** The id of the bucket for servers whose name names no site. */
+export const UNASSIGNED_SITE_ID = "unassigned";
 
 export interface VendorCount {
   vendor: Vendor;
@@ -37,9 +40,36 @@ export function listSites(): Promise<SiteStatsListResponse> {
   return apiFetch<SiteStatsListResponse>("/api/v1/sites");
 }
 
-/** The five real sites, for filter dropdowns. Derived from the same
- * response the overview renders, so a site can never appear in one and
- * not the other. */
-export const SITE_CODES: readonly SiteCode[] = ["one", "two", "three", "four", "five"];
+/** The real sites, for filter dropdowns — read from the same response the
+ * overview renders, so a site can never appear in one and not the other,
+ * and renaming a site in the backend enum needs no frontend change.
+ *
+ * Args:
+ *   items: the `SiteStats` rows as returned by `listSites`.
+ */
+export function siteOptions(
+  items: SiteStats[] | undefined,
+): { value: string; label: string }[] {
+  return (items ?? [])
+    .filter((site) => site.site_id !== UNASSIGNED_SITE_ID)
+    .map((site) => ({ value: site.site_id, label: site.name }));
+}
 
-export const VENDORS: readonly Vendor[] = ["dell", "cisco", "hp"];
+export const VENDORS: readonly Vendor[] = ["dell", "cisco", "hp", "standalone"];
+
+/** How a server is reached, which is a different question from who built
+ * it. A Dell reached at its own BMC is still `vendor: "dell"`; what makes
+ * it unmanaged is `source_provider: "REDFISH_STANDALONE"`. Values match
+ * the backend's `ManagerType`.
+ *
+ * Only the collectors that actually exist are listed — filtering by one
+ * with no implementation would always return nothing. The two Cisco
+ * entries partition the Cisco fleet rather than overlapping: UCS Central
+ * owns the UCS-managed domains, Intersight owns the servers no UCS domain
+ * does. `tests/unit/test_frontend_manager_types.py` fails the build if a
+ * collector is added to the backend and not to this list. */
+export const SOURCE_PROVIDERS: readonly { value: string; label: string }[] = [
+  { value: "UCS_CENTRAL", label: "UCS Central" },
+  { value: "INTERSIGHT", label: "Intersight" },
+  { value: "REDFISH_STANDALONE", label: "Standalone (Redfish)" },
+];

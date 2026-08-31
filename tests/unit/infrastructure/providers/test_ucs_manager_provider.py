@@ -329,6 +329,44 @@ class TestListServers:
 
         assert server.profile_dn == "org-root/ls-worker-01"
 
+    async def test_fabric_interconnect_identity_is_joined_by_switch_id(self) -> None:
+        """`networkElement` is queried domain-wide (exactly two per
+        domain in practice — the redundant FI pair) and joined onto every
+        attachment by its bare `switch_id`, the same "A"/"B" `adaptorHostEthIf`/
+        `adaptorExtEthIf` already report.
+        """
+        domain = _domain()
+        domain["networkElement"] = [
+            SimpleNamespace(id="A", model="UCS-FI-6454", serial="FCH2222A"),
+            SimpleNamespace(id="B", model="UCS-FI-6454", serial="FCH2222B"),
+        ]
+        client = FakeUcsClient(responses=domain)
+        [server] = await _collect(_provider(client))
+
+        [attachment] = server.attachments
+        assert attachment.fabric == "A"
+        assert attachment.fabric_model == "UCS-FI-6454"
+        assert attachment.fabric_serial == "FCH2222A"
+
+    async def test_physical_and_vnic_attachments_are_labeled(self) -> None:
+        domain = _domain()
+        domain["adaptorExtEthIf"] = [
+            SimpleNamespace(
+                dn="sys/chassis-1/blade-1/adaptor-1/ext-eth-1",
+                switch_id="A",
+                mac="00:aa:bb:cc:dd:00",
+                admin_state="enabled",
+                oper_state="up",
+                id="1",
+                name="ext-eth-1",
+            )
+        ]
+        client = FakeUcsClient(responses=domain)
+        [server] = await _collect(_provider(client))
+
+        kinds = sorted(a.interface_kind for a in server.attachments)
+        assert kinds == ["PHYSICAL", "VNIC"]
+
     async def test_never_queries_a_nonexistent_template_class(self) -> None:
         """There is no `lsServiceProfileTemplate` class in UCS Manager's
         model — querying it makes the whole run fail. Templates come from
@@ -390,7 +428,7 @@ class TestListServers:
         servers = await _collect(_provider(client))
 
         assert len(servers) == 50
-        assert len([c for c in client.calls if c.startswith("query_classid:")]) == 10
+        assert len([c for c in client.calls if c.startswith("query_classid:")]) == 11
 
     async def test_skips_non_equipped_servers(self) -> None:
         domain = _domain()
