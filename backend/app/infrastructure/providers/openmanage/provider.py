@@ -1,28 +1,34 @@
 """`ServerInventoryProvider` for Dell servers — the OpenManage entry point.
 
-One OpenManage Enterprise (OME) appliance manages the whole Dell estate,
-so a single provider instance covers the fleet: two bulk REST calls
-enumerate every server profile and every managed device, and a bounded
-fan-out of per-device inventory calls fills in the CPU, memory, storage and
-NIC detail OME sources from each server's iDRAC.
+OME discovers, Redfish collects. Two bulk REST calls against the one
+OpenManage Enterprise appliance enumerate every server profile and every
+managed device, which yields each server's name, deployment template,
+service tag and iDRAC address. The hardware behind those addresses is then
+read from each server's own BMC over Redfish, by
+`app.infrastructure.providers.redfish` unchanged.
 
-This mirrors the platform's existing collector shape: the bulk calls are
-the cheap "who is out there" pass (like UCS Central's domain discovery),
-and the per-device inventory is the expensive per-machine pass. As with the
-Cisco collector, a `name_pattern` prunes the expensive pass to this
-platform's own fleet before any inventory call is spent — the authoritative
-name filter still runs in `tools.run_collector`, this is only an
-efficiency gate.
+The split is not arbitrary: each side supplies exactly what the other
+cannot see. Only OME knows a server's name, and the name is what site
+parsing and classification key off — an iDRAC has never heard of
+`ocp4-nyc-prod-worker-03`. Only the BMC reports hardware as measured
+values, which is what removes the capacity and thread heuristics OME's
+`InventoryDetails` forced.
 
-See docs/dell-collectors.md for the OME field/endpoint facts, carried over
-from a validated production scanner.
+The cost is real and inverts the old shape: this is ~25 HTTPS round trips
+against every collected server, not four cheap calls against one
+appliance. `name_pattern` is therefore applied before a single BMC is
+contacted, and the CronJob runs on the Redfish collector's cadence rather
+than hourly.
+
+See docs/adr/0019-dell-identity-from-ome-hardware-from-redfish.md, and
+docs/dell-collectors.md for the OME field/endpoint facts.
 """
 
 from __future__ import annotations
 
-import asyncio
+import dataclasses
 import re
-from collections.abc import AsyncIterator, Iterable
+from collections.abc import AsyncIterator, Callable
 from typing import Any
 
 import structlog
@@ -31,23 +37,14 @@ from app.domain.enums import ManagerType
 from app.domain.models.manager import Manager
 from app.domain.ports.credentials import ManagerConnection
 from app.domain.ports.provider import ProviderServer
-from app.infrastructure.providers.openmanage.client import OmeClient, OmeConnectionError
-from app.infrastructure.providers.openmanage.mapping import to_provider_server
+from app.domain.value_objects.bmc_address import parse_bmc_address
+from app.infrastructure.providers.openmanage.client import OmeClient
+from app.infrastructure.providers.openmanage.mapping import OmeIdentity, identity_from_profile
+from app.infrastructure.providers.redfish.targets import RedfishCredential, RedfishTarget
 
 logger = structlog.get_logger(__name__)
 
 _PROVIDER_TYPE = ManagerType.OPENMANAGE.value
-
-# OME `InventoryType` names. Physical disks are `serverArrayDisks`, not
-# `serverStorage` (which is not a valid type and returns HTTP 400) — a fact
-# confirmed against a live appliance. See docs/dell-collectors.md,
-# "OME REST surface".
-_INVENTORY_SECTIONS = (
-    "serverProcessors",
-    "serverMemoryDevices",
-    "serverArrayDisks",
-    "serverNetworkInterfaces",
-)
 
 
 class OpenManageProvider:
@@ -56,7 +53,7 @@ class OpenManageProvider:
 
     One instance covers one OME appliance and every Dell server it manages.
 
-    See docs/dell-collectors.md, "Collection flow".
+    See docs/adr/0019-dell-identity-from-ome-hardware-from-redfish.md.
     """
 
     provider_type = _PROVIDER_TYPE
@@ -67,12 +64,17 @@ class OpenManageProvider:
         manager: Manager,
         credentials: ManagerConnection,
         timeout_seconds: float,
+        bmc_credential: RedfishCredential,
+        redfish_provider_factory: Callable[[list[RedfishTarget]], Any],
         name_pattern: str = "",
-        concurrency: int = 8,
+        bmc_port: int = 443,
+        bmc_verify_tls: bool = False,
+        bmc_verify_tls_reason: str | None = None,
+        bmc_ca_bundle: str | None = None,
         verify_tls: bool = False,
     ) -> None:
         """
-        Bind a provider to one OME appliance.
+        Bind a provider to one OME appliance and its fleet's BMCs.
 
         Args:
             manager (Manager): The manager this run reports under. Its `id`
@@ -80,13 +82,31 @@ class OpenManageProvider:
                 OME appliance to connect to.
             credentials (ManagerConnection): OME appliance login
                 (`INVENTORY_OME_IP`/`_USERNAME`/`_PASSWORD`).
-            timeout_seconds (float): Per-request timeout.
-            name_pattern (str): Regex; profiles whose name does not match it
-                are skipped before their inventory is fetched. Empty means
-                inventory every profile. Only an efficiency gate — the
-                authoritative filter is `tools.run_collector`'s wrapper.
-            concurrency (int): How many devices to inventory at once.
-            verify_tls (bool): Whether to verify the appliance's TLS
+            timeout_seconds (float): Per-request timeout for OME. BMC
+                timeouts are the Redfish collector's own.
+            bmc_credential (RedfishCredential): The one iDRAC account used
+                for every Dell BMC (`INVENTORY_OME_BMC_USERNAME`/
+                `_PASSWORD`).
+            redfish_provider_factory (Callable[[list[RedfishTarget]], Any]):
+                Builds the Redfish collector for the discovered targets.
+                Injected rather than constructed here so this provider
+                carries no BMC tuning knobs, and so a test can substitute
+                the whole hardware pass.
+            name_pattern (str): Regex; profiles whose name does not match
+                are dropped before their BMC is contacted. Empty collects
+                every profile. Unlike the standalone Redfish collector —
+                where the filter is deliberately disabled because a BMC
+                does not know the server's name — the filter applies here,
+                because OME supplies the name. It is still only an
+                efficiency gate; the authoritative filter is
+                `tools.run_collector`'s wrapper.
+            bmc_port (int): HTTPS port every iDRAC answers on.
+            bmc_verify_tls (bool): Whether to verify each BMC's certificate.
+            bmc_verify_tls_reason (str | None): Why verification is off,
+                recorded on every target when it is.
+            bmc_ca_bundle (str | None): PEM bundle trusted in addition to
+                the system store.
+            verify_tls (bool): Whether to verify the OME appliance's own
                 certificate; defaults to `False` for self-signed appliances.
 
         Raises:
@@ -98,19 +118,24 @@ class OpenManageProvider:
         self._manager = manager
         self._credentials = credentials
         self._timeout_seconds = timeout_seconds
+        self._bmc_credential = bmc_credential
+        self._redfish_provider_factory = redfish_provider_factory
         self._pattern = re.compile(name_pattern) if name_pattern else None
-        self._concurrency = max(1, concurrency)
+        self._bmc_port = bmc_port
+        self._bmc_verify_tls = bmc_verify_tls
+        self._bmc_verify_tls_reason = bmc_verify_tls_reason
+        self._bmc_ca_bundle = bmc_ca_bundle
         self._verify_tls = verify_tls
         self._collection_errors: list[str] = []
 
     @property
     def collection_errors(self) -> tuple[str, ...]:
-        """Devices whose inventory could not be fully read this run.
+        """Servers this run could not fully collect.
 
         Read by `tools.run_collector` so a run that reached OME but could
-        not inventory every matched server reports PARTIAL rather than a
-        silently-complete success — the same honesty the Cisco collector
-        applies to an unreachable domain.
+        not reach every matched server's BMC reports PARTIAL rather than a
+        silently-complete success. Carries the Redfish pass's own per-host
+        errors through unchanged, plus any profile OME gave no address for.
         """
         return tuple(self._collection_errors)
 
@@ -134,6 +159,10 @@ class OpenManageProvider:
         """
         Verify the appliance is reachable and the credentials are accepted.
 
+        Deliberately checks OME only. A BMC that rejects the iDRAC account
+        is one server's failure, and the Redfish collector's own auth guard
+        already aborts a run whose credential is wrong fleet-wide.
+
         Raises:
             OmeConnectionError: If login fails for any reason.
         """
@@ -142,46 +171,83 @@ class OpenManageProvider:
 
     async def list_servers(self) -> AsyncIterator[ProviderServer]:
         """
-        Yield every Dell server OME manages, enriched from its inventory.
-
-        Two bulk calls enumerate profiles and devices; matching profiles are
-        then inventoried a bounded batch at a time so one appliance is never
-        hit with the whole fleet's per-device calls at once.
+        Yield every matched Dell server, named by OME and measured by its BMC.
 
         Yields:
-            ProviderServer: One managed Dell server, already normalized.
+            ProviderServer: One Dell server: hardware as its iDRAC reports
+                it, identity as OME does.
 
         Raises:
             OmeConnectionError: On login failure or a failure of either bulk
-                enumeration call. A per-device inventory failure is recorded
-                in `collection_errors` and does not abort the run.
-
-        See docs/dell-collectors.md, "Collection flow".
+                enumeration call. A single unreachable BMC is recorded in
+                `collection_errors` and does not abort the run.
         """
         self._collection_errors = []
+        identities = await self._discover()
+        if not identities:
+            logger.info("ome.no_matching_profiles", endpoint=self._endpoint)
+            return
+
+        targets = [self._target_for(identity) for identity in identities.values()]
+        logger.info(
+            "ome.collecting_over_redfish",
+            endpoint=self._endpoint,
+            targets=len(targets),
+        )
+
+        redfish = self._redfish_provider_factory(targets)
+        async for server in redfish.list_servers():
+            yield self._merged(server, identities)
+        self._collection_errors.extend(getattr(redfish, "collection_errors", ()))
+
+    async def _discover(self) -> dict[str, OmeIdentity]:
+        """
+        Enumerate the appliance and keep the matched, addressable profiles.
+
+        Two bulk calls regardless of fleet size. A profile whose name does
+        not match is dropped here, before it costs a BMC session; a profile
+        with no iDRAC address is dropped and recorded, since there is
+        nothing to collect it from.
+
+        Returns:
+            dict[str, OmeIdentity]: Matched identities, keyed by iDRAC IP.
+                Keyed by address because that is what the Redfish pass
+                reports back and what joins the two halves.
+        """
         async with self._new_client() as client:
             profiles = await client.get_all("/ProfileService/Profiles")
             devices = await client.get_all("/DeviceService/Devices")
-            device_by_ip = {
-                str(device.get("DeviceName")): device
-                for device in devices
-                if device.get("DeviceName") is not None
-            }
-            logger.info(
-                "ome.enumerated",
-                endpoint=self._endpoint,
-                profiles=len(profiles),
-                devices=len(devices),
-            )
 
-            matching = [p for p in profiles if self._matches(p)]
-            for batch in _chunked(matching, self._concurrency):
-                for server in await self._inventory_batch(client, batch, device_by_ip):
-                    yield server
+        device_by_ip = {
+            str(device.get("DeviceName")): device
+            for device in devices
+            if device.get("DeviceName") is not None
+        }
+        logger.info(
+            "ome.enumerated",
+            endpoint=self._endpoint,
+            profiles=len(profiles),
+            devices=len(devices),
+        )
+
+        identities: dict[str, OmeIdentity] = {}
+        for profile in profiles:
+            if not self._matches(profile):
+                continue
+            idrac_ip = str(profile.get("TargetName") or "")
+            identity = identity_from_profile(profile=profile, device=device_by_ip.get(idrac_ip, {}))
+            host = identity.idrac_ip
+            if not host:
+                message = f"{identity.name!r}: OME reports no iDRAC address; nothing to collect"
+                self._collection_errors.append(message)
+                logger.warning("ome.profile_without_address", profile=identity.name)
+                continue
+            identities[host] = identity
+        return identities
 
     def _matches(self, profile: dict[str, Any]) -> bool:
         """
-        Whether a profile's name passes the efficiency pre-filter.
+        Whether a profile's name passes the pre-filter.
 
         Args:
             profile (dict[str, Any]): One `/ProfileService/Profiles` entry.
@@ -194,93 +260,66 @@ class OpenManageProvider:
             return True
         return bool(self._pattern.search(str(profile.get("ProfileName") or "")))
 
-    async def _inventory_batch(
-        self,
-        client: OmeClient,
-        profiles: list[dict[str, Any]],
-        device_by_ip: dict[str, dict[str, Any]],
-    ) -> list[ProviderServer]:
+    def _target_for(self, identity: OmeIdentity) -> RedfishTarget:
         """
-        Build `ProviderServer`s for one batch of profiles concurrently.
+        Build the Redfish target for one discovered server.
+
+        `name` carries OME's profile name through to
+        `system_to_provider_server(override_name=...)`, which is what keeps
+        a collected Dell server named the thing site parsing and
+        classification need rather than whatever iDRAC calls it.
 
         Args:
-            client (OmeClient): The logged-in OME client.
-            profiles (list[dict[str, Any]]): The batch of profiles.
-            device_by_ip (dict[str, dict[str, Any]]): iDRAC IP -> device,
-                for joining each profile to its managed device.
+            identity (OmeIdentity): One matched, addressable profile.
 
         Returns:
-            list[ProviderServer]: One entry per profile, in order.
+            RedfishTarget: The BMC to collect, with its login and TLS policy.
         """
-        results = await asyncio.gather(
-            *(self._build_one(client, profile, device_by_ip) for profile in profiles)
+        return RedfishTarget(
+            host=str(identity.idrac_ip),
+            port=self._bmc_port,
+            credential=self._bmc_credential,
+            verify_tls=self._bmc_verify_tls,
+            verify_tls_reason=self._bmc_verify_tls_reason,
+            ca_bundle=self._bmc_ca_bundle,
+            name=identity.name,
         )
-        return list(results)
 
-    async def _build_one(
-        self,
-        client: OmeClient,
-        profile: dict[str, Any],
-        device_by_ip: dict[str, dict[str, Any]],
-    ) -> ProviderServer:
+    def _merged(self, server: ProviderServer, by_host: dict[str, OmeIdentity]) -> ProviderServer:
         """
-        Fetch one profile's device inventory and map it to a `ProviderServer`.
+        Put OME's identity back onto one Redfish-collected server.
 
-        A missing managed device, or an inventory section that fails to
-        load, degrades to empty rather than dropping the server: identity
-        from the profile is always worth ingesting even when detail is
-        partial. Any such gap is recorded in `collection_errors`.
+        Joined on the BMC host rather than the name, so a chassis that
+        reports several systems behind one address gets the same identity
+        applied to each rather than only the first.
+
+        The BMC address is deliberately OME's `idrac-virtualmedia://` form,
+        not the `https://<host>` origin the Redfish collector reports for a
+        standalone BMC — see `mapping.idrac_bmc_address`. Model and serial
+        fall back to OME only where the BMC reported nothing, so measured
+        values always win.
 
         Args:
-            client (OmeClient): The logged-in OME client.
-            profile (dict[str, Any]): One `/ProfileService/Profiles` entry.
-            device_by_ip (dict[str, dict[str, Any]]): iDRAC IP -> device.
+            server (ProviderServer): One server as Redfish collected it.
+            by_host (dict[str, OmeIdentity]): Identities by iDRAC IP.
 
         Returns:
-            ProviderServer: The normalized server DTO.
+            ProviderServer: The same server, carrying its OME identity.
+                Returned untouched if its address matches nothing OME
+                reported, which should not happen — every target came from
+                this dict — but is a silent no-op rather than a crash.
         """
-        idrac_ip = str(profile.get("TargetName") or "")
-        device = device_by_ip.get(idrac_ip, {})
-        device_id = device.get("Id")
-
-        sections: dict[str, list[dict[str, Any]]] = {name: [] for name in _INVENTORY_SECTIONS}
-        if device_id is not None:
-            for section in _INVENTORY_SECTIONS:
-                try:
-                    sections[section] = await client.get_inventory(device_id, section)
-                except OmeConnectionError as exc:
-                    message = (
-                        f"{profile.get('ProfileName')!r}: {section} inventory unavailable ({exc})"
-                    )
-                    self._collection_errors.append(message)
-                    logger.warning(
-                        "ome.inventory_failed",
-                        profile=profile.get("ProfileName"),
-                        section=section,
-                        error=str(exc),
-                    )
-
-        return to_provider_server(
-            profile=profile,
-            device=device,
-            processors=sections["serverProcessors"],
-            memory_modules=sections["serverMemoryDevices"],
-            storage=sections["serverArrayDisks"],
-            network_interfaces=sections["serverNetworkInterfaces"],
+        parsed = parse_bmc_address(server.bmc_address_raw)
+        host = parsed.host if parsed else None
+        identity = by_host.get(host) if host else None
+        if identity is None:
+            return server
+        return dataclasses.replace(
+            server,
             manager_id=self._manager.id,
+            profile_template_name=identity.profile_template_name,
+            profile_template_external_id=identity.profile_template_external_id,
+            bmc_address_raw=identity.bmc_address_raw or server.bmc_address_raw,
+            model=server.model or identity.model,
+            serial=server.serial or identity.serial,
         )
-
-
-def _chunked(items: list[Any], size: int) -> Iterable[list[Any]]:
-    """
-    Yield successive `size`-length slices of `items`.
-
-    Args:
-        items (list[Any]): The list to slice.
-        size (int): Slice length, at least 1.
-
-    Yields:
-        list[Any]: Each slice in order; the last may be shorter.
-    """
-    for start in range(0, len(items), size):
-        yield items[start : start + size]

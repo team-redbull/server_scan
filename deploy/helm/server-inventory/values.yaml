@@ -253,25 +253,47 @@ collectors:
     username: ""
     password: ""
 
-  # Dell OpenManage Enterprise. One appliance manages the whole Dell
-  # estate: the collector enumerates every server profile and managed
-  # device with two bulk REST calls, then inventories the servers whose
-  # name matches `namePattern` over per-device calls (CPU, memory,
-  # storage, NICs — sourced by OME from each server's iDRAC).
+  # Dell — OME discovers, Redfish collects.
+  #
+  # Two bulk REST calls against the one OpenManage Enterprise appliance
+  # enumerate every server profile and managed device, which gives each
+  # server its name, deployment template, service tag and iDRAC address.
+  # The hardware behind those addresses is then read from each server's
+  # own BMC over Redfish, because only the BMC reports measured values and
+  # only OME knows the name that site parsing and classification need.
+  #
+  # This needs TWO logins — the appliance's and a shared read-only iDRAC
+  # account — and egress from the collector pod to the whole BMC network.
+  # See docs/adr/0019-dell-identity-from-ome-hardware-from-redfish.md.
   ome:
     enabled: false
     ip: ""
     username: ""
     password: ""
 
-    # How many servers to inventory at once against the single appliance.
-    # Bounds the per-device fan-out; the two bulk enumeration calls run
-    # once regardless.
-    inventoryConcurrency: 8
-    # Hourly, matching the Cisco collector's cadence.
-    schedule: "0 * * * *"
+    # The iDRAC account, used against every Dell BMC in the estate.
+    bmcUsername: ""
+    bmcPassword: ""
+    bmcPort: 443
+
+    # iDRACs ship a factory self-signed certificate. The scalable fix is
+    # an internal CA in `redfishStandalone.caBundle` and this set to true,
+    # not leaving verification off forever.
+    bmcVerifyTls: false
+
+    # BMCs contacted at once. Cost here is per *server* (~25 requests
+    # each), not per appliance.
+    bmcConcurrency: 16
+
+    # Every 6 hours, matching redfishStandalone. Deliberately NOT the
+    # Cisco collector's hourly cadence: every sweep is thousands of
+    # requests against embedded hardware that degrades when polled.
+    schedule: "0 */6 * * *"
     backoffLimit: 1
-    activeDeadlineSeconds: 1800
+    # Generous: one run sweeps the whole Dell estate a batch of BMCs at a
+    # time. Keep it above redfish's runBudgetSeconds so the in-process
+    # budget trips first and can report what it collected.
+    activeDeadlineSeconds: 5400
     resources:
       requests:
         cpu: 100m

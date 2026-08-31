@@ -67,28 +67,48 @@ where one exists.
 
 ## Collection flow
 
+**OME discovers, Redfish collects** — see
+`docs/adr/0019-dell-identity-from-ome-hardware-from-redfish.md` for why,
+and for what the OME-only design got wrong.
+
 `OpenManageProvider.list_servers` makes the two bulk calls once
-(`/ProfileService/Profiles`, `/DeviceService/Devices`), joins each profile
-to its device by iDRAC IP, then inventories the matching profiles a
-bounded batch at a time (`INVENTORY_OME_INVENTORY_CONCURRENCY`). The
-`name_pattern` prunes the expensive per-device inventory to this platform's
-own fleet *before* any inventory call is spent — but it is only an
-efficiency gate; the authoritative name filter is still
-`tools.run_collector._NameFilteredProvider`, exactly as for Cisco.
+(`/ProfileService/Profiles`, `/DeviceService/Devices`) and joins each
+profile to its device by iDRAC IP. That yields, per server, the four things
+only OME knows: the **profile name** (the server's name), the **deployment
+template**, the **service tag** and the **iDRAC address**.
 
-A missing managed device, or an inventory section that fails to load,
-degrades to empty rather than dropping the server: identity from the
-profile is worth ingesting even when detail is partial. Any such gap is
-recorded on `collection_errors`, which `tools.run_collector` reads to
-report the run as **PARTIAL** (exit 3) rather than a silently-complete
-success — the same honesty the Cisco collector applies to an unreachable
-domain.
+Every matched address then becomes a `RedfishTarget`, and the hardware pass
+is `app.infrastructure.providers.redfish` unchanged — CPU, memory, storage,
+NICs and GPUs read from the server's own BMC as measured values.
+`RedfishTarget.name` carries the OME profile name through to
+`system_to_provider_server(override_name=...)`, which is what keeps a Dell
+server named the thing site parsing and classification need rather than
+whatever iDRAC calls it.
 
-`external_id` is the service tag when the profile has a joined device, and
-`ome-profile:<ProfileName>` otherwise, so it is always present for the
-identity correlation ladder's per-manager step. Correlation itself keys on
-`(vendor, serial)` (`app.application.services.ingest`), where serial is the
-`DeviceServiceTag`.
+`name_pattern` is applied **before any BMC is contacted**. The expensive
+pass is per-server here, so this is what keeps the design affordable; it is
+still only an efficiency gate, with the authoritative filter remaining
+`tools.run_collector._NameFilteredProvider`. Note this differs from the
+standalone Redfish collector, where the pattern is deliberately *not*
+applied because a BMC does not know the server's name — here OME supplies
+it.
+
+A profile OME reports no iDRAC address for is dropped and recorded: there
+is nothing to collect it from. That and every per-host Redfish failure land
+on `collection_errors`, which `tools.run_collector` reads to report the run
+as **PARTIAL** (exit 3) rather than a silently-complete success.
+
+Correlation keys on `(vendor, serial)`
+(`app.application.services.ingest`). iDRAC reports the service tag as
+`SerialNumber` — the same value OME reports as `DeviceServiceTag` — so
+servers ingested by the older OME-only collector update in place rather
+than duplicating. **This is the highest-consequence unverified assumption
+in the design; confirm it on real hardware before a production run.**
+
+The BMC address stored is OME's `idrac-virtualmedia://` form, not the
+`https://<host>` origin the Redfish collector reports for a standalone BMC:
+that is what `parse_bmc_address` documents for Dell and what a Metal3
+`BareMetalHost` round-trips.
 
 ## Profile template
 
@@ -110,7 +130,27 @@ documents, which round-trips into a Metal3 `BareMetalHost`'s
 `spec.bmc.address`. OME's device summary does not expose the iDRAC's own
 MAC on the validated path, so `bmc_mac` is left unset.
 
-## NIC status
+---
+
+# Superseded: what OME's `InventoryDetails` taught us
+
+**Everything below described the OME-only collector, whose hardware
+mappers were deleted in
+`docs/adr/0019-dell-identity-from-ome-hardware-from-redfish.md`.** Hardware
+now comes from each server's iDRAC over Redfish, which reports measured
+values and needs none of these heuristics.
+
+It is kept, in full, for three reasons. Every fact here cost a live
+appliance run to learn, and a fact without its provenance becomes folklore
+nobody dares change. The OME field names are still the reference if anyone
+ever needs `InventoryDetails` again — as a fallback, a cross-check, or for
+a field Redfish does not carry. And the *reasons* these fields could not be
+trusted are the entire justification for ADR-0019: delete them and the next
+person re-derives the same wrong design.
+
+Read it as history. None of the functions named below still exist.
+
+## NIC status (superseded)
 
 `serverNetworkInterfaces` nests interface -> `Ports` -> `Partitions`. The
 MAC is per partition (`CurrentMacAddress`); link status and speed are per
@@ -139,7 +179,7 @@ knowledge is preserved here rather than in code because this platform wants
 the full per-NIC view, not the one boot NIC. If a future need arises to
 mark the primary NIC, this is the rule it followed in production.
 
-## Capacity units
+## Capacity units (superseded)
 
 **Memory** (`serverMemoryDevices` `Size`) is read as **megabytes**, carried
 over from the production scanner: `memory_total_bytes = sum(Size) * 1024^2`.
@@ -165,7 +205,7 @@ that field can become primary again.
 The dry-run renders the per-server total in **TB** and each drive in GB
 below 1 TB / TB at or above (`_format_tb`/`_format_disk_size`).
 
-## CPU summary
+## CPU summary (superseded)
 
 From `serverProcessors` `InventoryInfo`: `sockets` is the entry count,
 `cores` sums `NumberOfCores`, and the model is the first entry's
@@ -181,7 +221,7 @@ to `2 * cores`, since the Dell Xeons in this fleet run hyperthreaded.
 HT physically off. Paste one raw `serverProcessors` entry to pin the real
 thread field and drop the fallback.
 
-## Drive health
+## Drive health (superseded)
 
 `serverArrayDisks` entries report status either as a numeric OME rollup code
 (`Status`: 1000 normal, 2000 unknown, 3000 warning, 4000 critical) or a

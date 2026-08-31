@@ -145,6 +145,31 @@ class Settings(BaseSettings):
     ome_username: str = ""
     ome_password: str = ""
 
+    # The Dell collector needs TWO logins, and that is a deliberate
+    # exception to "one endpoint and one login per manager type": OME is
+    # asked only who exists, and each server's own iDRAC is asked what it
+    # is. One shared read-only iDRAC account for the estate, as
+    # `INVENTORY_OME_BMC_USERNAME`/`_PASSWORD`. See
+    # docs/adr/0019-dell-identity-from-ome-hardware-from-redfish.md.
+    ome_bmc_username: str = ""
+    ome_bmc_password: str = ""
+    ome_bmc_port: int = 443
+
+    # iDRACs ship a factory self-signed certificate, so verification is off
+    # by default here where the standalone Redfish collector leaves it on:
+    # that collector's fleet is an operator-written file that can name a CA
+    # bundle per host, while this one's is whatever OME reports. Set
+    # `redfish_ca_bundle` and turn this on for a fleet with a real internal
+    # CA — that is the scalable answer, not leaving verification off.
+    ome_bmc_verify_tls: bool = False
+
+    # Everything else about talking to a BMC — timeouts, budgets, fleet
+    # concurrency, the auth-failure guard, TLS floor, CA bundle — is
+    # deliberately shared with the standalone Redfish collector's
+    # `redfish_*` settings below rather than duplicated with an `ome_`
+    # prefix. It is the same protocol against the same class of device, and
+    # two sets of knobs would drift.
+
     intersight_ip: str = ""
     # The API Key ID exactly as Intersight shows it beside the key: a
     # `/`-joined string, not a username.
@@ -258,13 +283,10 @@ class Settings(BaseSettings):
     # blocking SDK call parked in a worker thread.
     ucs_central_domain_concurrency: int = 4
 
-    # How many Dell servers the OpenManage collector inventories at once.
-    # One OME appliance answers the whole estate, so this bounds the
-    # per-device inventory fan-out (each matched server costs one HTTP call
-    # per hardware section) without bounding correctness — the two bulk
-    # enumeration calls run once regardless. Kept modest to stay a polite
-    # client of a single appliance.
-    ome_inventory_concurrency: int = 8
+    # No `ome_inventory_concurrency`: the Dell collector's expensive pass is
+    # per-server against each BMC, not per-device against the appliance, and
+    # it is bounded by `redfish_fleet_concurrency` with every other BMC
+    # knob. See docs/adr/0019.
 
     # Which servers a collector is allowed to ingest at all, as a regex
     # matched against the server's name (`re.search`, so "starts with" is
