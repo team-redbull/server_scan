@@ -616,23 +616,29 @@ async def _dry_run_one_manager(
         )
         drive_count = _or_unread(None if ps.storage_drives is None else len(ps.storage_drives))
         macs = _UNREAD if ps.nic_macs is None else (", ".join(ps.nic_macs) or "—")
+        # Service profiles and fabric attachments are UCS concepts. A
+        # provider with neither (OpenManage, Redfish) printed "— " and "0"
+        # on every server, which reads as missing data rather than as a
+        # field its vendor has no equivalent for.
+        profile = f"\n     profile     : {ps.profile_dn}" if ps.profile_dn else ""
+        attachments = f"\n     attachments : {len(ps.attachments)}" if ps.attachments else ""
         print(
             f"\n[{count}] {ps.name}"
             f"\n     external_id : {ps.external_id}"
             f"\n     site (from name): {site or '— none in name'}"
             f"\n     vendor/model: {ps.vendor} / {ps.model}"
-            f"\n     serial/uuid : {ps.serial} / {ps.system_uuid}"
+            f"\n     serial/uuid : {ps.serial} / {_or_unread(ps.system_uuid)}"
             f"\n     cpu         : {_or_unread(ps.cpu_sockets)} sockets,"
             f" {_or_unread(ps.cpu_cores)} cores,"
             f" {_or_unread(ps.cpu_threads)} threads ({ps.cpu_model or 'model unknown'})"
             f"\n     memory      : {memory}"
             f"\n     storage     : {storage} total across {drive_count} drive(s)"
             f"\n     bmc         : {_bmc_host(ps.bmc_address_raw)} (mac {ps.bmc_mac or '—'})"
-            f"\n     profile     : {ps.profile_dn or '—'}"
+            f"{profile}"
             f"\n     profile tmpl: {ps.profile_template_name or '—'}"
             f" [{ps.profile_template_external_id or '—'}]"
             f"\n     nic macs    : {macs}"
-            f"\n     attachments : {len(ps.attachments)}"
+            f"{attachments}"
             f"\n     gpus        : {_or_unread(None if ps.gpus is None else len(ps.gpus))}"
         )
         for a in ps.attachments:
