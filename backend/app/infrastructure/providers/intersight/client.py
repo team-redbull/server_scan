@@ -110,6 +110,13 @@ class IntersightClient:
     """
     One signed, paged conversation with an Intersight endpoint.
 
+    **Never verifies the endpoint's TLS certificate.** This is not
+    conditional on any setting — by explicit user decision, every
+    connection this class makes goes to whatever answers at `endpoint`,
+    indistinguishable from a man-in-the-middle, in every environment
+    including a real production tenant. There is no
+    `INVENTORY_INTERSIGHT_CA_BUNDLE` or `_TLS_VERIFY` to change this.
+
     See docs/adr/0017-intersight-collector.md.
     """
 
@@ -121,7 +128,6 @@ class IntersightClient:
         private_key_pem: str,
         connect_timeout: float = 10.0,
         read_timeout: float = 60.0,
-        ca_bundle: str | None = None,
         page_size: int = 1000,
         max_retries: int = 4,
         debug_http: bool = False,
@@ -137,8 +143,6 @@ class IntersightClient:
             read_timeout (float): Seconds to wait for one response. Well
                 above the connect timeout because a fleet-wide list query
                 at `$top=1000` is a large response.
-            ca_bundle (str | None): PEM bundle trusted in addition to the
-                system store, for an appliance with an internal CA.
             page_size (int): `$top`, capped at the API's documented 1000.
             max_retries (int): Attempts per request after a retryable
                 status, beyond the first.
@@ -159,7 +163,7 @@ class IntersightClient:
         self._client = httpx.AsyncClient(
             base_url=f"https://{self._host}",
             timeout=httpx.Timeout(read_timeout, connect=connect_timeout),
-            verify=ca_bundle if ca_bundle else True,
+            verify=False,  # noqa: S501 - unconditional, see class docstring
             transport=transport,
             follow_redirects=False,
         )

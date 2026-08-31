@@ -163,10 +163,11 @@ class Settings(BaseSettings):
     # estate whose UCS domains are not registered with Central at all.
     intersight_management_modes: str = "Intersight,IntersightStandalone"
 
-    # PEM bundle trusted in addition to the system store, for an on-prem
-    # Intersight appliance with an internal CA. Empty uses the system
-    # store alone, which is correct for the public SaaS endpoint.
-    intersight_ca_bundle: str = ""
+    # Deliberately no `intersight_ca_bundle` / `intersight_tls_verify`
+    # setting: `IntersightClient` never verifies the endpoint's TLS
+    # certificate, unconditionally, by explicit user decision. There is
+    # no environment variable that changes this. See
+    # `app.infrastructure.providers.intersight.client.IntersightClient`.
 
     # `$top`. 1000 is the API's documented maximum and the default
     # because every query here is a fleet-wide list — lower it only if a

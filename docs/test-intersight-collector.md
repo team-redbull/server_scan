@@ -72,15 +72,15 @@ signs must match the one it sends.
 
 **Air-gapped sites: this must be a Private Virtual Appliance.**
 `intersight.com` is on the public internet. A *Connected* Virtual
-Appliance still calls home and does not solve the problem. If the
-appliance presents a certificate from an internal CA, mount the bundle:
+Appliance still calls home and does not solve the problem.
 
-```bash
-INVENTORY_INTERSIGHT_CA_BUNDLE=/etc/intersight-ca/ca-bundle.crt
-```
-
-TLS verification is never disabled. If the appliance's certificate does
-not verify, import the CA — do not look for a flag.
+**TLS certificate verification is unconditionally disabled** for this
+collector — a deliberate, explicit user decision (2026-08-31), reversing
+this doc's earlier "never disabled, import the CA" stance. There is no
+`INVENTORY_INTERSIGHT_CA_BUNDLE` or verify flag; the signed request and
+its response go to whatever answers at `INVENTORY_INTERSIGHT_IP`, in
+every environment including a production tenant. See
+`app.infrastructure.providers.intersight.client.IntersightClient`.
 
 ---
 

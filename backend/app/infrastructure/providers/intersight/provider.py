@@ -177,7 +177,6 @@ class IntersightProvider:
         api_key_pem: str,
         connect_timeout: float = 10.0,
         read_timeout: float = 60.0,
-        ca_bundle: str | None = None,
         page_size: int = 1000,
         management_modes: tuple[str, ...] = (mapping.MODE_IMM, mapping.MODE_STANDALONE),
         run_budget_seconds: float = 1800.0,
@@ -193,8 +192,6 @@ class IntersightProvider:
             api_key_pem (str): That key's unencrypted PEM private half.
             connect_timeout (float): Seconds to establish a connection.
             read_timeout (float): Seconds to wait for one page.
-            ca_bundle (str | None): Extra trusted PEM bundle, for an
-                on-prem appliance with an internal CA.
             page_size (int): `$top`, capped at the API's 1000.
             management_modes (tuple[str, ...]): Which `ManagementMode`
                 values to collect. Excluding `UCSM` is what keeps this
@@ -212,7 +209,6 @@ class IntersightProvider:
         self._api_key_pem = api_key_pem
         self._connect_timeout = connect_timeout
         self._read_timeout = read_timeout
-        self._ca_bundle = ca_bundle
         self._page_size = page_size
         self._modes = tuple(management_modes)
         self._run_budget_seconds = run_budget_seconds
@@ -244,13 +240,21 @@ class IntersightProvider:
         """
         if self._client_factory is not None:
             return self._client_factory()
+        logger.warning(
+            "intersight.tls_verification_disabled",
+            endpoint=self._endpoint,
+            hint=(
+                "IntersightClient never verifies the endpoint's TLS certificate. The "
+                "signed request and its response go to whatever answers at this "
+                "address, in every environment. See IntersightClient's docstring."
+            ),
+        )
         return IntersightClient(
             endpoint=self._endpoint,
             key_id=self._api_key_id,
             private_key_pem=self._api_key_pem,
             connect_timeout=self._connect_timeout,
             read_timeout=self._read_timeout,
-            ca_bundle=self._ca_bundle,
             page_size=self._page_size,
             debug_http=self._debug_http,
         )

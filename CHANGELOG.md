@@ -52,6 +52,16 @@ than that.
 - **Sites were renamed** to `nyc`, `tlv`, `bat-yam` and `five`, and a
   Cisco server whose name carries no site token now falls back to its
   service profile's org DN.
+- **The Intersight collector no longer verifies TLS certificates, ever.**
+  `INVENTORY_INTERSIGHT_CA_BUNDLE` is gone, and there is no verify flag —
+  `IntersightClient` now hardcodes `verify=False` unconditionally. This
+  applies to every Intersight connection this codebase makes, including a
+  real production SaaS or on-prem tenant, not only a lab appliance. An
+  operator who was relying on `INVENTORY_INTERSIGHT_CA_BUNDLE` for a
+  trusted internal CA loses certificate verification with no setting to
+  restore it — reintroducing one is a small, self-contained change; see
+  `docs/adr/0017-intersight-collector.md`'s 2026-08-31 update for the
+  shape it had before this.
 
 ### New features
 

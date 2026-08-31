@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import re
+import ssl
 from typing import Any
 
 import httpx
@@ -329,6 +330,25 @@ def test_a_bare_host_is_accepted_and_lowercased() -> None:
     the signature covers must not.
     """
     assert validate_endpoint("  Appliance.Example.COM ") == "appliance.example.com"
+
+
+# --- TLS certificate verification is unconditionally off ----------------
+
+
+def test_certificate_verification_is_unconditionally_disabled() -> None:
+    """The one invariant this module must never regress on: nothing in
+    `IntersightClient`'s signature can turn certificate verification back
+    on — see its docstring and docs/adr/0017's 2026-08-31 update.
+
+    Asserted against the real `httpx` transport's SSL context rather than
+    a `MockTransport` (which never builds one, so `verify=` would have no
+    observable effect through it) — this is the one test in the module
+    that constructs a client without an injected transport, so a change
+    to how `verify=False` is wired would actually fail it.
+    """
+    client = IntersightClient(endpoint="intersight.com", key_id="a/b/c", private_key_pem=_KEY)
+    pool = client._client._transport._pool  # type: ignore[attr-defined]
+    assert pool._ssl_context.verify_mode == ssl.CERT_NONE
 
 
 # --- what must never be logged ----------------------------------------

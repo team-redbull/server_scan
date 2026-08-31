@@ -206,7 +206,6 @@ def _intersight_provider(
         api_key_pem=credentials.password,
         connect_timeout=timeout_seconds,
         read_timeout=settings.intersight_read_timeout_seconds,
-        ca_bundle=settings.intersight_ca_bundle or None,
         page_size=settings.intersight_page_size,
         management_modes=modes,
         run_budget_seconds=settings.intersight_run_budget_seconds,

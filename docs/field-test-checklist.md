@@ -54,14 +54,13 @@ deliberately not supported and will say so.
 path. The collector builds the URL itself and rejects anything else up
 front, because the `Host` it signs has to match the one it sends.
 
-If your appliance presents a certificate from an internal CA, add:
-
-```bash
-export INVENTORY_INTERSIGHT_CA_BUNDLE=/path/to/ca-bundle.crt
-```
-
-TLS verification is never disabled — there is no flag for it. Import the
-CA instead.
+**TLS certificate verification is unconditionally disabled** for this
+collector — a deliberate, explicit user decision (2026-08-31). There is
+no `INVENTORY_INTERSIGHT_CA_BUNDLE` or verify flag to set; the signed
+request and its response go to whatever answers at
+`INVENTORY_INTERSIGHT_IP`, in every environment including a production
+tenant. See `app.infrastructure.providers.intersight.client.
+IntersightClient`.
 
 ---
 

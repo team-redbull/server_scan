@@ -18,6 +18,11 @@ There is no key file to mount. Intersight signs each request with an API
 key whose PEM private half rides in the shared collector Secret like any
 other credential, because the signing library accepts the key as a
 string.
+
+This collector never verifies the endpoint's TLS certificate — no CA
+bundle to mount, no verify flag to set. Unconditional, by explicit user
+decision. See app.infrastructure.providers.intersight.client.
+IntersightClient.
 */ -}}
 {{- if .Values.collectors.intersight.enabled }}
 apiVersion: batch/v1
@@ -65,10 +70,6 @@ spec:
                   value: {{ .Values.collectors.intersight.readTimeoutSeconds | quote }}
                 - name: INVENTORY_INTERSIGHT_RUN_BUDGET_SECONDS
                   value: {{ .Values.collectors.intersight.runBudgetSeconds | quote }}
-                {{- if .Values.collectors.intersight.caBundleConfigMap }}
-                - name: INVENTORY_INTERSIGHT_CA_BUNDLE
-                  value: /etc/intersight-ca/ca-bundle.crt
-                {{- end }}
                 - name: INVENTORY_MONGO_URI
                   valueFrom:
                     secretKeyRef:
@@ -87,12 +88,6 @@ spec:
                 # the private key isn't readable in the pod spec.
                 - secretRef:
                     name: {{ .Values.collectors.existingSecret | default (printf "%s-collector-credentials" .Release.Name) }}
-              {{- if .Values.collectors.intersight.caBundleConfigMap }}
-              volumeMounts:
-                - name: intersight-ca
-                  mountPath: /etc/intersight-ca
-                  readOnly: true
-              {{- end }}
               resources:
                 {{- toYaml .Values.collectors.intersight.resources | nindent 16 }}
               securityContext:
@@ -101,10 +96,4 @@ spec:
                   drop: ["ALL"]
                 readOnlyRootFilesystem: true
                 runAsNonRoot: true
-          {{- if .Values.collectors.intersight.caBundleConfigMap }}
-          volumes:
-            - name: intersight-ca
-              configMap:
-                name: {{ .Values.collectors.intersight.caBundleConfigMap }}
-          {{- end }}
 {{- end }}

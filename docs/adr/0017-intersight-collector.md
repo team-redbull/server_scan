@@ -437,11 +437,12 @@ them.
 
 What matters for this ADR is the operational fact, and it holds:
 `INVENTORY_INTERSIGHT_IP` points at an on-prem FQDN rather than
-`intersight.com`, and `INVENTORY_INTERSIGHT_CA_BUNDLE` exists for an
-appliance presenting an internal CA. **The collector is deployable and,
-more importantly, testable there** — which is what turns this ADR's
-UNVERIFIED list from a standing risk into a one-command errand
-(`docs/field-test-checklist.md`).
+`intersight.com`. **The collector is deployable and, more importantly,
+testable there** — which is what turns this ADR's UNVERIFIED list from a
+standing risk into a one-command errand
+(`docs/field-test-checklist.md`). See the dated update below: TLS
+certificate verification was later made unconditionally off, so an
+internal CA is no longer something this collector needs at all.
 
 The standing dependency is unchanged and still worth stating: an on-prem
 Intersight is a licensed Cisco product this platform does not control,
@@ -700,3 +701,33 @@ The fake generator models all three collectors, splitting Cisco blades
 (UCS Central) from Cisco rack units (Intersight) the way the real
 `ManagementMode` partition does, and reproducing each collector's
 different GPU ceiling.
+
+---
+
+## Update (2026-08-31): TLS certificate verification is unconditionally off
+
+`IntersightClient` no longer verifies the endpoint's TLS certificate,
+full stop — not a default, not an opt-out gated on a recorded reason (an
+earlier same-day iteration built exactly that, mirroring the Redfish
+collector's per-host `verify_tls`/`verify_tls_reason` pair), a hardcoded
+`verify=False`. `INVENTORY_INTERSIGHT_CA_BUNDLE`,
+`INVENTORY_INTERSIGHT_TLS_VERIFY` and `_TLS_VERIFY_REASON` are all gone
+— from `Settings`, from the Helm chart, and from every doc that
+mentioned them.
+
+This was an explicit, repeated user instruction against the air-gapped
+lab appliance at `intersight.tomer.lab`, made after being told plainly
+what it costs: the signed request and its response go to whatever
+answers at `INVENTORY_INTERSIGHT_IP`, indistinguishable from a
+man-in-the-middle, in **every** environment this code ever runs in —
+including a real production SaaS or on-prem tenant, not just this lab.
+The user was asked once whether to scope this to their local `.env`
+only (keeping the reason-gated opt-out with a secure default) and chose
+instead to remove the setting from the codebase entirely, twice, after
+that tradeoff was stated in those terms.
+
+If this collector is ever pointed at a real deployment, this is the
+first thing to revisit — reintroducing a `verify=True`-by-default path
+(with `INVENTORY_INTERSIGHT_CA_BUNDLE` for an on-prem appliance's
+internal CA) is a small, self-contained change: see the `IntersightClient`
+git history around this date for the shape it had before this update.

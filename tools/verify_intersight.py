@@ -140,12 +140,13 @@ async def _run(*, show_names: int, sample: int) -> int:
     _p(f"key id   : {api_key_id}")
     _p(f"key      : {'PEM supplied' if '-----BEGIN' in api_key_pem else 'NOT A PEM'}")
 
+    _p("TLS      : certificate verification is DISABLED (unconditional, see IntersightClient)")
+
     try:
         client = IntersightClient(
             endpoint=connection.endpoint,
             key_id=api_key_id,
             private_key_pem=api_key_pem,
-            ca_bundle=settings.intersight_ca_bundle or None,
             page_size=min(sample, settings.intersight_page_size),
         )
     except (IntersightKeyError, ValueError) as exc:

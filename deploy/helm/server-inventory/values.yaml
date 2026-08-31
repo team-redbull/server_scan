@@ -305,10 +305,10 @@ collectors:
     # Central at all.
     managementModes: "Intersight,IntersightStandalone"
 
-    # ConfigMap with a `ca-bundle.crt` key, for an on-prem appliance
-    # using an internal CA. Empty uses the image's system trust store,
-    # which is correct for the public SaaS endpoint.
-    caBundleConfigMap: ""
+    # No CA bundle setting here: the collector never verifies the
+    # endpoint's TLS certificate, unconditionally, by explicit user
+    # decision. See app.infrastructure.providers.intersight.client.
+    # IntersightClient.
 
     # `$top`. 1000 is the API's documented maximum. Lower it only if a
     # tenant turns out to throttle — Cisco publishes no rate limit, so
