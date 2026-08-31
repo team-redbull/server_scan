@@ -105,8 +105,47 @@ target-version = "py312"
 src = ["backend", "tests", "tools"]
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B", "C4", "SIM", "RUF", "ASYNC", "S"]
+select = [
+    "E",
+    "F",
+    "I",
+    "UP",
+    "B",
+    "C4",
+    "SIM",
+    "RUF",
+    "ASYNC",
+    "S",
+    # ANN, code by code rather than the whole prefix. These are the
+    # annotation-completeness ratchet: ty has no equivalent of mypy's
+    # `disallow_untyped_defs` and cannot grow one (it infers unannotated
+    # bodies instead of rejecting them), so when mypy goes, this is what
+    # keeps every function annotated. Listing the codes rather than "ANN"
+    # means a future ruff release cannot add a rule to the gate on its own.
+    # ANN401 (`Any` in an annotation) is deliberately absent: `Any` at an
+    # untyped-vendor-SDK boundary is this codebase's documented design, and
+    # selecting it would flag 37 such sites. See ADR-0019.
+    "ANN001",
+    "ANN002",
+    "ANN003",
+    "ANN201",
+    "ANN202",
+    "ANN204",
+    "ANN205",
+    "ANN206",
+]
 ignore = ["S101"]  # allow assert in tests
+
+[tool.ruff.lint.flake8-annotations]
+# Set explicitly rather than inherited, for the same reason the ty rule
+# severities are: an upstream default flip must not be able to move this
+# gate silently. Every one of these is ruff's current default; writing them
+# down is what makes that a decision instead of an accident.
+allow-star-arg-any = false
+ignore-fully-untyped = false
+mypy-init-return = false
+suppress-dummy-args = false
+suppress-none-returning = false
 
 [tool.ruff.lint.per-file-ignores]
 # S101: assert is the point of a test. S105/S106: literal strings that look

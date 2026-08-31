@@ -6,6 +6,7 @@ found a cache-stampede tail-latency problem on `GET /api/v1/servers`.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 
 import pytest
 
@@ -44,7 +45,7 @@ async def test_concurrent_identical_keys_share_one_computation() -> None:
 async def test_distinct_keys_do_not_block_each_other() -> None:
     call_counts: dict[str, int] = {"a": 0, "b": 0}
 
-    async def make_compute(key: str):
+    async def make_compute(key: str) -> Callable[[], Awaitable[str]]:
         async def compute() -> str:
             call_counts[key] += 1
             await asyncio.sleep(0.01)

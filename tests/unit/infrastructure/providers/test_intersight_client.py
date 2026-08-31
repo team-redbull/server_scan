@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import re
 import ssl
+from collections.abc import Callable
 from typing import Any
 
 import httpx
@@ -52,12 +53,13 @@ def _pem() -> str:
 _KEY = _pem()
 
 
-def _client(handler, **kwargs: Any) -> IntersightClient:  # type: ignore[no-untyped-def]
+def _client(handler: Callable[[httpx.Request], httpx.Response], **kwargs: Any) -> IntersightClient:
     """
     A client wired to a scripted transport.
 
     Args:
-        handler: An `httpx.MockTransport` request handler.
+        handler (Callable[[httpx.Request], httpx.Response]): An
+            `httpx.MockTransport` request handler.
         **kwargs: Overrides for the client constructor.
 
     Returns:
@@ -174,7 +176,9 @@ async def test_a_filter_is_sent_only_when_there_is_one() -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_throttled_request_is_retried_and_then_succeeds(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+async def test_a_throttled_request_is_retried_and_then_succeeds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Cisco publishes no rate limit, so 429 is expected rather than
     exceptional and must not end the run.
     """
@@ -202,7 +206,9 @@ async def test_a_throttled_request_is_retried_and_then_succeeds(monkeypatch) -> 
 
 
 @pytest.mark.asyncio
-async def test_persistent_throttling_ends_with_an_actionable_error(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+async def test_persistent_throttling_ends_with_an_actionable_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Spending the whole budget is reported as throttling specifically,
     not as a generic HTTP failure.
     """

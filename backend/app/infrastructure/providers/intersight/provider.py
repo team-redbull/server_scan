@@ -141,7 +141,9 @@ class _Joins:
         self.cards: dict[str, list[Mapping[str, Any]]] | None = None
         self.management: dict[str, Mapping[str, Any]] | None = None
 
-    def for_server(self, moid: str, table: dict[str, list[Mapping[str, Any]]] | None):  # type: ignore[no-untyped-def]
+    def for_server(
+        self, moid: str, table: dict[str, list[Mapping[str, Any]]] | None
+    ) -> list[Mapping[str, Any]] | None:
         """
         One server's rows from a table, preserving the unread distinction.
 

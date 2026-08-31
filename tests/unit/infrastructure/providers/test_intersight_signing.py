@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import base64
 import re
+from collections.abc import Callable
 
 import pytest
 from cryptography.hazmat.primitives import hashes, serialization
@@ -155,7 +156,9 @@ def test_date_and_digest_come_from_the_clock_and_an_empty_body() -> None:
 
 
 @pytest.mark.parametrize("pem_factory", [_rsa_pem, _ec_pem], ids=["rsa-v2", "ec-v3"])
-def test_the_signature_verifies_against_its_own_public_key(pem_factory) -> None:  # type: ignore[no-untyped-def]
+def test_the_signature_verifies_against_its_own_public_key(
+    pem_factory: Callable[[], str],
+) -> None:
     """The cryptographic half, for both API key generations.
 
     An RSA key must sign PKCS1v15 — the library default is PSS, which
