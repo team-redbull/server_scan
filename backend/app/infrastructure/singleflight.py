@@ -46,13 +46,11 @@ async def coalesce[T](key: str, compute: Callable[[], Awaitable[T]]) -> T:
     """
     existing = _inflight.get(key)
     if existing is not None:
-        # `_inflight` is one dict shared by every caller, so its futures are
-        # `Future[object]` and this narrowing back to `T` rests on an
+        # `_inflight` is one dict shared by every caller, so its futures
+        # are `Future[object]` and this narrowing back to `T` rests on an
         # invariant the type system cannot see: a given key always carries
-        # the same computation. Both checkers are correctly unconvinced.
-        # mypy's comment must come first — ty reads either position, mypy
-        # only the leading one.
-        return await existing  # type: ignore[return-value]  # ty: ignore[invalid-return-type]
+        # the same computation. ty is correctly unconvinced.
+        return await existing  # ty: ignore[invalid-return-type]
 
     future: asyncio.Future[object] = asyncio.get_running_loop().create_future()
     _inflight[key] = future

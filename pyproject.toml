@@ -56,7 +56,6 @@ dev = [
     "pytest-cov==6.0.0",
     "testcontainers[mongodb,redis]==4.14.2",
     "ruff==0.14.0",
-    "mypy==1.14.1",
     # Exact `==`, never a range: ty is beta software on 0.0.x versioning and
     # Astral states plainly that diagnostics may change between any two
     # releases. A range would let a `uv sync` fail the gate with no change on
@@ -65,7 +64,16 @@ dev = [
     # diagnostic after a bump is ty changing, not this codebase regressing.
     # See docs/adr/0019-ty-replaces-mypy.md.
     "ty==0.0.76",
-    "types-regex",
+    # Still required after mypy's removal: ty consumes typeshed stub
+    # packages exactly as mypy did, and without this one the `Pattern`
+    # subscript in `app.domain.services.regex_engine` is unresolvable.
+    #
+    # Pinned exactly, unlike before. A stub package can change a type
+    # checker's diagnostics precisely the way a checker version can, and
+    # this one publishes a fresh datestamped release most weeks — an
+    # unrelated `uv sync` bumped it mid-migration, which is the same
+    # failure mode the `ty` pin above exists to prevent.
+    "types-regex==2026.8.31.20260831",
 ]
 
 [tool.uv]
@@ -105,10 +113,10 @@ markers = [
 
 [tool.ruff]
 line-length = 100
-# The floor (3.12), same reasoning as `[tool.mypy]`'s `python_version`
-# below: targeting the CI interpreter (3.13) would let `UP` (pyupgrade)
-# suggest a 3.13-only construct that breaks the 3.12 path this project
-# also supports.
+# The floor (3.12), same reasoning as `[tool.ty.environment]`'s
+# `python-version` below: targeting the CI interpreter (3.13) would let
+# `UP` (pyupgrade) suggest a 3.13-only construct that breaks the 3.12
+# path this project also supports.
 target-version = "py312"
 src = ["backend", "tests", "tools"]
 
@@ -127,8 +135,8 @@ select = [
     # ANN, code by code rather than the whole prefix. These are the
     # annotation-completeness ratchet: ty has no equivalent of mypy's
     # `disallow_untyped_defs` and cannot grow one (it infers unannotated
-    # bodies instead of rejecting them), so when mypy goes, this is what
-    # keeps every function annotated. Listing the codes rather than "ANN"
+    # bodies instead of rejecting them), so with mypy gone this is the
+    # only thing keeping every function annotated. Listing the codes rather than "ANN"
     # means a future ruff release cannot add a rule to the gate on its own.
     # ANN401 (`Any` in an annotation) is deliberately absent: `Any` at an
     # untyped-vendor-SDK boundary is this codebase's documented design, and
@@ -162,37 +170,21 @@ suppress-none-returning = false
 # shuffling of test fixtures, never for anything security-sensitive.
 "tests/**" = ["S101", "S105", "S106", "S311"]
 
-[tool.mypy]
-# The floor of `requires-python` (3.12), not the CI/production interpreter
-# (3.13) — type-checking against the floor is what actually catches a
-# 3.13-only stdlib/typing feature creeping in and silently breaking the
-# air-gapped 3.12 path this supports.
-python_version = "3.12"
-strict = true
-mypy_path = "backend"
-explicit_package_bases = true
-plugins = ["pydantic.mypy"]
-
-[[tool.mypy.overrides]]
-module = ["testcontainers.*"]
-ignore_missing_imports = true
-
-[[tool.mypy.overrides]]
-# Neither Cisco SDK ships type stubs or is py.typed, and no stub-only
-# `types-ucsmsdk`/`types-ucscsdk` package exists on PyPI.
-module = ["ucsmsdk.*", "ucscsdk.*"]
-ignore_missing_imports = true
-
 [tool.ty.environment]
-# Both settings mirror `[tool.mypy]` deliberately, so the two checkers see
-# the same code the same way while they run side by side.
-#
-# ty would infer 3.12 on its own from `project.requires-python`'s minimum,
-# which is the right answer — it is written out anyway so that widening
-# `requires-python` later cannot silently move what this gate checks.
+# The floor of `requires-python`, not the CI/production interpreter (3.13).
+# Checking against the floor is what catches a 3.13-only stdlib or typing
+# feature creeping in and silently breaking the air-gapped 3.12 path this
+# platform also supports. ty would infer 3.12 on its own from
+# `project.requires-python`'s minimum, which is the right answer — it is
+# written out anyway so that widening `requires-python` later cannot
+# silently move what this gate checks.
 python-version = "3.12"
-# The equivalent of mypy's `mypy_path`/`explicit_package_bases`: `app.*` is
-# first-party and lives under `backend/`, not at the repo root.
+# `app.*` is first-party and lives under `backend/`, not at the repo root.
+# ty needs no counterpart to the `ignore_missing_imports` overrides that
+# used to sit here for `testcontainers`, `ucsmsdk` and `ucscsdk`: it
+# resolves an untyped dependency from its installed source rather than
+# giving up on it, which is how it caught a bad `ucsmsdk` call that was
+# invisible under those overrides. See ADR-0019.
 root = ["backend"]
 
 [tool.ty.rules]

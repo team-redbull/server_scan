@@ -30,7 +30,16 @@ than that.
 
 ## Unreleased
 
-*Next version will be **v5.0.0** — this range contains breaking changes.*
+> **This heading is wrong and the entries under it are not.** Releases here
+> are unattended (ADR-0010 tags and publishes on every push to `main`), so
+> the "cut a version, open a fresh `## Unreleased`" step in the rules above
+> has no moment at which anyone performs it. The result is that entries pile
+> up under `## Unreleased` *after* they have shipped: the `SiteCode` break
+> below went out in **v7.0.0** on 2026-08-29, and the repository is on
+> **v8.2.0**. Fixing this properly means either splitting this section
+> across the tags that actually carried it, or having the release job
+> rewrite the heading when it tags. Until one of those happens, read this
+> section as "recent", not as "unreleased".
 
 ### Breaking
 
@@ -109,28 +118,37 @@ than that.
   are *not* carried forward and cannot be until the provider protocol can
   say "could not read" for them.
 
-### Contributor-facing
+### Contributor-facing — **mypy is gone; ty is the type checker**
 
-Nothing to deploy here — this changes what the build checks, not what it
-ships. The runtime images are unaffected, and `requirements.txt` /
-`pylock.toml` are unchanged, since both are exported `--no-dev`.
+Nothing to deploy. This changes what the build checks, not what it ships:
+the runtime images are unaffected, and `requirements.txt` / `pylock.toml`
+are unchanged, since both are exported `--no-dev` and neither checker was
+ever in them.
 
-- **The local gate is unchanged in shape but has a fourth step in CI**:
-  `uv run ty check backend/app tools` now runs alongside mypy, marked
-  `continue-on-error` so it cannot fail a build. mypy remains the gate.
-  ty is a pinned dev dependency (`ty==0.0.76`), not a GitHub Action, so
-  `uv sync --all-groups` is all that is needed to run it locally.
-- **Annotations are now enforced by ruff**, via `ANN001`–`ANN206` (not
-  `ANN401`). This is the same contract mypy's `disallow_untyped_defs` has
-  enforced all along, moved somewhere that will outlive mypy — ty has no
-  equivalent rule and cannot grow one. It applies to `tests/` too, which
-  mypy never checked.
-- Suppression comments will need both forms while both checkers run: ty
-  does not understand `# type: ignore[<mypy-code>]`. Write
-  `# type: ignore[x]  # ty: ignore[y]`, mypy's first.
+It does change what a contributor has to do, so:
 
-See `docs/adr/0019-ty-replaces-mypy.md` for the measurements, the rules
-that are switched off and why, and what would trigger a rollback.
+- **The gate's third step is now `uv run ty check backend/app tools`.**
+  Full local gate:
+  `uv run ruff check . && uv run ruff format --check . && uv run ty check backend/app tools`.
+  `uv sync --all-groups` installs everything; ty is a pinned dev
+  dependency (`ty==0.0.76`), not a GitHub Action. Cold type-checking in
+  CI went from ~15 s to 0.3 s.
+- **Suppression comments are `# ty: ignore[rule-name]`.** ty honours a
+  *bare* `# type: ignore` but not a coded one — it does not know mypy's
+  rule codes — so an old `# type: ignore[return-value]` silently
+  suppresses nothing.
+- **Annotations are enforced by ruff**, via `ANN001`–`ANN206` (not
+  `ANN401`). Same contract mypy's `disallow_untyped_defs` enforced, moved
+  somewhere that outlives mypy: ty has no equivalent rule and cannot grow
+  one. It covers `tests/` too, which mypy never checked.
+- **ty is beta software on 0.0.x and is pinned exactly** for that reason,
+  as is `types-regex` now. Expect diagnostics to move when either is
+  bumped on the quarterly pass — a new error after a bump is the tool
+  changing, not a regression in this codebase.
+
+`docs/adr/0019-ty-replaces-mypy.md` has the measurements, why ty over
+Pyrefly and Pyright, the six rules switched off and why, the three mypy
+false positives this surfaced, and the rollback triggers.
 
 ### Documentation
 

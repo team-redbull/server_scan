@@ -1,7 +1,9 @@
 # ADR-0019: ty replaces mypy as this repository's type checker
 
-**Status:** Accepted 2026-08-31. Phases 1–3 implemented; the gate flip
-(Phase 4) is pending its exit criterion, stated below.
+**Status:** Accepted 2026-08-31, fully implemented 2026-09-01. mypy is
+gone; ty is the gate. The exit criterion for the flip was shortened
+from three green runs to one by the repository owner — see "Staged
+rollout" for what that traded away.
 
 **Relates to** `docs/adr/0013-supply-chain-pinning-without-dependabot.md`
 (nothing here updates itself, so everything here is pinned and enters the
@@ -157,7 +159,7 @@ summary of this change:
    `Server.model_config` sets `populate_by_name`, so the alias is valid;
    the pydantic plugin only reads `model_config` when it is a
    `ConfigDict(...)` call, not the plain dict literal this model uses.
-   Suppressed narrowly in `ingest.py`, to be deleted with mypy itself.
+   Was suppressed narrowly in `ingest.py`; deleted with mypy.
 3. The pydantic plugin's silence on wrong-typed field construction —
    not an error it emits, but coverage it is widely assumed to provide
    and does not, here.
@@ -296,29 +298,53 @@ remove mypy while it is the only thing enforcing annotations.**
 2. **ty added alongside mypy**, pinned, configured; mypy still the gate.
    The two genuine findings fixed. Both checkers pass. — landed.
 3. **ty in CI, non-blocking** (`continue-on-error: true`), as a fourth
-   step in the `lint` job. mypy still the gate. — landed.
+   step in the `lint` job. mypy still the gate. — landed, v8.2.0.
 4. **Flip the gate**: remove `continue-on-error`, remove the mypy step,
    the `mypy==1.14.1` dev dependency, `[tool.mypy]`, its two overrides,
    and the two mypy-only suppressions this ADR names. Regenerate the
    air-gap exports. Carries a `BREAKING CHANGE:` footer — CI reads
    Conventional Commits to version the published images, and changing
-   the gate changes the contributor contract. — **pending.**
-5. **Convention** — CLAUDE.md, README, docs and scripts updated to the ty
-   command. — pending, lands with 4.
+   the gate changes the contributor contract. — landed.
+5. **Convention** — CLAUDE.md, README and docs updated to the ty command.
+   — landed with 4.
 
-**Exit criterion for step 3 → 4: three consecutive green `lint` runs on
-`main`.**
+**The exit criterion for step 3 → 4 was three consecutive green `lint`
+runs on `main`. It was shortened to one, deliberately, by the repository
+owner.** That is recorded rather than glossed because the criterion is
+still the right default for anyone repeating this.
 
-That is days, not quarters, and it is deliberately not "green across a few
-ty releases" — with an exact `==` pin, ty *cannot* change underneath us,
-so waiting out releases would be insuring against a risk the pin already
-eliminated. What the pin does **not** cover is that ty resolves types from
-installed source rather than from stubs alone. That is how it found the
-`ucsmsdk` call error, and it means ty's diagnostics are a function of what
-is actually in the environment — and CI's venv is not a developer's
-laptop. Three green runs is what turns "clean here" into evidence for
-"clean there". A failure inside that window is a finding to investigate,
-not grounds to abandon the migration.
+The reasoning for three was never "wait out ty releases" — with an exact
+`==` pin ty cannot change underneath us, so that would insure against a
+risk the pin already eliminated. It was the one thing the pin does not
+cover: ty resolves types from *installed source* rather than from stubs
+alone, which is how it found the `ucsmsdk` call error, and which makes its
+diagnostics a function of what is actually in the environment. CI's venv
+is built fresh from `uv.lock`; a developer's is not.
+
+The first green run answered exactly that question — CI's `ty` step
+reported `All checks passed!` in **0.3 s** against a freshly resolved
+environment, matching local byte for byte. Runs 2 and 3 would have been
+confirming stability rather than testing a hypothesis, which is the
+weaker half of the evidence. **What was given up is the chance to catch a
+non-deterministic difference** — a resolver picking a different transitive
+version on a later run, say. If one appears, it will now show up as a red
+build rather than as a warning annotation, which is a louder failure but
+a later one. §8's rollback triggers are unchanged and still apply.
+
+### 6b. Stub packages are a checker dependency too
+
+Removing mypy raised the question of whether `types-regex` was a mypy
+artifact. It is not: **ty consumes typeshed stub packages exactly as mypy
+did**, and without it the `Pattern` subscript in
+`app.domain.services.regex_engine` is unresolvable. It stays.
+
+It was also the one *unpinned* dev dependency, and an unrelated `uv sync`
+during this work bumped it from `2026.7.19.20260720` to
+`2026.8.31.20260831` on its own. That is the same failure mode the `ty`
+pin exists to prevent — a stub package can move a type checker's
+diagnostics precisely the way a checker version can, and this one
+publishes a fresh datestamped release most weeks. It is now pinned
+exactly, and joins ty on the quarterly pass.
 
 ### 7. Air-gap
 

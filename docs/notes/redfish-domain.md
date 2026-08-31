@@ -285,12 +285,12 @@ Three more, each independently disqualifying-ish:
   POST's response is exactly where `X-Auth-Token` lives. Requests are
   redacted; responses are not. Debug logging leaks the session token
   verbatim.
-- **No `py.typed`**, and **no `types-redfish` on PyPI**. Under
-  `mypy --strict` it is an `Any` hole needing an `ignore_missing_imports`
-  override plus our own Protocol wrappers — which is most of the code we
-  would have written anyway. (ty, which is replacing mypy — ADR-0019 —
-  narrows that hole: it type-checks an untyped dependency from its
-  installed source, and caught a bad `ucsmsdk` call mypy could not see.)
+- **No `py.typed`**, and **no `types-redfish` on PyPI**. Under the
+  `mypy --strict` this repo used to run that was an `Any` hole needing
+  an `ignore_missing_imports` override plus our own Protocol wrappers —
+  which is most of the code we would have written anyway. ty (ADR-0019)
+  narrows the hole: it type-checks an untyped dependency from its
+  installed source, and caught a bad `ucsmsdk` call mypy could not see.
 
 Its async client is **aiohttp**-based, so "async" means adding a second
 compiled HTTP stack (aiohttp + multidict + yarl) beside the httpx already

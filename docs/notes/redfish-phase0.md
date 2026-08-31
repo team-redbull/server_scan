@@ -342,7 +342,6 @@ uv run python -m tools.seed_inventory --count 1000 --seed 42
 uv run pytest -q
 uv run ruff check .
 uv run ruff format --check .
-uv run mypy backend/app tools
 uv run ty check backend/app tools
 
 # frontend, only if touched
@@ -362,13 +361,12 @@ Constraints the gate imposes on new code:
   `E,F,I,UP,B,C4,SIM,RUF,ASYNC,S` — **`S` is bandit**, so `verify=False`,
   hardcoded-looking strings and HTTP calls without a timeout will all be
   flagged and need a justified `# noqa` or a different design.
-- `mypy --strict` against **Python 3.12** (the floor, not CI's 3.13), with
-  the pydantic plugin. An untyped third-party library needs an
-  `ignore_missing_imports` override in `pyproject.toml`, as `ucsmsdk.*`
-  and `ucscsdk.*` already have. **mypy is being replaced by ty**
-  (ADR-0019) — ty targets the same 3.12 floor, needs no plugin for
-  pydantic, and needs no override for an untyped library because it
-  resolves types from the installed source instead of giving up.
+- `ty` against **Python 3.12** (the floor, not CI's 3.13). It replaced
+  `mypy --strict` in ADR-0019 and needs neither a plugin for pydantic
+  nor an `ignore_missing_imports` override for an untyped third-party
+  library: it resolves such a library from its installed source rather
+  than giving up on it. The `ucsmsdk.*`/`ucscsdk.*` overrides that used
+  to be required are gone.
 - pytest markers `unit` / `integration`; `asyncio_mode = "auto"`;
   `pythonpath = ["backend", "."]`.
 - Dependencies are pinned to **exact** versions, chosen to match "what

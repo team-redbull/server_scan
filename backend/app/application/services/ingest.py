@@ -557,14 +557,7 @@ class IngestService:
             ps.profile_dn, self._sites
         )
 
-        # `Server.model_config` sets `populate_by_name`, so `_id` (the Mongo
-        # alias) and `id` (the field) are both valid here. mypy's pydantic
-        # plugin reads `model_config` only when it is a `ConfigDict(...)`
-        # call, not the plain dict literal this model uses, so it does not
-        # see that and reports `id` as missing. ty gets it right, and the
-        # `**carried_forward` splat removed below had been suppressing the
-        # check entirely. Delete this with mypy itself — see ADR-0019.
-        server = Server(  # type: ignore[call-arg]
+        server = Server(
             _id=server_id,
             name=ps.name,
             name_normalized=normalize_text(ps.name),
