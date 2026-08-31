@@ -57,6 +57,14 @@ dev = [
     "testcontainers[mongodb,redis]==4.14.2",
     "ruff==0.14.0",
     "mypy==1.14.1",
+    # Exact `==`, never a range: ty is beta software on 0.0.x versioning and
+    # Astral states plainly that diagnostics may change between any two
+    # releases. A range would let a `uv sync` fail the gate with no change on
+    # our side — the same failure mode ADR-0013's SHA pins exist to prevent.
+    # Bumping it is a deliberate act on the quarterly pass, and a new
+    # diagnostic after a bump is ty changing, not this codebase regressing.
+    # See docs/adr/0019-ty-replaces-mypy.md.
+    "ty==0.0.76",
     "types-regex",
 ]
 
@@ -174,3 +182,39 @@ ignore_missing_imports = true
 # `types-ucsmsdk`/`types-ucscsdk` package exists on PyPI.
 module = ["ucsmsdk.*", "ucscsdk.*"]
 ignore_missing_imports = true
+
+[tool.ty.environment]
+# Both settings mirror `[tool.mypy]` deliberately, so the two checkers see
+# the same code the same way while they run side by side.
+#
+# ty would infer 3.12 on its own from `project.requires-python`'s minimum,
+# which is the right answer — it is written out anyway so that widening
+# `requires-python` later cannot silently move what this gate checks.
+python-version = "3.12"
+# The equivalent of mypy's `mypy_path`/`explicit_package_bases`: `app.*` is
+# first-party and lives under `backend/`, not at the repo root.
+root = ["backend"]
+
+[tool.ty.rules]
+# Only rules this project has actually reasoned about are written down; the
+# rest ride on ty's defaults. That is a deliberate line, not laziness — see
+# ADR-0019. The exact version pin is what stops defaults moving underneath
+# us, and these four are pinned specifically because ty 0.0.76's published
+# rules reference disagrees with the shipped binary about their default
+# severity. Trusting the docs here would have put 15 findings in the gate.
+#
+# On: cheap, currently clean, and both catch a real class of mistake.
+unused-awaitable = "error"
+blanket-ignore-comment = "error"
+# Off: these fire wherever `Any` reaches a declared type. On this codebase
+# that is 15 sites, 13 of which are `Any` arriving from an untyped vendor
+# SDK or from Starlette's `request.state`/`app.state` — deliberate, and
+# documented as such — and 2 of which are ty 0.0.76 typing pydantic's
+# `model_dump()` as `Unknown`. mypy caught none of them either, so enabling
+# these would cost 15 suppressions and buy no coverage the gate had before.
+unsound-return-statement = "ignore"
+unsound-assignment = "ignore"
+missing-type-argument = "ignore"
+# Off: PEP 698 `@override` is a convention this repo has not adopted. It is
+# a style question, not a correctness one, and adopting it is its own change.
+missing-override-decorator = "ignore"
