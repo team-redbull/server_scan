@@ -343,6 +343,7 @@ uv run pytest -q
 uv run ruff check .
 uv run ruff format --check .
 uv run mypy backend/app tools
+uv run ty check backend/app tools
 
 # frontend, only if touched
 cd frontend && npm run lint && npm run typecheck && npm run test -- --run && npm run build
@@ -364,7 +365,10 @@ Constraints the gate imposes on new code:
 - `mypy --strict` against **Python 3.12** (the floor, not CI's 3.13), with
   the pydantic plugin. An untyped third-party library needs an
   `ignore_missing_imports` override in `pyproject.toml`, as `ucsmsdk.*`
-  and `ucscsdk.*` already have.
+  and `ucscsdk.*` already have. **mypy is being replaced by ty**
+  (ADR-0019) — ty targets the same 3.12 floor, needs no plugin for
+  pydantic, and needs no override for an untyped library because it
+  resolves types from the installed source instead of giving up.
 - pytest markers `unit` / `integration`; `asyncio_mode = "auto"`;
   `pythonpath = ["backend", "."]`.
 - Dependencies are pinned to **exact** versions, chosen to match "what

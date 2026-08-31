@@ -75,16 +75,44 @@ is a real mistake, not a style preference.
    what else is there to make this production and really run?").
 7. **Every time you add or edit a file, run the full local check before
    calling the work done — not just a lint pass.** CI gates on `ruff
-   check .` *and* `ruff format --check .` *and* `mypy` as three separate
-   steps (`.github/workflows/ci.yml`'s `lint` job); running only `ruff
-   check` and skipping `ruff format --check` has already shipped a commit
-   that failed CI on formatting alone even though lint and types were
-   both clean. Run the real gate locally, on every touched file, before
+   check .` *and* `ruff format --check .` *and* `mypy` as separate steps
+   (`.github/workflows/ci.yml`'s `lint` job); running only `ruff check`
+   and skipping `ruff format --check` has already shipped a commit that
+   failed CI on formatting alone even though lint and types were both
+   clean. Run the real gate locally, on every touched file, before
    considering a change finished:
-   `uv run ruff check . && uv run ruff format --check . && uv run mypy backend/app tools`
+   `uv run ruff check . && uv run ruff format --check . && uv run mypy backend/app tools && uv run ty check backend/app tools`
    (add `cd frontend && npm run lint && npm run typecheck && npm run build`
    for any frontend change). If `ruff format --check` fails, run
    `uv run ruff format .` and re-verify — don't hand-fix formatting.
+
+   **Both type checkers must pass, and they check different things.**
+   This is a migration in progress, not a permanent arrangement —
+   `docs/adr/0019-ty-replaces-mypy.md` has the measurements and the plan.
+   Until the flip:
+
+   - **mypy is the CI gate.** ty runs in CI as a fourth `lint` step with
+     `continue-on-error: true`, so it cannot fail a build yet. Locally,
+     treat both as required — the whole point of the staged rollout is
+     that ty is already clean, and letting it rot would waste the window.
+   - **A suppression needs both forms**, mypy's first:
+     `# type: ignore[return-value]  # ty: ignore[invalid-return-type]`.
+     ty honours a *bare* `# type: ignore` but not a coded one — it does
+     not know mypy's rule codes — and mypy only reads a `type: ignore`
+     that leads the comment. See `app.infrastructure.singleflight`.
+   - **Annotations are enforced by ruff now, not by mypy** (`ANN001`–
+     `ANN206`, not `ANN401`). ty has no `disallow_untyped_defs` and
+     cannot grow one, so the ratchet moved somewhere that outlives mypy.
+     This applies to `tests/` too, which the type checkers do not cover.
+   - **The flip (remove `continue-on-error`, remove mypy entirely)
+     happens after three consecutive green `lint` runs on `main`** — not
+     after a wait across ty releases, which the exact `==` pin already
+     makes pointless. It is testing that ty's diagnostics, which come
+     from resolving installed source rather than stubs alone, survive an
+     environment that is not a developer's laptop. When it lands, drop
+     `mypy` from this command and from the block below, delete the two
+     mypy-only suppressions ADR-0019 names, and stop writing the paired
+     ignore comments.
 8. **Explanation lives in docs, not in the code. Every function gets a
    Google-style docstring.** Added 2026-08-18, and it *reverses* how this
    repo was written up to that date: earlier sessions justified every
@@ -456,7 +484,8 @@ uv sync --all-groups && cp .env.example .env       # first time only
 uv run python -m tools.seed_inventory --count 1000 --seed 42
 
 uv run pytest -q                                   # backend: unit + integration + api
-uv run ruff check . && uv run ruff format --check . && uv run mypy backend/app tools
+# Both type checkers, until ty replaces mypy outright — see ADR-0019.
+uv run ruff check . && uv run ruff format --check . && uv run mypy backend/app tools && uv run ty check backend/app tools
 
 cd frontend && npm run lint && npm run typecheck && npm run test -- --run && npm run build
 npm run test:e2e                                    # needs backend + frontend dev server running
@@ -508,12 +537,39 @@ quarterly, or before any release you care about:
    forced the tagging-action replacement in ADR-0010.
 5. **Base images:** `Containerfile` pins `ubi9/ubi-minimal` to a minor
    stream (9.8). Check for a newer 9.x.
+6. **ty:** pinned to an exact `0.0.x` (`ty==0.0.76`), because it is beta
+   and Astral state that diagnostics may change between any two
+   releases. Check for a newer release on this pass — and when you bump
+   it, **expect the diagnostics to move, and read a new error as ty
+   changing rather than as a regression in this codebase**. Two
+   corollaries, both learned the hard way in ADR-0019: ty's published
+   rules reference has disagreed with the shipped binary about default
+   rule severities, so trust `ty check` over the docs; and because ty
+   resolves types from *installed source*, a dependency bump can change
+   its output with no change to our code at all.
 
 ## Where to continue right now
 
-The most recent user direction was: real vendor collectors first,
-deployment/CD gaps and auth deliberately parked. The natural next steps,
-in the order the user has been steering toward:
+**First, the one item with a clock on it: finish the ty migration.**
+Everything else here is untimed; this is not. ty runs in CI non-blocking
+today, and the flip is due after **three consecutive green `lint` runs on
+`main`** (`docs/adr/0019-ty-replaces-mypy.md`, "Staged rollout"). Check
+`gh run list --workflow=ci.yml --branch=main` before assuming it is still
+pending. When the criterion is met, Phase 4 is: drop `continue-on-error`
+from the ty step, delete the mypy step, the `mypy==1.14.1` dev dependency,
+`[tool.mypy]` and its two overrides; delete the two mypy-only suppressions
+ADR-0019 names (`ingest.py`'s `# type: ignore[call-arg]` and the mypy half
+of `singleflight.py`'s paired comment); regenerate the air-gap exports;
+and strip mypy from convention 7 and the "Verifying your work" block
+above. It carries a `BREAKING CHANGE:` footer — CI reads Conventional
+Commits to version the published images, and this changes the contributor
+contract. If a `lint` run goes red on ty in the meantime, that is a
+finding to investigate, not grounds to abandon the migration — ADR-0019
+§8 lists what *would* be.
+
+Beyond that, the most recent user direction was: real vendor collectors
+first, deployment/CD gaps and auth deliberately parked. The natural next
+steps, in the order the user has been steering toward:
 
 1. ~~Validate the UCS Manager collector against UCSPE~~ — **done**, and
    it found five real defects (see `docs/adr/0009`'s validation

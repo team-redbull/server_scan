@@ -288,7 +288,9 @@ Three more, each independently disqualifying-ish:
 - **No `py.typed`**, and **no `types-redfish` on PyPI**. Under
   `mypy --strict` it is an `Any` hole needing an `ignore_missing_imports`
   override plus our own Protocol wrappers — which is most of the code we
-  would have written anyway.
+  would have written anyway. (ty, which is replacing mypy — ADR-0019 —
+  narrows that hole: it type-checks an untyped dependency from its
+  installed source, and caught a bad `ucsmsdk` call mypy could not see.)
 
 Its async client is **aiohttp**-based, so "async" means adding a second
 compiled HTTP stack (aiohttp + multidict + yarl) beside the httpx already

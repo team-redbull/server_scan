@@ -302,7 +302,8 @@ uv run python -m tools.seed_inventory --count 1000 --seed 42
 uv run pytest                     # backend: unit + integration + api tests
 uv run ruff check .               # lint
 uv run ruff format --check .      # formatting
-uv run mypy backend/app tools     # type check
+uv run mypy backend/app tools     # type check (the gate, for now)
+uv run ty check backend/app tools # type check (replacing mypy — ADR-0019)
 
 cd frontend
 npm run lint && npm run typecheck && npm run test -- --run && npm run build
