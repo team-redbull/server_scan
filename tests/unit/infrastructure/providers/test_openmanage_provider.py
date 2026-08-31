@@ -154,12 +154,14 @@ def _collected(host: str, **overrides: Any) -> ProviderServer:
         ProviderServer: The Redfish half of a collected Dell server.
     """
     defaults: dict[str, Any] = {
-        "external_id": f"{host}/redfish/v1/Systems/System.Embedded.1",
+        "external_id": f"redfish://{host}/redfish/v1/Systems/System.Embedded.1",
         "vendor": Vendor.DELL.value,
         "name": "ocp4-nyc-prod-worker-03",
         "model": "PowerEdge R650",
         "serial": "7XKD9P3",
-        "bmc_address_raw": f"https://{host}",
+        # The real shape the Redfish mapping emits: scheme-rewritten origin
+        # plus the system's own path, not a bare `https://host`.
+        "bmc_address_raw": f"redfish://{host}/redfish/v1/Systems/System.Embedded.1",
         "cpu_sockets": 2,
         "cpu_cores": 32,
         "cpu_threads": 64,
