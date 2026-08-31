@@ -101,11 +101,15 @@ class FakeCredentialResolver:
 class TestBuildProvider:
     @pytest.mark.parametrize(
         "manager_type",
-        [ManagerType.OPENMANAGE, ManagerType.ONEVIEW],
+        [ManagerType.ONEVIEW],
     )
     async def test_unimplemented_vendors_fail_loudly(self, manager_type: ManagerType) -> None:
         """A missing collector must be an explicit error, never a silent
         no-op that looks like a manager with zero servers.
+
+        OPENMANAGE is not parametrized here any more — it has a real
+        collector (`_openmanage_provider`) since the Dell OpenManage
+        collector landed; see `test_builds_a_provider_for_openmanage`.
         """
         with pytest.raises(NotImplementedError, match="No collector implemented"):
             await _build_provider(
@@ -113,6 +117,21 @@ class TestBuildProvider:
                 credential_resolver=FakeCredentialResolver(),
                 timeout_seconds=5.0,
             )
+
+    async def test_builds_a_provider_for_openmanage(self) -> None:
+        """The Dell entry point: one OME appliance covers the whole Dell
+        estate, so `_build_provider` needs no per-domain login the way
+        UCS Central does.
+        """
+        resolver = FakeCredentialResolver()
+        provider = await _build_provider(
+            _manager(type=ManagerType.OPENMANAGE),
+            credential_resolver=resolver,
+            timeout_seconds=5.0,
+            settings=_settings(),
+        )
+        assert provider.provider_type == ManagerType.OPENMANAGE.value
+        assert resolver.resolved == [ManagerType.OPENMANAGE]
 
     async def test_builds_a_provider_for_ucs_central(self) -> None:
         """The one Cisco entry point: Central discovers every registered
