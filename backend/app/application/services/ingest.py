@@ -44,14 +44,18 @@ from app.application.services.audit_service import SYSTEM_INGEST_ACTOR, AuditSer
 from app.application.services.pipeline import classification_from_result, health_from_state
 from app.domain.enums import LinkState, MediaType, Vendor
 from app.domain.models.audit_event import EventType
+from app.domain.models.classification import Classification
 from app.domain.models.connectivity import (
     Connectivity,
     ConnectivityAttachment,
     compute_connectivity_facts,
 )
 from app.domain.models.hardware import Cpu, Gpu, Hardware, Memory, Power, Storage, StorageDrive
+from app.domain.models.health import Health
+from app.domain.models.maintenance import Maintenance
 from app.domain.models.manager import Manager
 from app.domain.models.network import BmcInfo, NetworkInfo, NetworkInterface
+from app.domain.models.openshift import OpenShiftLifecycle
 from app.domain.models.server import Identity, ProfileTemplate, Server
 from app.domain.models.site import Site
 from app.domain.ports.provider import ProviderServer, ServerInventoryProvider
@@ -544,20 +548,6 @@ class IngestService:
             power=Power(psus=[]),
         )
 
-        # `maintenance`/`openshift` are always carried forward verbatim —
-        # this module never touches either. `classification`/`health`
-        # default to the same carry-forward (or the zero value for a new
-        # server) and are only overwritten below if the corresponding
-        # engine service was supplied — see module docstring.
-        carried_forward: dict[str, object] = {}
-        if existing is not None:
-            carried_forward = {
-                "classification": existing.classification,
-                "health": existing.health,
-                "maintenance": existing.maintenance,
-                "openshift": existing.openshift,
-            }
-
         # The name is the authority on site, not the collector's config —
         # see `app.domain.value_objects.site`. A UCS server whose name
         # carries no site token falls back to the org path of its service
@@ -567,7 +557,14 @@ class IngestService:
             ps.profile_dn, self._sites
         )
 
-        server = Server(
+        # `Server.model_config` sets `populate_by_name`, so `_id` (the Mongo
+        # alias) and `id` (the field) are both valid here. mypy's pydantic
+        # plugin reads `model_config` only when it is a `ConfigDict(...)`
+        # call, not the plain dict literal this model uses, so it does not
+        # see that and reports `id` as missing. ty gets it right, and the
+        # `**carried_forward` splat removed below had been suppressing the
+        # check entirely. Delete this with mypy itself — see ADR-0019.
+        server = Server(  # type: ignore[call-arg]
             _id=server_id,
             name=ps.name,
             name_normalized=normalize_text(ps.name),
@@ -586,7 +583,30 @@ class IngestService:
             revision=revision,
             created_at=created_at,
             updated_at=now,
-            **carried_forward,
+            # The carry-forward set, spelled out. `maintenance`/`openshift`
+            # are carried verbatim — this module never touches either.
+            # `classification`/`health` are carried too and only overwritten
+            # below when the corresponding engine service was supplied; see
+            # the module docstring. A server seen for the first time takes
+            # each model's own zero value.
+            #
+            # ponytail: `network.interfaces` and `connectivity.attachments`
+            # are the two collected sub-resources NOT in this set, and cannot
+            # be added while `ProviderServer.nics`/`.attachments` are
+            # `tuple[...] = ()` — with no `None` state, "could not read" is
+            # indistinguishable from "read, none present", so carrying them
+            # forward would also pin a genuinely-emptied list forever. Every
+            # other sub-resource (`nic_macs`, cpu, memory, storage, gpus) is
+            # three-state and goes through `_carry_forward`. Dormant only
+            # because each collector that populates them repopulates them on
+            # every run; the day a second provider ingests the same
+            # `(vendor, serial_normalized)` without them, it blanks both.
+            # Upgrade path: `nics: tuple[ProviderNic, ...] | None = None` and
+            # the same for `attachments`, then `_carry_forward` here.
+            classification=existing.classification if existing is not None else Classification(),
+            health=existing.health if existing is not None else Health(),
+            maintenance=existing.maintenance if existing is not None else Maintenance(),
+            openshift=existing.openshift if existing is not None else OpenShiftLifecycle(),
         )
 
         if self._classification_service is not None:
