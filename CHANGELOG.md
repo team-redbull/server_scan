@@ -100,6 +100,37 @@ than that.
 - The Intersight run budget did not cover the phase where the time is
   actually spent, and `bmc_address` preferred a less specific source than
   the one its MAC comes from.
+- Ingest built four of a server's fields into a dict and `**`-unpacked it
+  into the model, which suppressed argument checking for the entire call.
+  No stored data was ever wrong because of it, but the carry-forward set
+  — what a re-collection preserves rather than overwrites — was invisible
+  at the call site. It is now spelled out, along with the two collected
+  sub-resources (`network.interfaces`, `connectivity.attachments`) that
+  are *not* carried forward and cannot be until the provider protocol can
+  say "could not read" for them.
+
+### Contributor-facing
+
+Nothing to deploy here — this changes what the build checks, not what it
+ships. The runtime images are unaffected, and `requirements.txt` /
+`pylock.toml` are unchanged, since both are exported `--no-dev`.
+
+- **The local gate is unchanged in shape but has a fourth step in CI**:
+  `uv run ty check backend/app tools` now runs alongside mypy, marked
+  `continue-on-error` so it cannot fail a build. mypy remains the gate.
+  ty is a pinned dev dependency (`ty==0.0.76`), not a GitHub Action, so
+  `uv sync --all-groups` is all that is needed to run it locally.
+- **Annotations are now enforced by ruff**, via `ANN001`–`ANN206` (not
+  `ANN401`). This is the same contract mypy's `disallow_untyped_defs` has
+  enforced all along, moved somewhere that will outlive mypy — ty has no
+  equivalent rule and cannot grow one. It applies to `tests/` too, which
+  mypy never checked.
+- Suppression comments will need both forms while both checkers run: ty
+  does not understand `# type: ignore[<mypy-code>]`. Write
+  `# type: ignore[x]  # ty: ignore[y]`, mypy's first.
+
+See `docs/adr/0019-ty-replaces-mypy.md` for the measurements, the rules
+that are switched off and why, and what would trigger a rollback.
 
 ### Documentation
 

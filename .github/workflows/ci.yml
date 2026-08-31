@@ -32,7 +32,7 @@ env:
 
 jobs:
   lint:
-    name: Lint (ruff + mypy)
+    name: Lint (ruff + mypy + ty)
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -59,6 +59,27 @@ jobs:
       # shipped code (the collector runner) and was previously unchecked.
       - name: mypy
         run: uv run mypy backend/app tools
+
+      # Non-blocking while ty proves itself, then this loses
+      # `continue-on-error` and the mypy step above goes. mypy is the gate
+      # until then. ty is a pinned dev dependency installed by the
+      # `uv sync --all-groups` above, deliberately not a GitHub Action:
+      # nothing new to SHA-pin, and the version CI runs is the version
+      # `uv.lock` names, which is the version a developer runs locally.
+      #
+      # The exit criterion is three consecutive green runs on `main`, which
+      # is days rather than quarters. It is not waiting out ty releases —
+      # the exact `==` pin means ty cannot change underneath us at all. It
+      # is checking the one thing the pin does not cover: ty resolves types
+      # from installed source rather than from stubs alone, so its
+      # diagnostics depend on what is actually in the environment, and CI's
+      # venv is not a developer's laptop. Three green runs is what makes
+      # "clean here" evidence for "clean there". A failure in that window
+      # is a finding to investigate, not a reason to abandon the migration.
+      # See docs/adr/0019-ty-replaces-mypy.md.
+      - name: ty (non-blocking)
+        continue-on-error: true
+        run: uv run ty check backend/app tools
 
   test:
     name: Test (pytest)
