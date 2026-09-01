@@ -379,7 +379,7 @@ go stale — treat its date as load-bearing.
 | Risk | Detail |
 |---|---|
 | **No authentication at all** | Every endpoint is open to anyone who can reach the Route, including all write endpoints. Deliberate and confirmed, but it is the release gate and nothing should go to production without it. |
-| **The Intersight collector's field mapping has never seen real data** | Built entirely from the published contract; the DevNet sandbox is offline until ~2027. `TotalMemory` carries **no documented unit** — if the MiB assumption is wrong, every server's memory is 4.86% high, silently. `tools/verify_intersight.py` settles it in one query; run it before scheduling anything (`docs/field-test-checklist.md`). |
+| **The Intersight collector's field mapping is mostly still unverified against real data** | Built entirely from the published contract; the DevNet sandbox is offline until ~2027. `tools/verify_intersight.py` against the user's own on-prem tenant (2026-09-01, 19 servers) confirmed auth, name resolution and — the highest-risk item — that `TotalMemory` is MiB as assumed (`docs/adr/0017`'s "first real tenant run"). A full `--dry-run` ingest has not been run yet, and everything else under ADR-0017's UNVERIFIED list (CPU/storage/adapter fields, region handling, clock-skew behaviour) is still contract-only. |
 | **No staleness detection** | A CronJob pod is never scraped, so no collector-side metric can report its own absence. Nothing today answers "40 hosts have been failing for two weeks". `last_seen_at` is written on every ingest and read by nothing. This is the top item on the not-done list. |
 
 ### Medium

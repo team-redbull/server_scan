@@ -813,9 +813,16 @@ free-form strings of unverified format, so `speed_mbps` is `None`.
   sibling `AvailableMemory` *is* documented "in MB", and per-DIMM
   `memory.Unit.Capacity` is documented "in MiB". The collector assumes
   MiB, matching `ucs_manager.mapping`'s assumption for the same hardware.
-  **If that is wrong, memory is over-reported by 4.86% on every server,
-  silently.** `tools/verify_intersight.py` section 4 settles it against a
-  real server's DIMM sum in one query. **Unresolved as of 2026-08-29.**
+  **SETTLED 2026-09-01, against the user's own on-prem tenant: it is
+  MiB.** A sampled server reported `TotalMemory = 786432`; the
+  Intersight UI's own "Memory Capacity" for that same server reads
+  768.0 GiB, and `786432 ÷ 1024 = 768.0` exactly. The assumption is
+  correct — no change needed. (The `memory/Arrays` relationship filter
+  `tools/verify_intersight.py` section 4 normally uses for an in-tool
+  DIMM-sum check did not resolve on this tenant, so this fact was
+  confirmed by hand against the UI instead; the filter itself is still
+  unverified — see ADR-0017.) Provenance: ADR-0017's "The first real
+  tenant run (2026-09-01)".
 - **`storage.PhysicalDisk.Size` and `.RawSize` are documented "in MB"**,
   and are **strings**, needing parsing.
 - **`storage.PhysicalDisk.NonCoercedSizeBytes` is documented in bytes**

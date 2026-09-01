@@ -1,13 +1,15 @@
 # ADR-0017: Cisco Intersight collector
 
-**Status:** Accepted and implemented. **Awaiting its first run against
-the user's own on-prem Intersight** — `docs/field-test-checklist.md` is
-what to run and what to bring back.
+**Status:** Accepted and implemented. **First run against the user's own
+on-prem Intersight is done** (`tools/verify_intersight`, 2026-09-01):
+auth, name resolution and the `TotalMemory` unit are now settled against
+real data. `--dry-run` against a full ingest has not been run yet — see
+"Validation" below for exactly what is and is not covered.
 
 The transport and auth path have been exercised against the **real
-`intersight.com` service**; no field mapping has ever seen real data.
-Read "Validation: what this has and has not been tested against" before
-trusting any field it produces.
+`intersight.com` service**; the field mapping has now seen a real tenant,
+though a small (19-server) one. Read "Validation: what this has and has
+not been tested against" before trusting any field it produces.
 
 **Date:** 2026-08-29
 
@@ -386,16 +388,9 @@ Recorded here rather than buried, because ADR-0009's validation found
 five defects that were invisible without real hardware, and nothing
 reachable today can play that role for Intersight (see below).
 
-1. **`TotalMemory`'s unit.** The single most dangerous open item. The
-   docstring is `total_memory (int): The total memory available on the
-   server.` — **no unit**, identical on `PhysicalSummary`, `Blade` and
-   `RackUnit`. Its sibling `available_memory` *is* documented "in MB";
-   per-DIMM `memory.Unit.capacity` is documented "in MiB". MB vs MiB is a
-   4.86% silent error on every server. Settle by comparing one live
-   `TotalMemory` against the sum of that server's DIMM capacities before
-   trusting the mapping. (Storage is *not* ambiguous:
-   `storage.PhysicalDisk.size`/`raw_size` are explicitly "in MB", as
-   strings needing parsing.)
+1. ~~`TotalMemory`'s unit~~ — **SETTLED 2026-09-01**, see "Validation"
+   below and `docs/cisco-collectors.md`'s "Units" section. It is MiB, as
+   assumed; no code change needed.
 2. Whether UCSM-mode servers have a `server.Profile` at all (above).
 3. `assigned_server` vs `associated_server` precedence on `server.Profile`.
 4. `mgmt_ip_address` vs `ipv4_address` as the authoritative BMC address,
@@ -564,6 +559,35 @@ What *has* been proved offline:
 
 What remains unproven is listed under UNVERIFIED below. The first item
 is a live-data risk, not a theoretical one.
+
+### The first real tenant run (2026-09-01)
+
+`tools/verify_intersight --show-names 15` against the user's on-prem
+Private Virtual Appliance. The tenant is small — 19 servers, all
+`IntersightStandalone` — and the bulk of the user's fleet lives on UCS
+Central and OneView, so this is a narrow sample, not a fleet-scale one.
+
+- **Auth works end to end.** The API key was accepted and inventory was
+  readable — the byte-identical signature construction (proved offline
+  against Cisco's own SDK) is now also proved against a real appliance,
+  not just `intersight.com`.
+- **Name resolution: GOOD, 19/19.** Every server resolved a
+  `server.Profile` name and matched `INVENTORY_COLLECTOR_NAME_PATTERN`.
+- **`TotalMemory`'s unit is SETTLED: MiB, as assumed.** A sampled
+  server reported `TotalMemory = AvailableMemory = 786432`. The
+  `memory/Arrays` relationship filter did not resolve on this tenant
+  (see the UNVERIFIED note below on relationship-filter support), so the
+  authoritative DIMM-sum check in `verify_intersight` could not run —
+  the fallback was a hand comparison against the Intersight UI's own
+  "Memory Capacity" figure, which read **768.0 GiB**.
+  `786432 ÷ 1024 = 768.0` exactly, matching the MiB assumption to the
+  decimal. This is now moved to `docs/cisco-collectors.md`'s "Units"
+  section as a confirmed fact; no change to `_BYTES_PER_MB` is needed.
+- **Not yet run:** `--manager-type INTERSIGHT --dry-run` against a full
+  ingest, and the `memory/Arrays` relationship filter remains unverified
+  on this tenant — worth another look with `--sample` large enough to
+  land on a server whose filter does resolve, since the UI comparison is
+  a fallback the tool itself only reaches for when that filter fails.
 
 ---
 
