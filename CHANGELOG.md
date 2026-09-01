@@ -101,6 +101,16 @@ than that.
 
 ### Fixed
 
+- **The Intersight collector was silently missing every drive, and on
+  some hardware every GPU and CPU model, because `storage.Controller`
+  never joined to its server.** Confirmed live against a real tenant: 0
+  of 37 storage controllers set the relationship the collector read
+  (`ComputeBlade`/`ComputeRackUnit`) at all — every one set only
+  `ComputeBoard`, a relationship the collector never followed.
+  `graphics.Card` and `processor.Unit` carry the same relationship and
+  got the same fix pre-emptively. No action needed — this ships fixed;
+  the collector has never had a scheduled production run to have been
+  under-reporting in.
 - **Intersight was missing from the UI's Source filter**, so a whole
   collector's servers could not be filtered for. `REDFISH_STANDALONE` was
   likewise missing from the manager-type picker in both editors, so no

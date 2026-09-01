@@ -260,6 +260,35 @@ async def test_a_two_hop_join_attaches_disks_through_their_controller() -> None:
 
 
 @pytest.mark.asyncio
+async def test_a_controller_that_only_names_its_computeboard_still_joins() -> None:
+    """Confirmed live 2026-09-01: on some hardware generations, 0 of 37
+    `storage.Controller` rows on a real tenant set `ComputeBlade`/
+    `ComputeRackUnit` at all — all 37 set only `ComputeBoard`. Without
+    this fallback the collector silently reports every drive on that
+    hardware as unread, which is exactly what happened before this fix.
+    Exercises `storage.Controller`, `graphics.Card` and `processor.Unit`
+    together since all three carry `ComputeBoard` and share the fallback;
+    `adapter.Unit`/`management.Controller` do not and are unaffected.
+    """
+    tables = dict(_TABLES)
+    tables["compute/Boards"] = [{"Moid": "board1", "ComputeRackUnit": _ref("server1")}]
+    tables["storage/Controllers"] = [{"Moid": "ctrl1", "ComputeBoard": _ref("board1")}]
+    tables["graphics/Cards"] = [
+        {"Moid": "gpu1", "Model": "NVIDIA A100", "ComputeBoard": _ref("board1")}
+    ]
+    tables["processor/Units"] = [
+        {"Moid": "cpu1", "Model": "UCS-CPU-I6338", "ComputeBoard": _ref("board1")}
+    ]
+    servers = await _collect(_provider(_FakeClient(tables)))
+    first = next(s for s in servers if s.serial == "WZP1")
+
+    assert first.storage_drives is not None
+    assert [d["model"] for d in first.storage_drives] == ["MZ7LH960"]
+    assert [g["model"] for g in first.gpus or ()] == ["NVIDIA A100"]
+    assert first.cpu_model == "UCS-CPU-I6338"
+
+
+@pytest.mark.asyncio
 async def test_the_profile_supplies_the_name_and_the_template() -> None:
     """The name trap, end to end through the join rather than in
     isolation — this is where a wrong `AssignedServer` key would show.

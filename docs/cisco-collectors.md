@@ -722,11 +722,13 @@ installed `intersight==1.0.11.2026072720` wheel**, which are the OpenAPI
 contract rendered as Python. Most of it is still unconfirmed against a
 live tenant — see ADR-0017's "Validation" section for exactly what a
 2026-09-01 field test against the user's own on-prem tenant did and did
-not settle. Only the `TotalMemory` unit, in the "Units" section below,
-has actually been fleet-verified so far — everything else, including the
-"CPU model" section, is still *contract-verified* only (confirmed to
-exist and to be cheap in the SDK's own model, not yet confirmed against
-a live response), which is a weaker claim. Facts a real run settles
+not settle. The `TotalMemory` unit (the "Units" section below) and the
+`storage.Controller`/`graphics.Card`/`processor.Unit` `ComputeBoard`
+fallback (the "join topology" table above) are fleet-verified — the rest,
+including the "CPU model" section, is still *contract-verified* only
+(confirmed to exist and to be cheap in the SDK's own model, not yet
+confirmed against a live response), which is a weaker claim. Facts a real
+run settles
 should be moved here with their own provenance line, individually.
 
 ### The server anchor
@@ -759,12 +761,26 @@ reference the server directly:
 | `adapter.Unit` | `ComputeBlade` / `ComputeRackUnit` |
 | `adapter.ExtEthInterface` | `AdapterUnit` -> `adapter.Unit` |
 | `adapter.HostEthInterface` | `AdapterUnit` -> `adapter.Unit` |
-| `storage.Controller` | `ComputeBlade` / `ComputeRackUnit` |
+| `storage.Controller` | `ComputeBlade` / `ComputeRackUnit`, or `ComputeBoard` -> `compute.Board` |
 | `storage.PhysicalDisk` | `StorageController` -> `storage.Controller` |
-| `graphics.Card` | `ComputeBlade` / `ComputeRackUnit` |
+| `graphics.Card` | `ComputeBlade` / `ComputeRackUnit`, or `ComputeBoard` -> `compute.Board` |
 | `management.Controller` | `ComputeBlade` / `ComputeRackUnit` |
 | `management.Interface` | `ManagementController` -> `management.Controller` |
-| `processor.Unit` | `ComputeBlade` / `ComputeRackUnit` |
+| `processor.Unit` | `ComputeBlade` / `ComputeRackUnit`, or `ComputeBoard` -> `compute.Board` |
+| `compute.Board` | `ComputeBlade` / `ComputeRackUnit` |
+
+**The `ComputeBoard` fallback is load-bearing, not defensive
+programming.** Confirmed live 2026-09-01 against a real tenant: **0 of
+37** `storage.Controller` rows set `ComputeBlade`/`ComputeRackUnit` at
+all — every one set only `ComputeBoard`. Without following it, every
+drive on every server on that hardware read as unread. `graphics.Card`
+and `processor.Unit` carry the identical relationship and got the same
+fallback pre-emptively; `adapter.Unit` and `management.Controller` carry
+**no** `ComputeBoard` relationship at all (confirmed against Cisco's own
+generated Go SDK) and must never have it added to their `$select` — an
+unsupported field risks failing the whole query, not just being ignored.
+See `docs/adr/0017-intersight-collector.md`'s "The `ComputeBoard` join
+gap" for the full story.
 
 Exactly one of `ComputeBlade`/`ComputeRackUnit` is set on any given
 object, depending on whether the server is a blade or a rack unit.

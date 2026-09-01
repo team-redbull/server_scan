@@ -3,14 +3,29 @@
 **Status:** Accepted and implemented. **First run against the user's own
 on-prem Intersight is done** (`tools/verify_intersight`, 2026-09-01):
 auth, name resolution and the `TotalMemory` unit are now settled against
-real data. That same dry-run also surfaced two scope-cut justifications
-in Decision 5 that turned out to be stale citations of an earlier
-ADR-0009 — `cpu_model` has since been added back (see Decision 5, and
-`docs/notes/intersight-inventory-model.md`'s "Follow-up 2026-09-01");
+real data. That same field test also surfaced two scope-cut
+justifications in Decision 5 that turned out to be stale citations of an
+earlier ADR-0009 — `cpu_model` has since been added back (see Decision 5,
+and `docs/notes/intersight-inventory-model.md`'s "Follow-up 2026-09-01");
 fabric-interconnect identity was re-verified and stays cut, for a
-different and now-confirmed reason. `--dry-run` against a full ingest
-including the new `cpu_model` field has not been re-run yet — see
-"Validation" below for exactly what is and is not covered.
+different and now-confirmed reason.
+
+**It also found and fixed a real bug in the request plan itself, not
+just a scope-cut question.** `storage.Controller` carries a `ComputeBoard`
+relationship the collector's join never followed — only `ComputeBlade`/
+`ComputeRackUnit`. On this tenant's hardware, **0 of 37** storage
+controllers set either of those; all 37 set only `ComputeBoard`. Every
+drive on every server was therefore silently unread — not a scope cut,
+not a "diskless server," a join gap in code that was already shipped.
+`graphics.Card` and `processor.Unit` carry the same `ComputeBoard`
+relationship and were fixed the same way pre-emptively, before live data
+confirmed a problem on those two specifically (`adapter.Unit` and
+`management.Controller` carry no `ComputeBoard` relationship at all and
+were correctly left alone). See "The request plan" and the "Validation"
+section's second field-test entry below.
+
+`--dry-run` against a full ingest with both fixes has not been re-run
+yet — see "Validation" below for exactly what is and is not covered.
 
 The transport and auth path have been exercised against the **real
 `intersight.com` service**; the field mapping has now seen a real tenant,
@@ -350,10 +365,26 @@ directly in the SDK models:
 | `adapter/Units` | `compute_blade` / `compute_rack_unit` |
 | `adapter/ExtEthInterfaces` → `PHYSICAL` | `adapter_unit` → `adapter.Unit` |
 | `adapter/HostEthInterfaces` → `VNIC` | `adapter_unit` → `adapter.Unit` |
-| `storage/Controllers` | `compute_blade` / `compute_rack_unit` |
+| `storage/Controllers` | `compute_blade` / `compute_rack_unit`, **or `compute_board` → `compute/Boards`** |
 | `storage/PhysicalDisks` | `parent` → `storage.Controller` |
 | `management/Controllers` | `compute_blade` / `compute_rack_unit` |
-| `processor/Units` | `compute_blade` / `compute_rack_unit` (added 2026-09-01, see below) |
+| `processor/Units` | `compute_blade` / `compute_rack_unit`, **or `compute_board`** (added 2026-09-01, see below) |
+| `graphics/Cards` | `compute_blade` / `compute_rack_unit`, **or `compute_board`** |
+| `compute/Boards` | `compute_blade` / `compute_rack_unit` (added 2026-09-01, see below) |
+
+**The `compute_board` fallback, added 2026-09-01, is not optional on
+some hardware.** A live tenant showed **0 of 37** `storage.Controller`
+rows setting `ComputeBlade`/`ComputeRackUnit` at all — every one of them
+set only `ComputeBoard`, which the collector did not previously read.
+Every drive on every server was silently unread as a result.
+`graphics.Card` and `processor.Unit` carry the identical relationship
+and got the same fallback pre-emptively; `adapter.Unit` and
+`management.Controller` do **not** carry a `ComputeBoard` relationship at
+all (confirmed against Cisco's own generated Go SDK, independent of the
+Python wheel this ADR otherwise cites) and must never have it added to
+their `$select` — an unsupported field risks failing the whole query.
+`compute/Boards` is one more fleet-wide query, itself joined via a direct
+`ComputeBlade`/`ComputeRackUnit` relationship.
 
 At `$top=1000` (the documented maximum) that is on the order of **~120
 requests for 10,000 servers**, flat in fleet size — against the Redfish
@@ -448,21 +479,35 @@ reachable today can play that role for Intersight (see below).
     against the Intersight UI's own CPU panel for that socket
     (`docs/notes/intersight-inventory-model.md`, "Follow-up 2026-09-01",
     §11).
-11. **The tenant's 0-drive report.** `pci.Device` was checked and ruled
-    out (it's a GPU-riser identity MO with no storage relationship at
-    all). The leading explanation is Cisco's M.2 boot-optimized storage
-    subsystem — `storage.FlexUtilController`/`FlexUtilPhysicalDrive`
-    (current) and `storage.FlexFlashController`/`FlexFlashPhysicalDrive`
-    (legacy SD-card) — entirely separate MO classes this collector does
-    not query, joined through `ComputeBoard` rather than the usual
-    `ComputeBlade`/`ComputeRackUnit`. **Not implemented** — it costs two
-    more fleet-wide queries (`compute/Boards`, `storage/FlexUtilControllers`)
-    against a two-hop join, for both a current and a legacy generation.
-    Settle by querying those resources against the same field-tested
-    tenant and checking whether they return rows where
-    `storage/PhysicalDisks` returned none
-    (`docs/notes/intersight-inventory-model.md`, "Follow-up 2026-09-01",
-    §13) before deciding whether to build it.
+11. ~~The tenant's 0-drive report~~ — **SETTLED 2026-09-01, and the
+    explanation was neither hypothesis.** `pci.Device` was checked and
+    ruled out first (it's a GPU-riser identity MO with no storage
+    relationship at all). The M.2 boot-optimized storage subsystem
+    (`storage.FlexUtilController`/`FlexFlashController`) was checked
+    live next and found **real for exactly one server** (0
+    `storage.PhysicalDisk`, 1 `FlexUtilPhysicalDrive`, 2
+    `FlexFlashPhysicalDrive`) — but the other 18 servers reported zero
+    everywhere, and a UI check on one of them showed a RAID controller
+    and physical drive Intersight's own console could see. **The actual
+    cause was the `ComputeBoard` join gap** described above in "The
+    request plan": `storage.Controller` was silently failing to join to
+    its server on this hardware at all — 0 of 37 rows resolved the old
+    way. Fixed (see "The request plan"); a rerun after the fix is the
+    next thing to confirm. The single-server FlexUtil/FlexFlash finding
+    is still real and separate — support for it remains **not
+    implemented**, tracked as its own item below.
+12. **Boot-optimized storage** (`storage.FlexUtilController`/
+    `FlexUtilPhysicalDrive` current, `storage.FlexFlashController`/
+    `FlexFlashPhysicalDrive` legacy SD-card) — confirmed present on at
+    least one real server (previous item), unrelated to the
+    `ComputeBoard` join bug that explained the rest of the fleet. **Not
+    implemented** — costs two more fleet-wide queries beyond what the
+    `ComputeBoard` fix already added (`storage/FlexUtilControllers`/
+    `FlexFlashControllers` and their physical-drive classes) through a
+    two-hop join via `compute.Board`, and needs both a current and a
+    legacy generation to be complete. Worth building once the
+    `ComputeBoard` fix's rerun shows whether any *other* servers turn out
+    to need it too, rather than the one already found.
 
 ---
 
@@ -640,6 +685,43 @@ Central and OneView, so this is a narrow sample, not a fleet-scale one.
   on this tenant — worth another look with `--sample` large enough to
   land on a server whose filter does resolve, since the UI comparison is
   a fallback the tool itself only reaches for when that filter fails.
+
+### The `ComputeBoard` join gap (2026-09-01, same tenant)
+
+A follow-up dry-run on the same 19-server tenant reported `cpu_model`
+unknown, fabric identity empty, and every server's storage as `not read
+total across 0 drive(s)`. `cpu_model` and fabric identity turned out to
+be the (then-still-unimplemented / correctly-N/A) scope cuts described
+above, but storage did not fit either. Chasing it down:
+
+1. Added `verify_intersight.py` section 5, checking whether Cisco's M.2
+   boot-optimized storage subsystem explained the 0-drive report. Result:
+   **real for exactly one server** (`FlexUtil=1`, `FlexFlash=2`,
+   `PhysicalDisk=0`), but the other 18 servers reported zero across every
+   storage class the probe checked — a different signal than "found the
+   explanation."
+2. A UI check on one of those 18 showed a RAID controller and a physical
+   drive that the API-based probe could not see at all — proof the
+   controller existed in Intersight's own inventory, not proof of
+   diskless hardware.
+3. Extended section 5 to report how many `storage.Controller` rows
+   resolve via `ComputeBlade`/`ComputeRackUnit` versus only via
+   `ComputeBoard`. Result: **0 of 37 resolved the direct way; all 37
+   resolved only through `ComputeBoard`** — a relationship the collector
+   never read. Confirmed the same relationship exists on `graphics.Card`
+   and `processor.Unit` (not on `adapter.Unit` or
+   `management.Controller`) against Cisco's own generated Go SDK before
+   touching any `$select` field, since an unsupported field risks failing
+   the whole query.
+
+Fixed in `IntersightProvider._owning_server`/`_build_joins`: one more
+fleet-wide `compute/Boards` query, and a fallback through it for the
+three affected classes. See "The request plan" above for the mechanism.
+**Not yet re-verified against this tenant** — the fix is unit-tested
+(mirroring the exact 0-of-37 shape found live) but a rerun of
+`--dry-run` on the real tenant is what actually confirms drives, GPUs
+and CPU model now populate for the 18 servers that previously reported
+nothing on any of the three.
 
 ---
 

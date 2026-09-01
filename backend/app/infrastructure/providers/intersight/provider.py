@@ -51,31 +51,58 @@ _EXT_IF_FIELDS = (
     "Moid,AdapterUnit,SwitchId,MacAddress,ExtEthInterfaceId,AdminState,OperState,PeerDn,PeerPortId"
 )
 _HOST_IF_FIELDS = "Moid,AdapterUnit,Name,HostEthInterfaceId,MacAddress,AdminState,OperState,PeerDn"
-_STORAGE_CONTROLLER_FIELDS = "Moid,ComputeBlade,ComputeRackUnit"
+# `ComputeBoard` added 2026-09-01: on some hardware generations
+# `storage.Controller`/`graphics.Card`/`processor.Unit` populate ONLY
+# `ComputeBoard`, never `ComputeBlade`/`ComputeRackUnit` directly — a
+# live tenant showed 0 of 37 storage controllers joining the old way,
+# all 37 joining only through their board. `adapter.Unit` and
+# `management.Controller` carry no `ComputeBoard` relationship at all
+# (confirmed against Cisco's own generated Go SDK) and must not get it
+# added to their `$select` — an unsupported field risks failing the
+# whole query. See docs/adr/0017-intersight-collector.md.
+_BOARD_FIELDS = "Moid,ComputeBlade,ComputeRackUnit"
+_STORAGE_CONTROLLER_FIELDS = "Moid,ComputeBlade,ComputeRackUnit,ComputeBoard"
 _DISK_FIELDS = (
     "Moid,DiskId,Model,Pid,Serial,Type,Size,NonCoercedSizeBytes,Health,DriveState,"
     "FailurePredicted,StorageController"
 )
-_CARD_FIELDS = "Moid,Model,Pid,Vendor,Serial,OperState,ComputeBlade,ComputeRackUnit"
-_PROCESSOR_FIELDS = "Moid,Model,ComputeBlade,ComputeRackUnit"
+_CARD_FIELDS = "Moid,Model,Pid,Vendor,Serial,OperState,ComputeBlade,ComputeRackUnit,ComputeBoard"
+_PROCESSOR_FIELDS = "Moid,Model,ComputeBlade,ComputeRackUnit,ComputeBoard"
 _MGMT_CONTROLLER_FIELDS = "Moid,ComputeBlade,ComputeRackUnit"
 _MGMT_INTERFACE_FIELDS = "Moid,MacAddress,IpAddress,Ipv4Address,ManagementController"
 
 
-def _owning_server(mo: Mapping[str, Any]) -> str | None:
+def _owning_server(
+    mo: Mapping[str, Any], *, board_owner: Mapping[str, str] | None = None
+) -> str | None:
     """
     The compute `Moid` a directly-attached object belongs to.
 
     Args:
         mo (Mapping[str, Any]): Any MO carrying `ComputeBlade` and
-            `ComputeRackUnit` relationships — exactly one is set,
+            `ComputeRackUnit` relationships — at most one is set,
             depending on whether the server is a blade or a rack unit.
+        board_owner (Mapping[str, str] | None): `compute.Board` `Moid` ->
+            owning server `Moid`, for MOs that populate `ComputeBoard`
+            instead of a direct relationship. Confirmed live 2026-09-01:
+            0 of 37 `storage.Controller` rows on one tenant joined the
+            direct way, all 37 joined only through their board — some
+            hardware generations never set `ComputeBlade`/
+            `ComputeRackUnit` on these MOs at all. Only pass this for a
+            class confirmed to carry `ComputeBoard` (`storage.Controller`,
+            `graphics.Card`, `processor.Unit`) — `adapter.Unit` and
+            `management.Controller` carry no such relationship, and this
+            argument does nothing for them.
 
     Returns:
-        str | None: The owning server's `Moid`, or None when neither is
-            set (a spare part, or an object owned by a chassis).
+        str | None: The owning server's `Moid`, or None when nothing
+            resolves it (a spare part, or an object owned by a chassis).
     """
-    return mapping.moref(mo.get("ComputeBlade")) or mapping.moref(mo.get("ComputeRackUnit"))
+    direct = mapping.moref(mo.get("ComputeBlade")) or mapping.moref(mo.get("ComputeRackUnit"))
+    if direct or not board_owner:
+        return direct
+    board = mapping.moref(mo.get("ComputeBoard"))
+    return board_owner.get(board) if board else None
 
 
 def _profile_server(profile: Mapping[str, Any]) -> str | None:
@@ -410,12 +437,31 @@ class IntersightProvider:
             self._note_budget_exhausted(phase="after reading adapter interfaces")
             return joins
 
+        # `compute.Board` -> owning server, for the three classes below
+        # that populate ONLY `ComputeBoard` on some hardware generations
+        # (confirmed live 2026-09-01; see `_owning_server`'s docstring).
+        # A failed or budget-skipped query degrades to an empty map, not
+        # a lost run — the three joins below still work for any object
+        # that sets `ComputeBlade`/`ComputeRackUnit` directly.
+        board_owner: dict[str, str] = {}
+        boards = await self._collect_table(client, "compute/Boards", select=_BOARD_FIELDS)
+        if boards is not None:
+            board_owner = {
+                str(b.get("Moid")): owner
+                for b in boards
+                if b.get("Moid") is not None and (owner := _owning_server(b)) is not None
+            }
+
+        if self._over_budget(started):
+            self._note_budget_exhausted(phase="after reading compute boards")
+            return joins
+
         controllers = await self._collect_table(
             client, "storage/Controllers", select=_STORAGE_CONTROLLER_FIELDS
         )
         if controllers is not None:
             server_by_controller = {
-                str(c.get("Moid")): _owning_server(c)
+                str(c.get("Moid")): _owning_server(c, board_owner=board_owner)
                 for c in controllers
                 if c.get("Moid") is not None
             }
@@ -434,11 +480,13 @@ class IntersightProvider:
 
         cards = await self._collect_table(client, "graphics/Cards", select=_CARD_FIELDS)
         if cards is not None:
-            joins.cards = _group_by(cards, _owning_server)
+            joins.cards = _group_by(cards, lambda c: _owning_server(c, board_owner=board_owner))
 
         processors = await self._collect_table(client, "processor/Units", select=_PROCESSOR_FIELDS)
         if processors is not None:
-            joins.processors = _group_by(processors, _owning_server)
+            joins.processors = _group_by(
+                processors, lambda p: _owning_server(p, board_owner=board_owner)
+            )
 
         mgmt_controllers = await self._collect_table(
             client, "management/Controllers", select=_MGMT_CONTROLLER_FIELDS
