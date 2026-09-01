@@ -642,12 +642,31 @@ async def _dry_run_one_manager(
             f"\n     gpus        : {_or_unread(None if ps.gpus is None else len(ps.gpus))}"
         )
         for a in ps.attachments:
-            print(
-                f"        [{a.interface_kind:8}] fabric {a.fabric}  if={a.server_interface}"
-                f"  admin={a.admin_state} oper={a.oper_state}"
-                f"  peer={a.fabric_port or '—'}"
-                f"  FI model/serial={a.fabric_model or '—'}/{a.fabric_serial or '—'}"
-            )
+            if a.interface_kind == "PHYSICAL":
+                # Fabric-interconnect identity only makes sense on a
+                # cabled physical uplink. A vNIC (`HostEthInterface` on
+                # Intersight, `vnic` on UCS Manager/Central) structurally
+                # never carries a fabric relationship at all — printing
+                # "fabric None / FI model/serial=—/—" on every vNIC line
+                # reads as missing data rather than as a field its kind
+                # has no equivalent for. This is also why a standalone
+                # server (which contributes zero PHYSICAL attachments —
+                # nothing to cable to a Fabric Interconnect it doesn't
+                # have) never shows an FI-shaped line at all: the
+                # attachment fabric() already skips an uncabled physical
+                # interface, so every one of its attachments is VNIC.
+                # See docs/cisco-collectors.md, "PHYSICAL versus VNIC".
+                print(
+                    f"        [{a.interface_kind:8}] fabric {a.fabric}  if={a.server_interface}"
+                    f"  admin={a.admin_state} oper={a.oper_state}"
+                    f"  peer={a.fabric_port or '—'}"
+                    f"  FI model/serial={a.fabric_model or '—'}/{a.fabric_serial or '—'}"
+                )
+            else:
+                print(
+                    f"        [{a.interface_kind:8}] if={a.server_interface}"
+                    f"  admin={a.admin_state} oper={a.oper_state}"
+                )
         # Per-NIC detail for the providers that report it (OpenManage);
         # the flat `nic macs` line above is all a provider without it has.
         for nic in ps.nics:

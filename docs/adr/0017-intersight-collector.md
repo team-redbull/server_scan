@@ -282,6 +282,13 @@ What v1 deliberately will not collect, and why:
   SDK version. These report `None`, never `0`. The Redfish collector gets
   this data because it reads `ProcessorMetrics`/`EnvironmentMetrics` off
   the BMC directly; Intersight does not expose an equivalent.
+  **Reconfirmed 2026-09-01** against Cisco's own current official metrics
+  documentation, independent of the pinned SDK: every documented hardware
+  telemetry category (`hw.current`/`fan`/`host`/`memory`/`network`/
+  `power_supply`/`signal_power`/`temperature`/`voltage`,
+  `system.cpu`/`memory`) has no GPU/graphics/PCIe entry at all. Two
+  independent sources now agree; see `docs/cisco-collectors.md`'s "GPUs"
+  section.
 - **`speed_mbps` on attachments.** Neither `adapter.ExtEthInterface` nor
   `adapter.HostEthInterface` has a numeric speed field. Only the
   switch-side `ether.PhysicalPort`/`ether.HostPort` do, as *free-form

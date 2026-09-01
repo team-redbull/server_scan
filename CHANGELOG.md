@@ -111,6 +111,14 @@ than that.
   got the same fix pre-emptively. No action needed — this ships fixed;
   the collector has never had a scheduled production run to have been
   under-reporting in.
+- **`--dry-run` no longer prints fabric-interconnect fields on a vNIC
+  attachment.** A vNIC structurally never carries a fabric relationship —
+  every `[VNIC ...]` line used to print `fabric None … FI
+  model/serial=—/—` regardless, which read as missing data. A
+  standalone server (no cable to a Fabric Interconnect it doesn't have)
+  now shows no FI-shaped line at all, as a direct consequence rather
+  than a special case. Applies to every provider's dry-run output, not
+  only Intersight's.
 - **Intersight was missing from the UI's Source filter**, so a whole
   collector's servers could not be filtered for. `REDFISH_STANDALONE` was
   likewise missing from the manager-type picker in both editors, so no

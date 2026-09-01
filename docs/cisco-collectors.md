@@ -825,6 +825,22 @@ Neither interface class carries a numeric speed. Only the switch-side
 `ether.PhysicalPort`/`ether.HostPort` have `OperSpeed`/`AdminSpeed`, as
 free-form strings of unverified format, so `speed_mbps` is `None`.
 
+**The dry-run print (`tools/run_collector.py`) hides fabric-interconnect
+fields on a `VNIC` attachment**, added 2026-09-01 at the user's request
+after seeing every `IntersightStandalone` server print
+`fabric None … FI model/serial=—/—` on each of its attachments. A vNIC
+structurally never carries a fabric relationship at all (the `SwitchId`
+gap just above), so printing FI-shaped fields on one reads as missing
+data rather than as a field its kind has no equivalent for — the same
+"— " convention `_dry_run_one_manager`'s own comment already applies to
+a provider with no service-profile concept at all. A standalone server
+never shows an FI-shaped line as a direct consequence, without needing
+its own special case: `attachment()` already skips an uncabled physical
+uplink (no `SwitchId`), so a standalone server contributes zero
+`PHYSICAL` attachments and every remaining line is `VNIC`. This is a
+`tools/run_collector.py` change, not a mapping one — it applies to every
+provider's dry-run output, not only Intersight's.
+
 ### CPU model
 
 **Added 2026-09-01**, reversing a scope cut in ADR-0017 that turned out
@@ -887,6 +903,19 @@ collector therefore reports GPU identity with every telemetry field
 The Redfish collector gets this data because it reads `ProcessorMetrics`
 and `EnvironmentMetrics` off the BMC directly. Intersight exposes no
 equivalent.
+
+**Reconfirmed 2026-09-01 against Cisco's own current, official metrics
+documentation** (`developer.cisco.com/docs/intersight/supported-metrics-overview/`),
+independent of the pinned SDK wheel above and current as of today's live
+API rather than a point-in-time snapshot. Every hardware telemetry
+category Intersight documents is: `hw.current`, `hw.fan`, `hw.host`,
+`hw.memory`, `hw.network`, `hw.power_supply`, `hw.signal_power`,
+`hw.temperature`, `hw.voltage`, `system.cpu`, `system.memory` — no
+GPU/graphics/PCIe category exists at all. Two independent sources (the
+SDK's inventory model and Cisco's separate telemetry API) now agree:
+what an operator sees under the Intersight UI's "Inventory → GPUs" is
+almost certainly identity-only, the same fields this collector already
+reports.
 
 ### Transport
 
