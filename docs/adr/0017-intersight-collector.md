@@ -18,14 +18,12 @@ controllers set either of those; all 37 set only `ComputeBoard`. Every
 drive on every server was therefore silently unread — not a scope cut,
 not a "diskless server," a join gap in code that was already shipped.
 `graphics.Card` and `processor.Unit` carry the same `ComputeBoard`
-relationship and were fixed the same way pre-emptively, before live data
-confirmed a problem on those two specifically (`adapter.Unit` and
-`management.Controller` carry no `ComputeBoard` relationship at all and
-were correctly left alone). See "The request plan" and the "Validation"
-section's second field-test entry below.
-
-`--dry-run` against a full ingest with both fixes has not been re-run
-yet — see "Validation" below for exactly what is and is not covered.
+relationship and were fixed the same way pre-emptively, and a `--dry-run`
+rerun on the same tenant **confirmed** both drives and `cpu_model` now
+populate correctly (`adapter.Unit` and `management.Controller` carry no
+`ComputeBoard` relationship at all and were correctly left alone). See
+"The request plan" and the "Validation" section's second field-test
+entry below.
 
 The transport and auth path have been exercised against the **real
 `intersight.com` service**; the field mapping has now seen a real tenant,
@@ -717,11 +715,14 @@ above, but storage did not fit either. Chasing it down:
 Fixed in `IntersightProvider._owning_server`/`_build_joins`: one more
 fleet-wide `compute/Boards` query, and a fallback through it for the
 three affected classes. See "The request plan" above for the mechanism.
-**Not yet re-verified against this tenant** — the fix is unit-tested
-(mirroring the exact 0-of-37 shape found live) but a rerun of
-`--dry-run` on the real tenant is what actually confirms drives, GPUs
-and CPU model now populate for the 18 servers that previously reported
-nothing on any of the three.
+
+**CONFIRMED 2026-09-01, `--dry-run` rerun on the same tenant: drives and
+`cpu_model` now populate correctly.** `processor.Unit` carries the
+identical `ComputeBoard`-only pattern `storage.Controller` was directly
+confirmed to have — inferred at the time the fix shipped, now verified
+rather than assumed. GPUs were not separately confirmed (this tenant
+appears to have no GPU hardware at all — `0` there is expected, not
+evidence either way for `graphics.Card`'s own fallback).
 
 ---
 
