@@ -64,6 +64,12 @@ def test_extract_facts_reads_connectivity_facts_directly() -> None:
 
 
 def test_extract_facts_counts_failed_psus() -> None:
+    """`Psu.health` uses `normalize_oper_state`'s UP/DOWN/DISABLED/UNKNOWN
+    vocabulary — the same OperState-sourced pattern `Gpu.health` already
+    uses — not a literal "OK"/"FAILED" pair. UNKNOWN is deliberately not
+    counted as failed, matching `storage.failed_drive_count`: a read
+    failure is not evidence of a failure.
+    """
     server = Server(
         _id="srv_x",
         name="x",
@@ -71,11 +77,17 @@ def test_extract_facts_counts_failed_psus() -> None:
         created_at=NOW,
         updated_at=NOW,
         hardware=Hardware(
-            power=Power(psus=[Psu(id="p1", health="OK"), Psu(id="p2", health="FAILED")])
+            power=Power(
+                psus=[
+                    Psu(id="p1", health="UP"),
+                    Psu(id="p2", health="DOWN"),
+                    Psu(id="p3", health="UNKNOWN"),
+                ]
+            )
         ),
     )
     facts = extract_facts(server)
-    assert facts["power.psu_count"] == 2
+    assert facts["power.psu_count"] == 3
     assert facts["power.failed_psu_count"] == 1
 
 

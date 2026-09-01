@@ -36,5 +36,15 @@ def extract_facts(server: Server) -> dict[str, Any]:
         "connectivity.fabric_paths_up": server.connectivity.facts.fabric_paths_up,
         "connectivity.fabric_paths_down": server.connectivity.facts.fabric_paths_down,
         "power.psu_count": len(server.hardware.power.psus),
-        "power.failed_psu_count": sum(1 for h in psu_healths if h != "OK"),
+        # DOWN, not "not OK": no collector had ever populated `psus`
+        # before 2026-09-01, so this comparison was never exercised
+        # against real data. `Psu.health` uses `normalize_oper_state`'s
+        # UP/DOWN/DISABLED/UNKNOWN vocabulary (the same OperState-sourced
+        # pattern `Gpu.health` already uses) — "OK" is never emitted by
+        # any provider, which would have counted every healthy PSU as
+        # failed the moment real data arrived. UNKNOWN is deliberately
+        # not counted, matching `storage.failed_drive_count` above: a
+        # read failure is not evidence of a failure, and counting it as
+        # one would false-alarm on every partial query.
+        "power.failed_psu_count": sum(1 for h in psu_healths if h == "DOWN"),
     }

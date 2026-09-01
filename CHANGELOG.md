@@ -93,6 +93,15 @@ than that.
   `processor.Unit`, the same fleet-wide-listable cost class as the
   collector's other sub-resource joins — this was cut in the original
   build on a since-corrected assumption; see ADR-0017's Decision 5.
+- **The Intersight collector now reports PSU identity and health**,
+  making the health engine's `power.psu_count`/`power.failed_psu_count`
+  metrics usable for the first time — the domain model and these metrics
+  already existed, but no collector, for any vendor, had ever populated
+  them. Only reported for rack/standalone servers: a blade's PSUs belong
+  to its shared chassis, not to the blade, so a blade server reports
+  none. Writing a health policy against `power.failed_psu_count`: it
+  compares a PSU's `health` to `"DOWN"`, not `"FAILED"` — see
+  `docs/cisco-collectors.md`, "Power supplies (PSUs)".
 - **A fleet-wide "Across all sites" card** on the sites overview, and
   `standalone` now labelled properly in every vendor breakdown.
 - **BMC addresses display as plain hosts** in the UI and the collector

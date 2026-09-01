@@ -50,7 +50,16 @@ from app.domain.models.connectivity import (
     ConnectivityAttachment,
     compute_connectivity_facts,
 )
-from app.domain.models.hardware import Cpu, Gpu, Hardware, Memory, Power, Storage, StorageDrive
+from app.domain.models.hardware import (
+    Cpu,
+    Gpu,
+    Hardware,
+    Memory,
+    Power,
+    Psu,
+    Storage,
+    StorageDrive,
+)
 from app.domain.models.health import Health
 from app.domain.models.maintenance import Maintenance
 from app.domain.models.manager import Manager
@@ -196,6 +205,25 @@ def _gpu_from_dict(data: dict[str, object]) -> Gpu:
         uncorrectable_error_count=_opt_int(data.get("uncorrectable_error_count")),
         temperature_celsius=_opt_float(data.get("temperature_celsius")),
         power_watts=_opt_float(data.get("power_watts")),
+    )
+
+
+def _psu_from_dict(data: dict[str, object]) -> Psu:
+    """
+    Build a `Psu` from the untyped dict a provider reports.
+
+    Args:
+        data (dict[str, object]): One entry from `ProviderServer.psus`.
+
+    Returns:
+        Psu: The domain model.
+    """
+    return Psu(
+        id=str(data.get("id", "")),
+        model=_opt_str(data.get("model")),
+        serial=_opt_str(data.get("serial")),
+        health=_opt_str(data.get("health")),
+        capacity_watts=_opt_int(data.get("capacity_watts")),
     )
 
 
@@ -545,7 +573,13 @@ class IngestService:
                 existing_hardware.gpus if existing_hardware else None,
                 default=[],
             ),
-            power=Power(psus=[]),
+            power=Power(
+                psus=_carry_forward(
+                    [_psu_from_dict(p) for p in ps.psus] if ps.psus is not None else None,
+                    existing_hardware.power.psus if existing_hardware else None,
+                    default=[],
+                )
+            ),
         )
 
         # The name is the authority on site, not the collector's config —

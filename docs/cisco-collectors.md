@@ -768,6 +768,7 @@ reference the server directly:
 | `management.Interface` | `ManagementController` -> `management.Controller` |
 | `processor.Unit` | `ComputeBlade` / `ComputeRackUnit`, or `ComputeBoard` -> `compute.Board` |
 | `compute.Board` | `ComputeBlade` / `ComputeRackUnit` |
+| `equipment.Psu` | `ComputeRackUnit` **only** — no `ComputeBlade`, no `ComputeBoard` |
 
 **The `ComputeBoard` fallback is load-bearing, not defensive
 programming.** Confirmed live 2026-09-01 against a real tenant: **0 of
@@ -916,6 +917,44 @@ SDK's inventory model and Cisco's separate telemetry API) now agree:
 what an operator sees under the Intersight UI's "Inventory → GPUs" is
 almost certainly identity-only, the same fields this collector already
 reports.
+
+### Power supplies (PSUs)
+
+**Added 2026-09-01**, at the user's request, and the first provider to
+populate a domain field that existed but had never been wired to real
+data: `app.domain.models.hardware.Psu`/`Power` and the health engine's
+`power.psu_count`/`power.failed_psu_count` metrics predate this
+collector, but `IngestService` hardcoded `Power(psus=[])` unconditionally
+until now — no vendor's provider had ever reported one.
+
+`equipment.Psu` carries `ComputeRackUnit` but, confirmed against Cisco's
+own generated Go SDK, **no `ComputeBlade` and no `ComputeBoard`
+relationship at all** — unique among every MO this collector reads. A
+blade's PSUs are shared across the whole chassis
+(`EquipmentChassis`), not owned by one blade, so this MO structurally
+cannot attribute a PSU to an individual blade server. **A blade server
+therefore reports no PSUs through this collector; only rack/standalone
+servers do.** This is a real capability gap for blade fleets, not a join
+bug to fix — there is no per-blade PSU relationship for any join to
+follow.
+
+Fields read: `PsuId` (chassis-relative slot, e.g. "1"/"2", the `id`),
+`Model`/`Pid` (falls back to `Pid` like every other equipment MO),
+`Serial` (inherited from `EquipmentBase`, confirmed present the same way
+as `storage.Controller`/`graphics.Card`/`pci.Device`), `OperState`, and
+`PsuWattage` (a string, parsed as watts — no unit ambiguity is documented
+for this field, unlike `TotalMemory`).
+
+**`health` uses `normalize_oper_state`'s UP/DOWN/DISABLED/UNKNOWN
+vocabulary** — the same OperState-sourced pattern `gpu()`'s own `health`
+field already uses — not a literal `"OK"`/`"FAILED"` pair. The health
+engine's `power.failed_psu_count` fact previously compared against the
+literal string `"OK"`, which no provider (this one included) has ever
+emitted; that comparison was dead code, exercised for the first time by
+this change, and has been corrected to `health == "DOWN"` alongside it —
+`UNKNOWN` is deliberately not counted as failed, matching
+`storage.failed_drive_count`'s existing philosophy that a read failure is
+not evidence of a hardware failure.
 
 ### Transport
 

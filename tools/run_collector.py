@@ -640,6 +640,7 @@ async def _dry_run_one_manager(
             f"\n     nic macs    : {macs}"
             f"{attachments}"
             f"\n     gpus        : {_or_unread(None if ps.gpus is None else len(ps.gpus))}"
+            f"\n     psus        : {_or_unread(None if ps.psus is None else len(ps.psus))}"
         )
         for a in ps.attachments:
             if a.interface_kind == "PHYSICAL":
@@ -701,6 +702,14 @@ async def _dry_run_one_manager(
                 f"  temp={f'{temp:.0f}°C' if isinstance(temp, (int, float)) else '—'}"
                 f"  power={f'{power:.0f}W' if isinstance(power, (int, float)) else '—'}"
                 f"  health={gpu.get('health')}"
+            )
+        for psu in ps.psus or ():
+            capacity = psu.get("capacity_watts")
+            print(
+                f"        psu {psu.get('id')}  {psu.get('model') or '—'}"
+                f"  serial={psu.get('serial') or '—'}"
+                f"  {f'{capacity}W' if isinstance(capacity, int) else 'wattage unknown'}"
+                f"  health={psu.get('health')}"
             )
     print(f"\n{manager.name}: {count} server(s) reported. Nothing was written.")
     return count

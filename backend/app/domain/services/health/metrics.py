@@ -175,7 +175,7 @@ def build_default_registry() -> MetricRegistry:
             name="power.failed_psu_count",
             type=MetricType.INT,
             category="power",
-            description="Count of PSUs with health != OK",
+            description="Count of PSUs with health == DOWN",
             resolver=lambda f: _get(f, "power.failed_psu_count", 0),
         )
     )

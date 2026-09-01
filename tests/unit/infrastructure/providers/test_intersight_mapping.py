@@ -256,6 +256,7 @@ def test_an_unqueried_subresource_is_none_not_empty() -> None:
     assert server.gpus is None
     assert server.nic_macs is None
     assert server.storage_total_bytes is None
+    assert server.psus is None
 
 
 def test_a_queried_but_empty_subresource_is_empty_not_none() -> None:
@@ -268,10 +269,12 @@ def test_a_queried_but_empty_subresource_is_empty_not_none() -> None:
         cards=[],
         host_interfaces=[],
         ext_interfaces=[],
+        psus=[],
     )
     assert server.storage_drives == ()
     assert server.gpus == ()
     assert server.nic_macs == ()
+    assert server.psus == ()
 
 
 # --- GPUs -------------------------------------------------------------
@@ -340,6 +343,36 @@ def test_cpu_model_is_none_when_the_table_was_not_queried() -> None:
         _summary(), provider_type="INTERSIGHT", manager_id="mgr_intersight"
     )
     assert server.cpu_model is None
+
+
+# --- PSUs ---------------------------------------------------------------
+
+
+def test_psu_health_uses_the_oper_state_vocabulary_not_ok_failed() -> None:
+    """`Psu.health` mirrors `gpu()`'s own OperState-sourced pattern
+    (UP/DOWN/DISABLED/UNKNOWN) rather than a literal "OK"/"FAILED" pair —
+    the health engine's facts extractor was fixed to match, since no
+    provider had ever populated real data against it before.
+    """
+    healthy = mapping.psu(
+        {"PsuId": "1", "Model": "PSU-750W", "Serial": "PSU-1", "OperState": "operable"}
+    )
+    failed = mapping.psu({"PsuId": "2", "OperState": "inoperable"})
+    assert healthy["health"] == "UP"
+    assert failed["health"] == "DOWN"
+
+
+def test_psu_capacity_and_id() -> None:
+    unit = mapping.psu({"PsuId": "1", "Model": "PSU-750W", "Serial": "PSU-1", "PsuWattage": "750"})
+    assert unit["id"] == "1"
+    assert unit["model"] == "PSU-750W"
+    assert unit["serial"] == "PSU-1"
+    assert unit["capacity_watts"] == 750
+
+
+def test_psu_falls_back_to_moid_when_psuid_is_absent() -> None:
+    unit = mapping.psu({"Moid": "psu-moid-1"})
+    assert unit["id"] == "psu-moid-1"
 
 
 # --- identity and addressing ------------------------------------------

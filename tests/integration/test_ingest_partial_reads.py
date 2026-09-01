@@ -85,6 +85,7 @@ def _fully_read(**overrides: object) -> ProviderServer:
                 "health": HealthSeverity.CRITICAL.value,
             },
         ),
+        "psus": ({"id": "1", "model": "PSU-750W", "serial": "PSU-1", "health": "DOWN"},),
     }
     base.update(overrides)
     return ProviderServer(**base)  # type: ignore[arg-type]
@@ -120,6 +121,7 @@ async def test_a_sub_resource_that_could_not_be_read_does_not_erase_stored_hardw
                 storage_total_bytes=None,
                 storage_drives=None,
                 nic_macs=None,
+                psus=None,
             )
         )
     )
@@ -149,6 +151,11 @@ async def test_a_sub_resource_that_could_not_be_read_does_not_erase_stored_hardw
     assert server.hardware.cpu.model == "Xeon Gold 6338"
     assert server.hardware.memory.total_bytes == 512 * 1024**3
     assert server.identity.nic_macs == ["00:00:5e:00:53:01"]
+    # Added 2026-09-01: `psus` follows the identical carry-forward
+    # contract — `IngestService` used to hardcode `Power(psus=[])`
+    # unconditionally, which this same-shaped defect would have produced
+    # regardless of what the provider reported.
+    assert [p.health for p in server.hardware.power.psus] == ["DOWN"]
 
 
 async def test_an_empty_read_still_overwrites(mongo_holder: MongoClientHolder) -> None:

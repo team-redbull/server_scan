@@ -150,6 +150,14 @@ class ProviderServer:
     # standard path is populated by every vendor.
     gpus: tuple[dict[str, object], ...] | None = None
 
+    # Keys mirror `app.domain.models.hardware.Psu`. Added 2026-09-01: the
+    # domain model and the health engine's `power.psu_count`/
+    # `power.failed_psu_count` metrics already existed, but no provider
+    # had ever populated this field — `IngestService` hardcoded
+    # `Power(psus=[])`. A server whose PSU is down reported HEALTHY on
+    # power the same way a server with two good PSUs did.
+    psus: tuple[dict[str, object], ...] | None = None
+
     attachments: tuple[ProviderAttachment, ...] = ()
 
     tags: tuple[str, ...] = field(default_factory=tuple)

@@ -25,6 +25,13 @@ populate correctly (`adapter.Unit` and `management.Controller` carry no
 "The request plan" and the "Validation" section's second field-test
 entry below.
 
+**It also added the first field the platform's domain model had a slot
+for but no provider had ever filled**: PSU identity and health
+(`equipment.Psu`, "The request plan"'s "PSU identity and health"
+paragraph), which caught and fixed a real, previously dead bug in the
+health engine's `power.failed_psu_count` fact along the way — see
+`docs/cisco-collectors.md`, "Power supplies (PSUs)".
+
 The transport and auth path have been exercised against the **real
 `intersight.com` service**; the field mapping has now seen a real tenant,
 though a small (19-server) one. Read "Validation: what this has and has
@@ -376,6 +383,7 @@ directly in the SDK models:
 | `processor/Units` | `compute_blade` / `compute_rack_unit`, **or `compute_board`** (added 2026-09-01, see below) |
 | `graphics/Cards` | `compute_blade` / `compute_rack_unit`, **or `compute_board`** |
 | `compute/Boards` | `compute_blade` / `compute_rack_unit` (added 2026-09-01, see below) |
+| `equipment/Psus` | `compute_rack_unit` **only** — no `compute_blade`, no `compute_board` (added 2026-09-01) |
 
 **The `compute_board` fallback, added 2026-09-01, is not optional on
 some hardware.** A live tenant showed **0 of 37** `storage.Controller`
@@ -390,6 +398,26 @@ Python wheel this ADR otherwise cites) and must never have it added to
 their `$select` — an unsupported field risks failing the whole query.
 `compute/Boards` is one more fleet-wide query, itself joined via a direct
 `ComputeBlade`/`ComputeRackUnit` relationship.
+
+**PSU identity and health, added 2026-09-01, is the first field this
+collector reports that the platform's domain model already had a slot
+for but no provider had ever filled.** `app.domain.models.hardware.Psu`/
+`Power` and the health engine's `power.psu_count`/`power.failed_psu_count`
+metrics predate this collector; `IngestService` hardcoded
+`Power(psus=[])` until this shipped. `equipment.Psu` is unique among
+every MO here: it carries `ComputeRackUnit` but no `ComputeBlade` and no
+`ComputeBoard` relationship at all, confirmed against Cisco's own
+generated Go SDK — a blade's PSUs belong to its shared chassis
+(`EquipmentChassis`), not to one blade, so **this collector reports no
+PSUs for a blade server**, a real capability gap rather than a join to
+fix. Fixing this also caught a real, if previously dead, bug: the health
+engine's `power.failed_psu_count` fact compared `Psu.health` against the
+literal string `"OK"`, a vocabulary no provider (this one included)
+actually emits — `Psu.health` uses `normalize_oper_state`'s
+UP/DOWN/DISABLED/UNKNOWN, the same pattern `gpu()`'s own `health` field
+already used. That comparison would have counted every healthy PSU as
+failed the moment real data arrived; it is now `health == "DOWN"`. See
+`docs/cisco-collectors.md`, "Power supplies (PSUs)".
 
 At `$top=1000` (the documented maximum) that is on the order of **~120
 requests for 10,000 servers**, flat in fleet size — against the Redfish

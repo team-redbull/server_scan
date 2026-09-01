@@ -465,6 +465,54 @@ class TestDryRun:
         assert "temp=58°C" in out
         assert "power=350W" in out
 
+    async def test_dry_run_shows_psu_detail(self, capsys: Any) -> None:
+        """Added 2026-09-01 at the user's request — the domain model and
+        the health engine's `power.failed_psu_count` metric already
+        existed, but no provider had ever populated it, so the dry-run
+        print never had anything to show either.
+        """
+
+        class FakeProvider:
+            provider_type = "INTERSIGHT"
+
+            async def health_check(self) -> None:
+                return None
+
+            async def list_servers(self) -> Any:
+                yield ProviderServer(
+                    external_id="intersight/moid1",
+                    vendor="cisco",
+                    name="rack-01",
+                    psus=(
+                        {
+                            "id": "1",
+                            "model": "PSU-750W",
+                            "serial": "PSU-1",
+                            "health": "UP",
+                            "capacity_watts": 750,
+                        },
+                        {
+                            "id": "2",
+                            "model": "PSU-750W",
+                            "serial": "PSU-2",
+                            "health": "DOWN",
+                            "capacity_watts": 750,
+                        },
+                    ),
+                )
+
+        await _dry_run_one_manager(
+            _manager(),
+            credential_resolver=FakeCredentialResolver(),  # type: ignore[arg-type]
+            timeout_seconds=5.0,
+            limit=None,
+            provider_factory=_factory(FakeProvider()),
+        )
+        out = capsys.readouterr().out
+        assert "psus        : 2" in out
+        assert "psu 1  PSU-750W  serial=PSU-1  750W  health=UP" in out
+        assert "psu 2  PSU-750W  serial=PSU-2  750W  health=DOWN" in out
+
     async def test_dry_run_hides_fi_identity_on_a_vnic_attachment(self, capsys: Any) -> None:
         """A vNIC structurally never carries a fabric relationship at all
         (`docs/cisco-collectors.md`, "PHYSICAL versus VNIC") — printing

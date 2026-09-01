@@ -70,6 +70,16 @@ _CARD_FIELDS = "Moid,Model,Pid,Vendor,Serial,OperState,ComputeBlade,ComputeRackU
 _PROCESSOR_FIELDS = "Moid,Model,ComputeBlade,ComputeRackUnit,ComputeBoard"
 _MGMT_CONTROLLER_FIELDS = "Moid,ComputeBlade,ComputeRackUnit"
 _MGMT_INTERFACE_FIELDS = "Moid,MacAddress,IpAddress,Ipv4Address,ManagementController"
+# `equipment.Psu` carries `ComputeRackUnit` but, confirmed against
+# Cisco's own generated Go SDK, NO `ComputeBlade` and NO `ComputeBoard`
+# relationship at all — a blade's PSUs belong to its chassis
+# (`EquipmentChassis`), shared across every blade in it, not to one
+# blade. Selecting `ComputeBlade`/`ComputeBoard` here would risk failing
+# the whole query for a field that doesn't exist on this class; a blade
+# server simply reports no PSUs through this MO, which is a real
+# capability gap, not a join bug to fix. See
+# docs/cisco-collectors.md, "Power supplies (PSUs)".
+_PSU_FIELDS = "Moid,PsuId,Model,Pid,Serial,OperState,PsuWattage,ComputeRackUnit"
 
 
 def _owning_server(
@@ -168,6 +178,7 @@ class _Joins:
         self.disks: dict[str, list[Mapping[str, Any]]] | None = None
         self.cards: dict[str, list[Mapping[str, Any]]] | None = None
         self.processors: dict[str, list[Mapping[str, Any]]] | None = None
+        self.psus: dict[str, list[Mapping[str, Any]]] | None = None
         self.management: dict[str, Mapping[str, Any]] | None = None
 
     def for_server(
@@ -488,6 +499,15 @@ class IntersightProvider:
                 processors, lambda p: _owning_server(p, board_owner=board_owner)
             )
 
+        # No `board_owner` fallback: `equipment.Psu` has no `ComputeBoard`
+        # relationship at all (see `_PSU_FIELDS`), so a blade server's
+        # PSUs — owned by its chassis, not the blade — never resolve
+        # here regardless. That is a real capability gap, not something
+        # this join could fix.
+        psus = await self._collect_table(client, "equipment/Psus", select=_PSU_FIELDS)
+        if psus is not None:
+            joins.psus = _group_by(psus, _owning_server)
+
         mgmt_controllers = await self._collect_table(
             client, "management/Controllers", select=_MGMT_CONTROLLER_FIELDS
         )
@@ -581,6 +601,7 @@ class IntersightProvider:
                     disks=joins.for_server(moid, joins.disks),
                     cards=joins.for_server(moid, joins.cards),
                     processors=joins.for_server(moid, joins.processors),
+                    psus=joins.for_server(moid, joins.psus),
                     management_interface=(
                         joins.management.get(moid) if joins.management is not None else None
                     ),

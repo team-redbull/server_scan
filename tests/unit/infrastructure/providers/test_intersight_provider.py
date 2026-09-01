@@ -42,10 +42,10 @@ def _ref(moid: str) -> dict[str, str]:
 
 
 # One rack server with one adapter carrying one uplink and one vNIC, one
-# storage controller with one disk, one GPU, one CPU socket and one BMC
-# interface — the smallest estate that exercises every join, including
-# the two-hop ones (interfaces reach the server through their adapter
-# unit, disks through their controller).
+# storage controller with one disk, one GPU, one CPU socket, two PSUs and
+# one BMC interface — the smallest estate that exercises every join,
+# including the two-hop ones (interfaces reach the server through their
+# adapter unit, disks through their controller).
 _TABLES: dict[str, list[dict[str, Any]]] = {
     "compute/PhysicalSummaries": [
         {
@@ -109,6 +109,22 @@ _TABLES: dict[str, list[dict[str, Any]]] = {
     ],
     "processor/Units": [
         {"Moid": "cpu1", "Model": "UCS-CPU-I6338", "ComputeRackUnit": _ref("server1")}
+    ],
+    "equipment/Psus": [
+        {
+            "Moid": "psu1",
+            "PsuId": "1",
+            "Model": "PSU-750W",
+            "OperState": "operable",
+            "ComputeRackUnit": _ref("server1"),
+        },
+        {
+            "Moid": "psu2",
+            "PsuId": "2",
+            "Model": "PSU-750W",
+            "OperState": "inoperable",
+            "ComputeRackUnit": _ref("server1"),
+        },
     ],
     "management/Controllers": [{"Moid": "bmc1", "ComputeRackUnit": _ref("server1")}],
     "management/Interfaces": [
@@ -311,6 +327,7 @@ async def test_a_server_with_no_subresources_gets_empty_not_another_server_s() -
     assert second.storage_drives == ()
     assert second.attachments == ()
     assert second.gpus == ()
+    assert second.psus == ()
     assert second.cpu_model is None
     assert second.name == "UCSC-C220-WZP2"
 
@@ -325,6 +342,24 @@ async def test_cpu_model_joins_through_the_processor_unit() -> None:
     first = next(s for s in servers if s.serial == "WZP1")
 
     assert first.cpu_model == "UCS-CPU-I6338"
+
+
+@pytest.mark.asyncio
+async def test_psus_join_through_computerackunit() -> None:
+    """`equipment.Psu` was added 2026-09-01, at the user's request — the
+    domain model and the health engine's `power.failed_psu_count` metric
+    already existed, but no provider had ever populated it. Unlike
+    `storage.Controller`/`graphics.Card`/`processor.Unit`, this MO
+    carries no `ComputeBoard` relationship at all (confirmed against
+    Cisco's own generated Go SDK) — a blade's PSUs belong to its chassis,
+    not the blade, so this join is direct `ComputeRackUnit` only.
+    """
+    servers = await _collect(_provider(_FakeClient()))
+    first = next(s for s in servers if s.serial == "WZP1")
+
+    assert first.psus is not None
+    assert [p["id"] for p in first.psus] == ["1", "2"]
+    assert [p["health"] for p in first.psus] == ["UP", "DOWN"]
 
 
 @pytest.mark.asyncio

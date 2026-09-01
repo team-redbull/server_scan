@@ -288,6 +288,42 @@ def _drive_health(disk: Mapping[str, Any]) -> str:
     return "UNKNOWN"
 
 
+def psu(unit: Mapping[str, Any]) -> dict[str, object]:
+    """
+    One `equipment.Psu` as the platform's PSU shape.
+
+    Added 2026-09-01: the domain model and the health engine's
+    `power.psu_count`/`power.failed_psu_count` metrics already existed,
+    but no provider had ever populated this field. `equipment.Psu`
+    carries `ComputeRackUnit` but, confirmed against Cisco's own
+    generated Go SDK, **no `ComputeBlade` and no `ComputeBoard`
+    relationship at all** — a blade's PSUs belong to its chassis
+    (`EquipmentChassis`), shared across every blade in it, not to one
+    blade. A blade server therefore reports no PSUs through this MO; only
+    rack/standalone servers do. See docs/cisco-collectors.md, "Power
+    supplies (PSUs)".
+
+    `health` uses `normalize_oper_state` (UP/DOWN/DISABLED/UNKNOWN),
+    the same vocabulary `gpu()` already uses for the identical
+    OperState-sourced pattern — not the literal `"OK"` the health
+    engine's facts extractor checked before this, which was never
+    exercised against real data and has been corrected alongside this.
+
+    Args:
+        unit (Mapping[str, Any]): An `equipment.Psu`.
+
+    Returns:
+        dict[str, object]: Keys mirroring `app.domain.models.hardware.Psu`.
+    """
+    return {
+        "id": _text(unit.get("PsuId")) or _text(unit.get("Moid")),
+        "model": _text(unit.get("Model")) or _text(unit.get("Pid")),
+        "serial": _text(unit.get("Serial")),
+        "health": normalize_oper_state(unit.get("OperState")),
+        "capacity_watts": _as_int(unit.get("PsuWattage")),
+    }
+
+
 def gpu(card: Mapping[str, Any]) -> dict[str, object]:
     """
     One `graphics.Card` as the platform's GPU shape.
@@ -418,6 +454,7 @@ def to_provider_server(
     disks: list[Mapping[str, Any]] | None = None,
     cards: list[Mapping[str, Any]] | None = None,
     processors: list[Mapping[str, Any]] | None = None,
+    psus: list[Mapping[str, Any]] | None = None,
     management_interface: Mapping[str, Any] | None = None,
 ) -> ProviderServer:
     """
@@ -452,6 +489,10 @@ def to_provider_server(
             2026-09-01") reversed ADR-0017's original cut — the class is
             fleet-wide listable at the same cost as `storage.Controller`/
             `graphics.Card`, mirroring `ucs_manager.mapping._cpu_model`.
+        psus (list[Mapping[str, Any]] | None): `equipment.Psu` MOs. Only
+            populated for a rack/standalone server — a blade's PSUs
+            belong to its chassis, not to the blade, and this MO carries
+            no relationship a blade could join through.
         management_interface (Mapping[str, Any] | None): The BMC's
             `management.Interface`.
 
@@ -518,6 +559,7 @@ def to_provider_server(
         storage_total_bytes=storage_total,
         storage_drives=tuple(drives) if drives is not None else None,
         gpus=tuple(gpu(card) for card in cards) if cards is not None else None,
+        psus=tuple(psu(unit) for unit in psus) if psus is not None else None,
         attachments=tuple(attachments),
     )
 
