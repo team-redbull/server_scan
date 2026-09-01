@@ -446,29 +446,59 @@ async def _check_boot_optimized_storage(
     """
     _header("5. BOOT-OPTIMIZED STORAGE — does M.2/SD explain a 0-drive report?")
 
-    disks_by_controller = await _resource_by_owner(
-        client, "storage/PhysicalDisks", select="Moid,StorageController"
-    )
-    controller_owner: dict[str, str] = {}
-    async for row in client.list_all(
-        "storage/Controllers", select="Moid,ComputeBlade,ComputeRackUnit"
-    ):
-        moid = str(row.get("Moid") or "")
-        owner = mapping.moref(row.get("ComputeBlade")) or mapping.moref(row.get("ComputeRackUnit"))
-        if moid and owner:
-            controller_owner[moid] = owner
-    disks_by_server: dict[str, int] = {}
-    for controller_moid, count in (disks_by_controller or {}).items():
-        owner = controller_owner.get(controller_moid)
-        if owner:
-            disks_by_server[owner] = disks_by_server.get(owner, 0) + count
-
     board_owner: dict[str, str] = {}
     async for row in client.list_all("compute/Boards", select="Moid,ComputeBlade,ComputeRackUnit"):
         moid = str(row.get("Moid") or "")
         owner = mapping.moref(row.get("ComputeBlade")) or mapping.moref(row.get("ComputeRackUnit"))
         if moid and owner:
             board_owner[moid] = owner
+
+    # `storage.Controller` carries THREE owner relationships
+    # (`ComputeBlade`/`ComputeRackUnit`/`ComputeBoard`, confirmed against
+    # Cisco's own generated Go SDK, model_storage_controller.go), but the
+    # collector's existing join only follows the first two. If a
+    # controller populates only `ComputeBoard`, the collector's current
+    # `storage/Controllers` join drops it — and every disk under it —
+    # silently. Tracked separately so a live run can tell "genuinely no
+    # controller" apart from "a join gap in code that already runs
+    # today," which is a different, higher-priority kind of finding.
+    direct = 0
+    via_board = 0
+    unresolved = 0
+    controller_owner: dict[str, str] = {}
+    async for row in client.list_all(
+        "storage/Controllers", select="Moid,ComputeBlade,ComputeRackUnit,ComputeBoard"
+    ):
+        moid = str(row.get("Moid") or "")
+        owner = mapping.moref(row.get("ComputeBlade")) or mapping.moref(row.get("ComputeRackUnit"))
+        if owner:
+            direct += 1
+        else:
+            owner = board_owner.get(mapping.moref(row.get("ComputeBoard")) or "")
+            if owner:
+                via_board += 1
+            else:
+                unresolved += 1
+        if moid and owner:
+            controller_owner[moid] = owner
+
+    _p(f"storage.Controller rows: {direct} joined via ComputeBlade/ComputeRackUnit directly")
+    if via_board:
+        _p(
+            f"                         {via_board} joined ONLY via ComputeBoard — the"
+            " collector's CURRENT storage/Controllers join misses these today"
+        )
+    if unresolved:
+        _p(f"                         {unresolved} joined via neither — genuinely unowned")
+
+    disks_by_controller = await _resource_by_owner(
+        client, "storage/PhysicalDisks", select="Moid,StorageController"
+    )
+    disks_by_server: dict[str, int] = {}
+    for controller_moid, count in (disks_by_controller or {}).items():
+        owner = controller_owner.get(controller_moid)
+        if owner:
+            disks_by_server[owner] = disks_by_server.get(owner, 0) + count
 
     async def _drives_by_server(
         controller_resource: str, drive_resource: str, owner_field: str
