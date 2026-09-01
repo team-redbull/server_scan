@@ -299,6 +299,49 @@ def test_gpu_telemetry_is_none_because_the_api_has_none() -> None:
         assert gpu[absent] is None, absent
 
 
+# --- CPU model ----------------------------------------------------------
+
+
+def test_cpu_model_is_the_first_socket_with_a_reported_model() -> None:
+    """Mirrors `ucs_manager.mapping._cpu_model`'s "first equipped socket"
+    rule, without filtering on `Presence` — an unpopulated socket has no
+    processor installed and so reports no `Model` either (ADR-0017's
+    UNVERIFIED list, item 10 — Intersight's equipped-value string is
+    unverified, unlike `ucsmsdk`'s confirmed one).
+    """
+    server = mapping.to_provider_server(
+        _summary(),
+        provider_type="INTERSIGHT",
+        manager_id="mgr_intersight",
+        processors=[{"Model": ""}, {"Model": "UCS-CPU-I6338"}],
+    )
+    assert server.cpu_model == "UCS-CPU-I6338"
+
+
+def test_cpu_model_is_none_when_no_socket_reports_one() -> None:
+    """An empty socket (or a table with none) contributes nothing."""
+    server = mapping.to_provider_server(
+        _summary(),
+        provider_type="INTERSIGHT",
+        manager_id="mgr_intersight",
+        processors=[{"Model": None}],
+    )
+    assert server.cpu_model is None
+
+
+def test_cpu_model_is_none_when_the_table_was_not_queried() -> None:
+    """Unlike `storage_drives`/`gpus`/`nic_macs`, `cpu_model` is a scalar
+    with no "queried but empty" state worth distinguishing from "not
+    queried" — a real server always has a CPU, so either case means only
+    "could not determine it," and `IngestService` carries the stored
+    value forward for both the same way.
+    """
+    server = mapping.to_provider_server(
+        _summary(), provider_type="INTERSIGHT", manager_id="mgr_intersight"
+    )
+    assert server.cpu_model is None
+
+
 # --- identity and addressing ------------------------------------------
 
 

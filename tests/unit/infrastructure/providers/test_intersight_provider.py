@@ -42,10 +42,10 @@ def _ref(moid: str) -> dict[str, str]:
 
 
 # One rack server with one adapter carrying one uplink and one vNIC, one
-# storage controller with one disk, one GPU and one BMC interface — the
-# smallest estate that exercises every join, including the two-hop ones
-# (interfaces reach the server through their adapter unit, disks through
-# their controller).
+# storage controller with one disk, one GPU, one CPU socket and one BMC
+# interface — the smallest estate that exercises every join, including
+# the two-hop ones (interfaces reach the server through their adapter
+# unit, disks through their controller).
 _TABLES: dict[str, list[dict[str, Any]]] = {
     "compute/PhysicalSummaries": [
         {
@@ -106,6 +106,9 @@ _TABLES: dict[str, list[dict[str, Any]]] = {
     ],
     "graphics/Cards": [
         {"Moid": "gpu1", "Model": "NVIDIA A100", "ComputeRackUnit": _ref("server1")}
+    ],
+    "processor/Units": [
+        {"Moid": "cpu1", "Model": "UCS-CPU-I6338", "ComputeRackUnit": _ref("server1")}
     ],
     "management/Controllers": [{"Moid": "bmc1", "ComputeRackUnit": _ref("server1")}],
     "management/Interfaces": [
@@ -279,7 +282,20 @@ async def test_a_server_with_no_subresources_gets_empty_not_another_server_s() -
     assert second.storage_drives == ()
     assert second.attachments == ()
     assert second.gpus == ()
+    assert second.cpu_model is None
     assert second.name == "UCSC-C220-WZP2"
+
+
+@pytest.mark.asyncio
+async def test_cpu_model_joins_through_the_processor_unit() -> None:
+    """`processor.Unit` was added 2026-09-01, reversing ADR-0017's
+    original cut — see `docs/adr/0017-intersight-collector.md`, Decision
+    5, and `docs/notes/intersight-inventory-model.md`'s follow-up.
+    """
+    servers = await _collect(_provider(_FakeClient()))
+    first = next(s for s in servers if s.serial == "WZP1")
+
+    assert first.cpu_model == "UCS-CPU-I6338"
 
 
 @pytest.mark.asyncio

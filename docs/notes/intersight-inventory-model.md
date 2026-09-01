@@ -590,6 +590,354 @@ itself, but consistent with UCS's own model strings (e.g.
 field, unlabeled float value, no separate research needed here — same
 vendor, same naming scheme).
 
+## Follow-up (2026-09-01): `cpu_model`, `pci.Device`, storage-zero and FI identity
+
+Prompted by the first real dry-run against the user's own on-prem tenant
+(19 servers, all `IntersightStandalone`): `cpu_model` was always
+`"unknown"`, fabric identity was always `"—/—"`, and `storage` reported 0
+drives on every server. This section checks each against the SDK model
+again — reinstalled fresh to
+`/tmp/claude-1000/-home-toto-code-server-scan/f15f5291-d203-451c-8a22-502f82ae3be3/scratchpad/isdk2/ext`
+(same wheel version, `1.0.11.2026072720`, `pip install` into a clean venv
+rather than reusing the first pass's extraction) — against the *current*
+mapping/provider code (`intersight/mapping.py`, `intersight/provider.py`)
+and against the two ADRs that justified the two scope cuts.
+
+### 11. `cpu_model` — the scope cut was wrong; the class exists and is cheap
+
+**`processor.Unit` exists, is a first-class MO, and is fleet-wide listable
+at `/api/v1/processor/Units`** — confirmed both from the model file and
+from the generated API client:
+`intersight/model/processor_unit.py:536` (`class_id = "processor.Unit"`)
+and `intersight/api/processor_api.py:122`
+(`'endpoint_path': '/api/v1/processor/Units'`).
+
+Its full `openapi_types` dict is at
+`intersight/model/processor_unit.py:288-359`. It carries exactly the
+fields this repo's own UCS Manager/Central mapping already reads off the
+equivalent `processorUnit` MO — `model` (str), `vendor` (str, inherited
+`EquipmentBase`), `pid` (str), `serial` (str), `presence` (str),
+`speed` (float), `num_cores` (int), `num_threads` (str, despite the type),
+`socket_designation` (str), `architecture` (str), `description` (str) —
+**plus direct `compute_blade` / `compute_rack_unit` relationships on the
+MO itself**
+(`intersight/model/processor_unit.py:318-320`:
+`'compute_blade': (ComputeBladeRelationship,)`,
+`'compute_board': (ComputeBoardRelationship,)`,
+`'compute_rack_unit': (ComputeRackUnitRelationship,)`). That is the exact
+same relationship shape `storage.Controller` and `graphics.Card` already
+have and that the collector's request plan already joins on — this is
+**not** a per-server call, it clears ADR-0017's own bar ("The request
+plan") for what's worth adding.
+
+Field docstrings, `intersight/model/processor_unit.py`:
+- `model (str): This field displays the model number of the associated
+  component or hardware..` (`:528`, repeated `:694`) — the same generic
+  inherited-field wording every other equipment MO in this SDK uses for
+  `model`, and the exact field
+  `ucs_manager/mapping.py:_cpu_model` already reads for the same purpose
+  on the UCS side (`getattr(mo, "model", None)`,
+  `ucs_manager/mapping.py:281`) — so `processor.Unit.model` is the
+  directly analogous field to reuse, not a guess.
+- `description (str): This field displays the description of the
+  processor..` (`:487`, `:653`) — a second candidate for the
+  human-readable string (e.g. a full "Intel Xeon Gold 6338" name vs.
+  `model`'s more PID-like value); **which of `model`/`description`
+  actually carries the friendly CPU name string is UNVERIFIED without a
+  live response** — settle by reading both fields off one real
+  `processor.Unit` row and comparing to what the Intersight UI's own CPU
+  panel displays for that socket.
+- `speed (float): The maximum speed of the installed processor in GHz..`
+  (`:500`, `:666`) and `pid (str): This field displays the product ID of
+  the processor..` (`:497`, `:663`) are both usable if `model` turns out
+  to be a bare part number rather than a friendly name.
+- `presence (str): This field indicates the presence (equipped) or
+  absence (absent) of the associated component or hardware..` (grepped,
+  same wording pattern as every other equipment MO in this SDK) — the
+  Intersight analogue of `ucs_common.is_equipped`, letting a "first
+  equipped socket" rule transfer directly from
+  `ucs_manager/mapping.py:_cpu_model` (`if is_equipped(mo): ...`,
+  `:279-281`).
+
+**The join, at the same cost class as the existing request plan**: add
+`processor/Units` to `_build_joins` (provider.py) alongside
+`storage/Controllers`/`graphics/Cards`, select
+`Moid,Model,Pid,Presence,ComputeBlade,ComputeRackUnit`, group by
+`_owning_server` (the same helper `storage.Controller`/`graphics.Card`
+already use, since it dispatches on exactly the `ComputeBlade`/
+`ComputeRackUnit` relationship pair every one of these sibling MOs
+carries) — one more fleet-wide list call, not a per-server one.
+
+**Verdict on the citation trail that produced the cut**: ADR-0017's
+Decision 5 says `cpu_model` was "Cut for the same reason ADR-0009 cut
+it," citing ADR-0009's original "Scope cuts, made explicitly" section
+(`docs/adr/0009-ucs-manager-collector.md:60-65`: *"`cpu_model` and
+`storage_drives`/`storage_total_bytes` stay at their zero/`None`
+defaults — no MO for per-CPU model string or per-drive detail was
+confirmed while building this"*). **That citation is stale.** ADR-0009's
+own 2026-08-16 update (referenced by `docs/cisco-collectors.md`'s "CPU
+model" section) reversed this: `cpu_model` **is** collected today, from
+`processorUnit.model`, fleet-cheap via the `computeBlade -> computeBoard
+-> processorUnit` ancestor walk
+(`docs/cisco-collectors.md:393-398,431-436`; the actual code at
+`ucs_manager/mapping.py:264-282`,
+`ucs_manager/provider.py:128`). ADR-0017 was written 2026-08-29, *after*
+that reversal, so the "same reason ADR-0009 cut it" text describes a
+state ADR-0009 no longer describes at the point ADR-0017 cites it — this
+looks like the ADR-0017 author working from an earlier read of ADR-0009
+(or from `CLAUDE.md`'s own summary) rather than from ADR-0009's current
+text. **This scope cut should be reversed**: `processor.Unit` clears
+every bar the request plan sets (fleet-wide listable, inverse
+relationship to the compute MO, one more query at the same cost class as
+`storage/Controllers`), and the field is already load-bearing enough on
+the UCS side that this repo has a `cpu_model`-shaped health/classification
+expectation on it.
+
+### 12. `pci.Device` — fully enumerated; does not explain the 0-drive report
+
+Full `openapi_types` dict: `intersight/model/pci_device.py:109-154`,
+class_id confirmed `"pci.Device"` at `:293`; endpoint path confirmed
+`/api/v1/pci/Devices` at `intersight/api/pci_api.py:321`.
+
+**It does inherit the base equipment fields**, settling the earlier
+pass's open question: `intersight/model/pci_device.py:39` imports
+`EquipmentBase` (`from intersight.model.equipment_base import
+EquipmentBase`), and the `openapi_types` dict carries `model`/`presence`/
+`revision`/`serial`/`vendor` inherited from it
+(`:148-152`) exactly like `storage.Controller` and `graphics.Card` do.
+Docstrings, same file: `model (str): This field displays the model number
+of the associated component or hardware..` (`:285`), `serial (str): This
+field displays the serial number of the associated component or
+hardware..` (`:288`), `vendor (str): This field displays the vendor
+information of the associated component or hardware..` (`:289`) — all
+present, all the same generic inherited wording as every other equipment
+MO in this SDK.
+
+Device-specific fields: `device_id` (`str`, `"The PCI device id of the
+PCI device.."`, `:259`), `firmware_version` (`str`, `:260`), `pid` (`str`,
+`:261`), `slot_id` (`str`, `:262`). Relationships:
+`graphics_cards` (`[GraphicsCardRelationship]`, `"An array of
+relationships to graphicsCard resources.."`, `:265`), plus
+`compute_blade`/`compute_rack_unit` directly (`:126-127`).
+
+**Does it add anything beyond `storage.Controller`/`storage.PhysicalDisk`/
+`graphics.Card`? No — and it specifically does not explain the 0-drive
+report.** The only device-family relationship `pci.Device` carries is
+`graphics_cards` — there is no `storage_controllers`, no `physical_disks`,
+no NVMe-anything relationship anywhere in its `openapi_types` dict
+(`:109-154`, exhaustive). Read plainly, `pci.Device` models the PCIe riser
+card a GPU physically occupies (identity: firmware version, PCI device
+id, slot), one level up from `graphics.Card` itself — it is a GPU-adjacent
+identity MO, not a general PCIe-device inventory that would happen to
+also cover local NVMe drives. **Adding it would duplicate
+`graphics.Card`'s existing identity fields (model/vendor/serial) with a
+firmware-version and slot-id bonus, for the same servers `graphics/Cards`
+already reaches** — not worth a whole extra fleet-wide query for that
+alone.
+
+### 13. Every `storage.*` MO class in this SDK, and where local NVMe actually goes
+
+Grepped `intersight/model/storage_*.py` in full (194 files after
+collapsing the generated `_all_of`/`_list`/`_response`/`_relationship`
+siblings; storage-array-vendor classes — NetApp, Pure, Hitachi — excluded
+below as out of scope for a Cisco compute-server collector). Two findings
+answer the question directly.
+
+**First: local NVMe drives behind a real RAID/HBA controller already go
+through `storage.PhysicalDisk`, which this collector already queries —
+no separate NVMe MO is needed for that case.**
+`storage.PhysicalDisk.protocol` (`str`,
+`intersight/model/storage_physical_disk.py:347` in `openapi_types`,
+docstring `"This field identifies the disk protocol used for
+communication.."` at `:629`) and `.type` (`str`, `"This field identifies
+the type of the physical disk.."`, `:637`) are the fields that would
+carry `"NVMe"`/`"PCIe"` for such a drive — no enum values are listed in
+either docstring (**UNVERIFIED** exact string), but the field exists
+specifically to distinguish protocol, and `ucs_manager/mapping.py`
+already normalizes an `"nvme"` media type from the equivalent UCS field
+(`_MEDIA_TYPE_MAP`, `ucs_manager/mapping.py:284`). This confirms
+UCS/Intersight do not model a controller-attached NVMe drive as a
+structurally different object from a SAS/SATA one.
+
+**Second, and this is the actual likely explanation: Cisco's
+boot-optimized M.2 storage subsystem — `storage.FlexUtilController` /
+`storage.FlexUtilPhysicalDrive` (current generation) and their
+predecessor `storage.FlexFlashController` / `storage.FlexFlashPhysicalDrive`
+(SD-card based) — are entirely separate MO classes this collector never
+queries, and they do not relate to `storage.Controller` at all.**
+
+- `storage.FlexUtilController`
+  (`intersight/model/storage_flex_util_controller.py:265`,
+  `class_id = "storage.FlexUtilController"`; endpoint
+  `/api/v1/storage/FlexUtilControllers`,
+  `intersight/api/storage_api.py:3466`) relates only to `compute_board`
+  (`ComputeBoardRelationship`,
+  `storage_flex_util_controller.py:124`) — **not** `compute_blade`/
+  `compute_rack_unit` directly, unlike every other join in this
+  collector's request plan — and owns `flex_util_physical_drives`
+  (`[StorageFlexUtilPhysicalDriveRelationship]`, `:125`).
+- `storage.FlexUtilPhysicalDrive`
+  (`intersight/model/storage_flex_util_physical_drive.py:324`; endpoint
+  `/api/v1/storage/FlexUtilPhysicalDrives`,
+  `intersight/api/storage_api.py:3647`) carries its own, differently
+  shaped field set: `capacity` (`str`, `"Capacity of the FlexUtil
+  Physical drive.."`, `:279`), `health` (`str`, `"Health of the FlexUtil
+  Physical drive.."`, `:282`), `product_name` (`str`, `"Product name of
+  the FlexUtil Physical Drive.."`, `:289`), `block_size`,
+  `drives_enabled`, `pd_status`, `read_error_count`, `write_error_count`
+  (all `str`) — relates back only via `storage_flex_util_controller`
+  (`StorageFlexUtilControllerRelationship`, `:138`).
+- The older `storage.FlexFlashController` /
+  `storage.FlexFlashPhysicalDrive` pair has the identical shape
+  (`storage_flex_flash_controller.py:302`,
+  `'compute_board': (ComputeBoardRelationship,)` at `:128`; endpoints
+  `/api/v1/storage/FlexFlashControllers` and
+  `/api/v1/storage/FlexFlashPhysicalDrives`,
+  `storage_api.py:2742`/`:3104`).
+
+**The join path exists but costs more than the request plan's other
+joins**: `compute.Board` itself carries `compute_blade`/
+`compute_rack_unit` relationships
+(`intersight/model/compute_board.py:327-328`), confirmed via
+`/api/v1/compute/Boards` (`intersight/api/compute_api.py:983`) — so the
+full chain is `storage.FlexUtilPhysicalDrive` -> `StorageFlexUtilController`
+-> `storage.FlexUtilController` -> `ComputeBoard` -> `compute.Board` ->
+`compute_blade`/`compute_rack_unit` -> server. That's **two extra
+fleet-wide list queries** (`storage/FlexUtilControllers` and
+`compute/Boards`, the latter not currently queried at all) versus one for
+`storage.PhysicalDisk`'s direct `storage.Controller` join — still flat in
+fleet size, but a materially bigger addition than `processor/Units` was
+for §11. It would also need to be added *twice* to cover both the current
+(`FlexUtil`) and legacy (`FlexFlash`) generations, since nothing in the
+SDK states which generation a given server line uses.
+
+**This is the strongest available explanation for the tenant's 0-drive
+report and is directly actionable**: modern Cisco rack/blade servers
+(the M6/M7 generation, matching the era a fresh 2026 field-test tenant is
+likely running) commonly boot from an M.2 RAID/boot-optimized module
+rather than a RAID/HBA-attached local disk — a server configured that way
+has **no rows in `storage.Controller`/`storage.PhysicalDisk` at all**,
+which is a real, structural zero, not a collector defect. It cannot be
+fully confirmed without a live response (**UNVERIFIED** — settle by
+querying `storage/FlexUtilControllers` and `storage/FlexUtilPhysicalDrives`
+against the same 19-server tenant and checking whether they return rows
+where `storage/PhysicalDisks` returned none), but it is the one gap in
+this SDK's storage model that structurally fits "0 drives reported,
+unconfirmed whether the hardware has local disks" better than a mapping
+bug would.
+
+### 14. Fabric interconnect identity — standalone is structurally N/A; IMM needs a real (and pricier) join
+
+**Half one: `IntersightStandalone` servers structurally have no fabric
+interconnect in their topology, and the collector's current "—/—" output
+for this tenant is very likely correct, not broken.** A standalone-mode
+Cisco rack server (CIMC-managed, no UCS domain) is cabled directly to
+whatever top-of-rack switch the operator chose — there is no Fabric
+Interconnect object anywhere near it in the object model. Nothing in this
+SDK states this as an explicit rule for `SwitchId`/`PeerDn` being null in
+standalone mode specifically (**UNVERIFIED** in that narrow sense — no
+docstring says "empty when standalone"), but the mapping code's own
+existing behavior already treats an interface with no `SwitchId` as "not
+cabled to a fabric" and correctly emits no attachment for it
+(`intersight/mapping.py:443-448`,
+`"An uplink reporting no fabric is not cabled to one. Skipped rather
+than emitted with a null fabric"`) — which is exactly the behavior a
+standalone server's adapter rows should produce if `adapter.ExtEthInterface`
+rows exist at all for it (they should — the physical NIC ports on the box
+still exist and are still inventoried — just with `SwitchId` unset).
+**Settle for certain** by checking one real `adapter.ExtEthInterface` row
+from this tenant: if it exists with `SwitchId` empty/null, this is
+confirmed structural, not a bug; if the row doesn't exist at all for a
+standalone server, that's a different (and more interesting) finding.
+
+**Half two: for `Intersight`-mode (IMM) servers, an FI identity MO does
+exist and is itself cheap to list fleet-wide — but the per-server join to
+it is real, multi-hop, and not a clean `Moid` relationship the way every
+other join in the request plan is.**
+
+`network.Element`
+(`intersight/model/network_element.py:795`, `class_id = "network.Element"`;
+endpoint `/api/v1/network/Elements`, `intersight/api/network_api.py:520`)
+is the Fabric Interconnect (or Nexus/MDS/Edge-chassis-controller) as a
+managed object: base equipment fields `model` (`:407` in
+`openapi_types`), `serial`, `vendor` (all inherited, same pattern as
+every other equipment MO), plus `switch_id` (`str`, `"The Switch Id of
+the network Element.."`), `switch_wwn` (`str`, `"World Wide Name of the
+switch.."`), and `switch_type` (`str`,
+`"The Switch type that the network element is a part of. *
+`FabricInterconnect` - The default Switch type of **UCSM and IMM mode
+devices**. ..."`, `:727`) — confirming in the vendor's own words that
+`network.Element` covers both `UCSM`- and `Intersight`(IMM)-mode fabric
+interconnects, not just UCSM ones. `network.Element.management_mode`
+itself enumerates the same three values as `compute.PhysicalSummary`'s
+(`IntersightStandalone`/`UCSM`/`Intersight`, `:699`) — a real FI row
+exists in Intersight's inventory for an IMM domain's own interconnects.
+Because a fleet typically has only a handful of FI pairs regardless of
+server count, `network/Elements` itself is a trivially small fleet-wide
+list, cheap on its own.
+
+**The per-server join is the expensive part, and it is not a documented
+relationship the way the rest of the request plan's joins are.**
+`adapter.ExtEthInterface` carries no direct relationship to
+`network.Element` — only `SwitchId` (a bare `"A"`/`"B"`-style string,
+ambiguous across every domain in a multi-domain tenant) and `PeerDn` (a
+DN string naming the far-end port, not a `Moid`). The only path found
+from an interface to the FI's own identity is:
+`adapter.ExtEthInterface.PeerDn` (string, names an `ether.PhysicalPort`)
+-> `ether.PhysicalPort.PortGroup` (`PortGroupRelationship`,
+`intersight/model/ether_physical_port.py:149`; class id confirmed
+`ether.PhysicalPort` at `:385`) -> `port.Group.EquipmentSwitchCard`
+(`EquipmentSwitchCardRelationship`,
+`intersight/model/port_group.py:126`; class id `port.Group` at `:268`)
+-> `equipment.SwitchCard.NetworkElement`
+(`NetworkElementRelationship`,
+`intersight/model/equipment_switch_card.py:194`; class id
+`equipment.SwitchCard` at `:416`) -> `network.Element`. That is **three
+more fleet-wide list queries** (`ether/PhysicalPorts`, `port/Groups`,
+`equipment/SwitchCards`) beyond `network/Elements` itself, and the very
+first hop (`PeerDn` -> a specific `ether.PhysicalPort` row) is a **string
+DN match against `ether.PhysicalPort.Dn`, not a `Moid` relationship** —
+every other join in this collector's request plan resolves through a
+typed relationship field carrying a `Moid`; this one does not, which
+makes it structurally less reliable (DN format drift across Intersight
+versions would silently break it) as well as more expensive.
+
+Compare this to UCS Central's own handling of the same field
+(`docs/cisco-collectors.md`'s citation of
+`ucs_manager/mapping.py:_attachments`,
+`switches_by_id`/`fabric_model`/`fabric_serial`, lines ~220-255): that
+join works with **one** domain-scoped `networkElement` query because UCS
+Manager/Central logs into exactly one domain (one FI pair) at a time, so
+bare `switch_id` (`"A"`/`"B"`) is unambiguous within that single query's
+result set. Intersight's fleet-wide model has no such natural scoping —
+`switch_id` alone repeats across every domain in the tenant — so the
+disambiguation UCS Central gets for free has to be reconstructed through
+the DN-based multi-hop chain above. **The "same cut, same reason" framing
+in ADR-0017 is therefore also stale, in the same way as §11's `cpu_model`
+finding** (`docs/adr/0009-ucs-manager-collector.md:73-76`'s original
+"stays `None`" text is what's cited, and it too was superseded by
+ADR-0009's 2026-08-16 update, which is what `ucs_manager/mapping.py`'s
+`_attachments`/`switches_by_id` machinery actually implements today) —
+**but unlike `cpu_model`, the actual re-verification here shows the
+Intersight case is genuinely more expensive than UCS Central's, not
+equally cheap** — the structural reason (fleet-wide vs. domain-scoped)
+is real, not just a stale citation.
+
+### 15. GPU sanity note (one line, as scoped)
+
+Nothing in this pass changes §6's finding: no GPU telemetry field exists
+in this SDK version regardless of tenant. The prompt's framing — a
+19-server standalone tenant reporting no GPUs is "this tenant simply has
+no GPU hardware, not a code question" — is consistent with what the
+model supports: `graphics.Card`/`graphics.Controller`/`pci.Device` would
+report identity rows if any GPU were present and equipped, same
+`compute_blade`/`compute_rack_unit`-relationship join the collector
+already performs (`intersight/provider.py`'s `_CARD_FIELDS`/`cards`
+join); nothing in this SDK suggests standalone mode suppresses GPU
+reporting structurally the way it does fabric identity. No further
+action taken, per the prompt's own scope instruction.
+
+
 ## Open questions / UNVERIFIED
 
 1. **`total_memory` unit (MB vs. MiB)** — the single highest-priority
@@ -640,3 +988,88 @@ vendor, same naming scheme).
 10. **`graphics.Card.mode`'s actual values** and whether `num_gpus`
     (typed `str` despite being a count) is reliably numeric — neither
     docstring gives an enum or format. Settle with one live response.
+11. **Which field carries the CPU's human-readable name** —
+    `processor.Unit.model` (mirroring `ucs_manager/mapping.py`'s existing
+    convention) vs. `.description` (§11 above). Settle with one live
+    `processor.Unit` row compared against the Intersight UI's own CPU
+    panel for the same socket.
+12. **Whether `IntersightStandalone` servers' `adapter.ExtEthInterface`
+    rows exist with `SwitchId` unset, or don't exist at all** (§14, half
+    one). The mapping code already degrades correctly either way (no
+    attachment emitted), but which of the two is actually happening is
+    unconfirmed. Settle with one live `adapter/ExtEthInterfaces` row for
+    a standalone-mode server from the field-tested tenant.
+13. **Whether `storage.FlexUtilController`/`FlexUtilPhysicalDrive` (or
+    the legacy `FlexFlash` pair) actually return rows for the tenant that
+    reported 0 `storage.PhysicalDisk` rows** (§13) — the leading
+    candidate explanation for the observed 0-drive report, not yet
+    confirmed against real data. Settle by querying
+    `storage/FlexUtilControllers` and `storage/FlexUtilPhysicalDrives`
+    (and the `FlexFlash` equivalents) against the same tenant.
+14. **`storage.PhysicalDisk.protocol`/`.type` enum values** (§13) — no
+    docstring lists them; confirming `"NVMe"` (or similar) appears there
+    for a controller-attached NVMe drive would close the loop on whether
+    this collector already covers that case. Settle with one live disk
+    of known interface type.
+15. **The exact DN shape `adapter.ExtEthInterface.PeerDn` uses**, and
+    whether it reliably matches `ether.PhysicalPort.Dn` verbatim (§14,
+    half two) — the join this repo would need for IMM fabric identity
+    depends on this string match holding, and nothing in the SDK states
+    it as a contract. Settle with one live paired
+    `ExtEthInterface.PeerDn` / `PhysicalPort.Dn` comparison from an
+    IMM-managed server.
+
+## Follow-up verdict (2026-09-01)
+
+Explicit answers to the three things this follow-up pass was asked to
+settle, each against the request plan's own bar (ADR-0017, "The request
+plan": fleet-wide-listable via an inverse relationship to
+`ComputeBlade`/`ComputeRackUnit`, not a per-server call):
+
+- **`cpu_model`** — **worth adding, cheap.** `processor.Unit` exists,
+  lists fleet-wide at `/api/v1/processor/Units`, and carries direct
+  `ComputeBlade`/`ComputeRackUnit` relationships — the identical cost
+  class as the `storage.Controller`/`graphics.Card` joins already in the
+  request plan (§11). The ADR-0017 justification for cutting it ("same
+  reason ADR-0009 cut it") cites a state of ADR-0009 that ADR-0009's own
+  2026-08-16 update superseded before ADR-0017 was written — this was
+  very likely an oversight, not a re-confirmed decision, and the cut
+  should be reversed.
+- **`pci.Device`-sourced storage/NVMe detail** — **not worth adding for
+  storage.** `pci.Device` is fully enumerated (§12): it inherits the base
+  equipment fields as suspected, but its only device-family relationship
+  is `graphics_cards` — it is a GPU-riser identity MO, not a general PCIe
+  device inventory, and it does not reach NVMe drives, storage
+  controllers, or anything storage-shaped. It does not explain the
+  0-drive report. **The real candidate is `storage.FlexUtilController`/
+  `FlexUtilPhysicalDrive`** (Cisco's M.2 boot-optimized storage subsystem,
+  §13) — **worth adding, but it costs more**: two additional fleet-wide
+  queries (`compute/Boards`, which nothing currently reads, plus
+  `storage/FlexUtilControllers`) and a two-hop join through `ComputeBoard`
+  rather than the collector's usual one-hop `ComputeBlade`/
+  `ComputeRackUnit` relationship, and it would need to be added for both
+  the current (`FlexUtil`) and legacy (`FlexFlash`) generations to be
+  complete. This is a genuinely plausible, structural explanation for
+  "0 drives, unconfirmed whether the hardware has local disks" and is the
+  single highest-value next check against the live tenant — but it is not
+  a one-line addition the way `cpu_model` is.
+- **Fabric interconnect identity** — **split verdict, as the prompt
+  anticipated.** For this tenant's actual hardware (100%
+  `IntersightStandalone`), **not applicable, structurally** — a
+  standalone server has no Fabric Interconnect in its topology at all, so
+  "—/—" is very likely the correct answer, not a defect (§14, half one;
+  UNVERIFIED only in the narrow sense of not having read one live
+  interface row to confirm `SwitchId` is unset rather than the whole row
+  being absent). For `Intersight`-mode (IMM) servers, which this tenant
+  has none of, an FI identity MO (`network.Element`) does exist and is
+  cheap to list on its own — **but the per-server join to it costs
+  meaningfully more than every other join in the request plan**: three
+  extra fleet-wide queries (`ether/PhysicalPorts`, `port/Groups`,
+  `equipment/SwitchCards`) chained through a `PeerDn` **string** match
+  against `ether.PhysicalPort.Dn` rather than a typed `Moid`
+  relationship — genuinely pricier and more fragile than UCS Central's
+  equivalent join, which gets disambiguation for free from being
+  domain-scoped. **Worth adding only when this platform actually
+  collects IMM-mode servers with something reading `fabric_model`/
+  `fabric_serial`** — not for this tenant, and not as cheaply as
+  `cpu_model`.

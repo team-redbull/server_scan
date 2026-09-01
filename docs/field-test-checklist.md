@@ -118,6 +118,25 @@ counts.
 If it turns out to be *all* `UCSM`, this collector correctly collects
 nothing at your site, and that is worth knowing plainly.
 
+### d. Whether a "0 drives" dry-run result is real, or boot-optimized storage
+
+Output section **"5. BOOT-OPTIMIZED STORAGE"**, added 2026-09-01 after a
+field run reported `storage — not read total across 0 drive(s)` for a
+real server. Modern Cisco servers commonly boot from an M.2 RAID module
+or legacy SD card, modelled as entirely separate MO classes
+(`storage.FlexUtilController`/`FlexFlashController`) this collector does
+not query — a server configured that way has genuinely **zero**
+`storage.PhysicalDisk` rows, which is correct, not a bug.
+
+- `SETTLED` means at least one 0-drive server has boot-optimized drives
+  instead — worth building support for; send me the output and I will.
+- `INCONCLUSIVE` means a server reports zero drives everywhere this probe
+  checked. Either it genuinely has none (diskless, boot-from-SAN), or
+  there is a storage class this probe still doesn't cover — check the
+  Intersight UI's own Storage inventory tab for that server by hand.
+- `N/A` means every sampled server already reported at least one
+  `storage.PhysicalDisk` row — nothing to investigate.
+
 ---
 
 ## If the key is rejected

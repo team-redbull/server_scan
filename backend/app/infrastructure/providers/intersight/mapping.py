@@ -359,6 +359,35 @@ def attachment(
     )
 
 
+def _cpu_model(processors: Iterable[Mapping[str, Any]] | None) -> str | None:
+    """
+    The processor model string for the server.
+
+    Mirrors `ucs_manager.mapping._cpu_model`'s "first equipped socket"
+    rule, but without relying on `processor.Unit.Presence` — its exact
+    equipped-value string is unverified for Intersight (unlike
+    `ucsmsdk`'s confirmed `"equipped"` prefix; see ADR-0017's UNVERIFIED
+    list). An empty socket has no processor installed and so reports no
+    `Model` either, which is enough to skip it without needing the enum.
+
+    Args:
+        processors (Iterable[Mapping[str, Any]] | None): `processor.Unit`
+            MOs owned by one server, one per socket, or None when this
+            run did not query them.
+
+    Returns:
+        str | None: The first populated socket's model, or None when the
+            table was not queried or no socket reported one. Which field
+            actually carries the human-readable name (`Model` vs.
+            `Description`) is unverified — see ADR-0017.
+    """
+    for processor in processors or ():
+        model = _text(processor.get("Model"))
+        if model:
+            return model
+    return None
+
+
 def _macs(interfaces: Iterable[Mapping[str, Any]]) -> tuple[str, ...]:
     """
     Every MAC these interfaces report, in order, without duplicates.
@@ -388,6 +417,7 @@ def to_provider_server(
     host_interfaces: list[Mapping[str, Any]] | None = None,
     disks: list[Mapping[str, Any]] | None = None,
     cards: list[Mapping[str, Any]] | None = None,
+    processors: list[Mapping[str, Any]] | None = None,
     management_interface: Mapping[str, Any] | None = None,
 ) -> ProviderServer:
     """
@@ -416,6 +446,12 @@ def to_provider_server(
             `adapter.HostEthInterface` MOs, the vNICs.
         disks (list[Mapping[str, Any]] | None): `storage.PhysicalDisk` MOs.
         cards (list[Mapping[str, Any]] | None): `graphics.Card` MOs.
+        processors (list[Mapping[str, Any]] | None): `processor.Unit` MOs,
+            one per socket. Added after the field-test follow-up
+            (`docs/notes/intersight-inventory-model.md`, "Follow-up
+            2026-09-01") reversed ADR-0017's original cut — the class is
+            fleet-wide listable at the same cost as `storage.Controller`/
+            `graphics.Card`, mirroring `ucs_manager.mapping._cpu_model`.
         management_interface (Mapping[str, Any] | None): The BMC's
             `management.Interface`.
 
@@ -477,7 +513,7 @@ def to_provider_server(
         cpu_sockets=_as_int(summary.get("NumCpus")),
         cpu_cores=_as_int(summary.get("NumCpuCores")),
         cpu_threads=_as_int(summary.get("NumThreads")),
-        cpu_model=None,
+        cpu_model=_cpu_model(processors),
         memory_total_bytes=memory_total_bytes(summary),
         storage_total_bytes=storage_total,
         storage_drives=tuple(drives) if drives is not None else None,

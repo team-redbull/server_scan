@@ -57,6 +57,7 @@ _DISK_FIELDS = (
     "FailurePredicted,StorageController"
 )
 _CARD_FIELDS = "Moid,Model,Pid,Vendor,Serial,OperState,ComputeBlade,ComputeRackUnit"
+_PROCESSOR_FIELDS = "Moid,Model,ComputeBlade,ComputeRackUnit"
 _MGMT_CONTROLLER_FIELDS = "Moid,ComputeBlade,ComputeRackUnit"
 _MGMT_INTERFACE_FIELDS = "Moid,MacAddress,IpAddress,Ipv4Address,ManagementController"
 
@@ -139,6 +140,7 @@ class _Joins:
         self.host_interfaces: dict[str, list[Mapping[str, Any]]] | None = None
         self.disks: dict[str, list[Mapping[str, Any]]] | None = None
         self.cards: dict[str, list[Mapping[str, Any]]] | None = None
+        self.processors: dict[str, list[Mapping[str, Any]]] | None = None
         self.management: dict[str, Mapping[str, Any]] | None = None
 
     def for_server(
@@ -434,6 +436,10 @@ class IntersightProvider:
         if cards is not None:
             joins.cards = _group_by(cards, _owning_server)
 
+        processors = await self._collect_table(client, "processor/Units", select=_PROCESSOR_FIELDS)
+        if processors is not None:
+            joins.processors = _group_by(processors, _owning_server)
+
         mgmt_controllers = await self._collect_table(
             client, "management/Controllers", select=_MGMT_CONTROLLER_FIELDS
         )
@@ -526,6 +532,7 @@ class IntersightProvider:
                     host_interfaces=joins.for_server(moid, joins.host_interfaces),
                     disks=joins.for_server(moid, joins.disks),
                     cards=joins.for_server(moid, joins.cards),
+                    processors=joins.for_server(moid, joins.processors),
                     management_interface=(
                         joins.management.get(moid) if joins.management is not None else None
                     ),

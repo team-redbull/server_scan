@@ -719,12 +719,15 @@ domains.
 
 **Provenance for this whole section: the generated models in the
 installed `intersight==1.0.11.2026072720` wheel**, which are the OpenAPI
-contract rendered as Python. Nothing here has been confirmed against a
-live tenant — see ADR-0017's "Validation" section, which states plainly
-that no live Intersight call has ever been made. Facts below are
-therefore *contract-verified*, not *fleet-verified*, and that is a weaker
-claim than anything in the sections above. Anything a real run settles
-should be moved here with its own provenance line.
+contract rendered as Python. Most of it is still unconfirmed against a
+live tenant — see ADR-0017's "Validation" section for exactly what a
+2026-09-01 field test against the user's own on-prem tenant did and did
+not settle. Only the `TotalMemory` unit, in the "Units" section below,
+has actually been fleet-verified so far — everything else, including the
+"CPU model" section, is still *contract-verified* only (confirmed to
+exist and to be cheap in the SDK's own model, not yet confirmed against
+a live response), which is a weaker claim. Facts a real run settles
+should be moved here with their own provenance line, individually.
 
 ### The server anchor
 
@@ -761,6 +764,7 @@ reference the server directly:
 | `graphics.Card` | `ComputeBlade` / `ComputeRackUnit` |
 | `management.Controller` | `ComputeBlade` / `ComputeRackUnit` |
 | `management.Interface` | `ManagementController` -> `management.Controller` |
+| `processor.Unit` | `ComputeBlade` / `ComputeRackUnit` |
 
 Exactly one of `ComputeBlade`/`ComputeRackUnit` is set on any given
 object, depending on whether the server is a blade or a rack unit.
@@ -804,6 +808,32 @@ configuration), not live state. Do not use it for attachments.
 Neither interface class carries a numeric speed. Only the switch-side
 `ether.PhysicalPort`/`ether.HostPort` have `OperSpeed`/`AdminSpeed`, as
 free-form strings of unverified format, so `speed_mbps` is `None`.
+
+### CPU model
+
+**Added 2026-09-01**, reversing a scope cut in ADR-0017 that turned out
+to rest on a stale citation of ADR-0009 (see ADR-0017's Decision 5 for
+the full correction). `processor.Unit` is a first-class MO, listable
+fleet-wide at `/api/v1/processor/Units`, carrying a direct `ComputeBlade`
+/ `ComputeRackUnit` relationship — the same cost class as
+`storage.Controller`/`graphics.Card`, already in the request plan.
+
+`cpu_model` is the first socket's non-empty `Model`, in the order the API
+returns them — the Intersight analogue of `ucs_manager.mapping._cpu_model`'s
+"first equipped socket" rule, but without filtering on
+`processor.Unit.Presence`: its exact equipped-value string is unverified
+for Intersight (`ucsmsdk`'s `"equipped"` prefix is confirmed, Intersight's
+is not), and an unpopulated socket has no processor installed and so
+reports no `Model` anyway — which is enough to skip it without needing
+the enum.
+
+**Unresolved:** whether `Model` or `Description` carries the
+human-readable name (e.g. "Intel Xeon Gold 6338") is unverified — both
+exist on `processor.Unit` and the SDK docstrings don't distinguish them.
+`Model` was chosen to mirror the UCS Manager/Central convention; settle
+by comparing both fields on one live row against the Intersight UI's own
+CPU panel. Provenance:
+`docs/notes/intersight-inventory-model.md`, "Follow-up 2026-09-01", §11.
 
 ### Units — the one that can silently corrupt data
 

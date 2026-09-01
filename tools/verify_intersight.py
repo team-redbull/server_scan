@@ -260,6 +260,7 @@ async def _inspect(client: IntersightClient, *, show_names: int, sample: int) ->
             _p(f"  {name}")
 
     await _check_memory_unit(client, collected)
+    await _check_boot_optimized_storage(client, collected)
 
     _header("VERDICT")
     if not matching:
@@ -381,6 +382,172 @@ async def _check_memory_unit(client: IntersightClient, summaries: list[dict[str,
     else:
         _p("           Neither unit explains this. Do not trust memory_total_bytes until")
         _p("           it is understood; report the numbers above in ADR-0017.")
+
+
+async def _resource_by_owner(
+    client: IntersightClient, resource: str, *, select: str, owner_field: str = "StorageController"
+) -> dict[str, int] | None:
+    """
+    Count rows of one resource, keyed by the `Moid` an owner field names.
+
+    A local, minimal join rather than reaching into
+    `intersight.provider`'s private `_owning_server`/`_group_by` helpers:
+    this probe queries classes the collector itself does not (yet) read,
+    so it should not be coupled to internals built for a different set of
+    resources.
+
+    Args:
+        client (IntersightClient): A connected client.
+        resource (str): Path under `/api/v1`, e.g.
+            `"storage/PhysicalDisks"`.
+        select (str): `$select` field list; must include `Moid` and
+            `owner_field`.
+        owner_field (str): The relationship field naming this row's
+            owner, e.g. `"StorageController"` or `"ComputeBoard"`.
+
+    Returns:
+        dict[str, int] | None: Row count per owner `Moid`, or None if the
+            class does not exist on this Intersight version (some deploys
+            predate the M.2 boot-optimized storage subsystem entirely).
+    """
+    counts: dict[str, int] = {}
+    try:
+        async for row in client.list_all(resource, select=select):
+            owner = mapping.moref(row.get(owner_field))
+            if owner:
+                counts[owner] = counts.get(owner, 0) + 1
+    except IntersightError as exc:
+        _p(f"  {resource}: not available — {exc}")
+        return None
+    return counts
+
+
+async def _check_boot_optimized_storage(
+    client: IntersightClient, summaries: list[dict[str, Any]]
+) -> None:
+    """
+    Check whether Cisco's M.2/SD boot-optimized storage subsystem
+    explains a server reporting zero `storage.PhysicalDisk` rows.
+
+    `pci.Device` was checked and ruled out during the follow-up research
+    that prompted this (`docs/notes/intersight-inventory-model.md`,
+    "Follow-up 2026-09-01", §12 — it is a GPU-riser identity MO with no
+    storage relationship). The leading remaining explanation is that a
+    server boots from an M.2 RAID module or legacy SD card, modelled as
+    `storage.FlexUtilController`/`FlexUtilPhysicalDrive` (current
+    generation) or `storage.FlexFlashController`/`FlexFlashPhysicalDrive`
+    (legacy) — separate MO classes the collector does not query, joined
+    through `compute.Board` rather than `ComputeBlade`/`ComputeRackUnit`
+    directly. See ADR-0017's UNVERIFIED list, item 11.
+
+    Args:
+        client (IntersightClient): A connected client.
+        summaries (list[dict[str, Any]]): The sampled servers.
+    """
+    _header("5. BOOT-OPTIMIZED STORAGE — does M.2/SD explain a 0-drive report?")
+
+    disks_by_controller = await _resource_by_owner(
+        client, "storage/PhysicalDisks", select="Moid,StorageController"
+    )
+    controller_owner: dict[str, str] = {}
+    async for row in client.list_all(
+        "storage/Controllers", select="Moid,ComputeBlade,ComputeRackUnit"
+    ):
+        moid = str(row.get("Moid") or "")
+        owner = mapping.moref(row.get("ComputeBlade")) or mapping.moref(row.get("ComputeRackUnit"))
+        if moid and owner:
+            controller_owner[moid] = owner
+    disks_by_server: dict[str, int] = {}
+    for controller_moid, count in (disks_by_controller or {}).items():
+        owner = controller_owner.get(controller_moid)
+        if owner:
+            disks_by_server[owner] = disks_by_server.get(owner, 0) + count
+
+    board_owner: dict[str, str] = {}
+    async for row in client.list_all("compute/Boards", select="Moid,ComputeBlade,ComputeRackUnit"):
+        moid = str(row.get("Moid") or "")
+        owner = mapping.moref(row.get("ComputeBlade")) or mapping.moref(row.get("ComputeRackUnit"))
+        if moid and owner:
+            board_owner[moid] = owner
+
+    async def _drives_by_server(
+        controller_resource: str, drive_resource: str, owner_field: str
+    ) -> dict[str, int]:
+        """
+        Boot-optimized drives per server, for one generation
+        (FlexUtil or FlexFlash).
+
+        Args:
+            controller_resource (str): The controller class's path.
+            drive_resource (str): The drive class's path.
+            owner_field (str): The drive's relationship field naming its
+                controller.
+
+        Returns:
+            dict[str, int]: Drive count per server `Moid`.
+        """
+        controller_owner: dict[str, str] = {}
+        try:
+            async for row in client.list_all(controller_resource, select="Moid,ComputeBoard"):
+                moid = str(row.get("Moid") or "")
+                owner = board_owner.get(mapping.moref(row.get("ComputeBoard")) or "")
+                if moid and owner:
+                    controller_owner[moid] = owner
+        except IntersightError as exc:
+            _p(f"  {controller_resource}: not available — {exc}")
+            return {}
+        drives_by_controller = (
+            await _resource_by_owner(
+                client, drive_resource, select=f"Moid,{owner_field}", owner_field=owner_field
+            )
+            or {}
+        )
+        by_server: dict[str, int] = {}
+        for controller_moid, count in drives_by_controller.items():
+            owner = controller_owner.get(controller_moid)
+            if owner:
+                by_server[owner] = by_server.get(owner, 0) + count
+        return by_server
+
+    flexutil = await _drives_by_server(
+        "storage/FlexUtilControllers", "storage/FlexUtilPhysicalDrives", "StorageFlexUtilController"
+    )
+    flexflash = await _drives_by_server(
+        "storage/FlexFlashControllers",
+        "storage/FlexFlashPhysicalDrives",
+        "StorageFlexFlashController",
+    )
+
+    if disks_by_controller is None:
+        _p("\ncould not read storage/PhysicalDisks — cannot correlate. See message above.")
+        return
+
+    _p(f"\n{'server':<20}{'PhysicalDisks':>15}{'FlexUtil':>12}{'FlexFlash':>12}")
+    explains_something = False
+    for summary in summaries:
+        moid = str(summary.get("Moid") or "")
+        serial = str(summary.get("Serial") or moid)
+        disks = disks_by_server.get(moid, 0)
+        util = flexutil.get(moid, 0)
+        flash = flexflash.get(moid, 0)
+        note = ""
+        if disks == 0 and (util > 0 or flash > 0):
+            note = "  <- boot-optimized storage explains the 0-drive report"
+            explains_something = True
+        _p(f"{serial:<20}{disks:>15}{util:>12}{flash:>12}{note}")
+
+    _p()
+    if explains_something:
+        _p("SETTLED: at least one server with zero storage.PhysicalDisk rows has boot-")
+        _p("         optimized drives instead. Worth adding storage.FlexUtilController/")
+        _p("         FlexUtilPhysicalDrive (and FlexFlash if any rows appeared there) to")
+        _p("         the collector — see ADR-0017's UNVERIFIED list, item 11.")
+    elif any(disks_by_server.get(str(s.get("Moid") or ""), 0) == 0 for s in summaries):
+        _p("INCONCLUSIVE: at least one server still reports zero drives across every")
+        _p("              storage class this probe checked. Either it genuinely has none,")
+        _p("              or there is a storage class not covered here.")
+    else:
+        _p("N/A: every sampled server reported at least one storage.PhysicalDisk row.")
 
 
 def main(argv: list[str] | None = None) -> None:

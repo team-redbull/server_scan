@@ -82,12 +82,17 @@ than that.
   and no mounted key file. Servers in `UCSM` mode are excluded by default
   because UCS Central already owns them; override with
   `INVENTORY_INTERSIGHT_MANAGEMENT_MODES`.
-  **It has never been run against real inventory** — see
-  `docs/adr/0017-intersight-collector.md` and
-  `docs/field-test-checklist.md` before scheduling it.
+  **First run against a real on-prem tenant (2026-09-01)** confirmed
+  auth, name resolution and the `TotalMemory` unit (MiB, as assumed) —
+  see `docs/adr/0017-intersight-collector.md`'s "Validation" section
+  before scheduling it; a full `--dry-run` ingest is still outstanding.
 - **`tools/verify_intersight.py`** — a read-only pre-flight that proves
   the API key, reports what the tenant holds, and settles whether
   `TotalMemory` is MiB by summing a real server's DIMMs. Run it first.
+- **The Intersight collector now reports `cpu_model`.** Read from
+  `processor.Unit`, the same fleet-wide-listable cost class as the
+  collector's other sub-resource joins — this was cut in the original
+  build on a since-corrected assumption; see ADR-0017's Decision 5.
 - **A fleet-wide "Across all sites" card** on the sites overview, and
   `standalone` now labelled properly in every vendor breakdown.
 - **BMC addresses display as plain hosts** in the UI and the collector

@@ -3,7 +3,13 @@
 **Status:** Accepted and implemented. **First run against the user's own
 on-prem Intersight is done** (`tools/verify_intersight`, 2026-09-01):
 auth, name resolution and the `TotalMemory` unit are now settled against
-real data. `--dry-run` against a full ingest has not been run yet — see
+real data. That same dry-run also surfaced two scope-cut justifications
+in Decision 5 that turned out to be stale citations of an earlier
+ADR-0009 — `cpu_model` has since been added back (see Decision 5, and
+`docs/notes/intersight-inventory-model.md`'s "Follow-up 2026-09-01");
+fabric-interconnect identity was re-verified and stays cut, for a
+different and now-confirmed reason. `--dry-run` against a full ingest
+including the new `cpu_model` field has not been re-run yet — see
 "Validation" below for exactly what is and is not covered.
 
 The transport and auth path have been exercised against the **real
@@ -267,11 +273,34 @@ What v1 deliberately will not collect, and why:
   `adapter.HostEthInterface` has a numeric speed field. Only the
   switch-side `ether.PhysicalPort`/`ether.HostPort` do, as *free-form
   strings* whose format is unverified. `None`, not a guess.
-- **`cpu_model`.** Needs a per-server processor query; the summary
-  carries counts only. Cut for the same reason ADR-0009 cut it.
+- ~~`cpu_model`~~ — **REVERSED 2026-09-01.** This cut was based on a
+  stale citation: it claimed to be "the same reason ADR-0009 cut it," but
+  ADR-0009's own 2026-08-16 update had already reversed that cut before
+  this ADR was written — `docs/cisco-collectors.md`'s "CPU model" section
+  and `ucs_manager/mapping.py:_cpu_model` show UCS Manager/Central
+  collecting it today, fleet-cheap. Re-researched against Intersight's
+  own model (`docs/notes/intersight-inventory-model.md`, "Follow-up
+  2026-09-01", §11): `processor.Unit` exists, lists fleet-wide at
+  `/api/v1/processor/Units`, and carries a direct `ComputeBlade`/
+  `ComputeRackUnit` relationship — the identical cost class as
+  `storage.Controller`/`graphics.Card`, already in the request plan.
+  Implemented; see "The request plan" table above.
 - **Fabric interconnect identity** (`fabric_model`, `fabric_serial`).
-  Same cut ADR-0009 made, same reason: another MO class for a field
-  nothing currently reads.
+  **Still cut, but the "same cut, same reason" framing was also stale**
+  (same follow-up research, §14) — re-verified rather than assumed this
+  time. Two different answers depending on management mode: for
+  `IntersightStandalone` servers (all of this platform's field-tested
+  tenant so far) it is **structurally not applicable** — a standalone
+  server has no Fabric Interconnect in its topology, so `None` is
+  correct, not a gap. For `Intersight`-mode (IMM) servers, which *do* sit
+  behind a real FI, the MO exists (`network.Element`) but the per-server
+  join costs three more fleet-wide queries chained through a `PeerDn`
+  **string** match rather than a `Moid` relationship — genuinely pricier
+  than every other join in this table, and pricier than UCS Central's
+  equivalent (which gets disambiguation for free from being
+  domain-scoped to one FI pair at a time). Worth adding only once this
+  platform actually collects IMM-mode servers with something reading
+  these fields — not implemented.
 - **Per-drive detail is *kept*.** Unlike ADR-0009, this one is cheap
   here: `storage.PhysicalDisk` is one more fleet-wide list call, and
   `docs/adr/0016`'s `storage.failed_drive` policy depends on it.
@@ -324,6 +353,7 @@ directly in the SDK models:
 | `storage/Controllers` | `compute_blade` / `compute_rack_unit` |
 | `storage/PhysicalDisks` | `parent` → `storage.Controller` |
 | `management/Controllers` | `compute_blade` / `compute_rack_unit` |
+| `processor/Units` | `compute_blade` / `compute_rack_unit` (added 2026-09-01, see below) |
 
 At `$top=1000` (the documented maximum) that is on the order of **~120
 requests for 10,000 servers**, flat in fleet size — against the Redfish
@@ -411,6 +441,28 @@ reachable today can play that role for Intersight (see below).
    turns out to need a regional hostname, it goes in
    `INVENTORY_INTERSIGHT_IP` and needs no code change — but that it
    *works* is unverified.
+10. **Which field carries `processor.Unit`'s human-readable CPU name** —
+    `Model` (what the collector reads, mirroring `ucs_manager.mapping`'s
+    convention) or `Description` (a second candidate the SDK docstrings
+    don't distinguish). Settle by comparing both fields on one live row
+    against the Intersight UI's own CPU panel for that socket
+    (`docs/notes/intersight-inventory-model.md`, "Follow-up 2026-09-01",
+    §11).
+11. **The tenant's 0-drive report.** `pci.Device` was checked and ruled
+    out (it's a GPU-riser identity MO with no storage relationship at
+    all). The leading explanation is Cisco's M.2 boot-optimized storage
+    subsystem — `storage.FlexUtilController`/`FlexUtilPhysicalDrive`
+    (current) and `storage.FlexFlashController`/`FlexFlashPhysicalDrive`
+    (legacy SD-card) — entirely separate MO classes this collector does
+    not query, joined through `ComputeBoard` rather than the usual
+    `ComputeBlade`/`ComputeRackUnit`. **Not implemented** — it costs two
+    more fleet-wide queries (`compute/Boards`, `storage/FlexUtilControllers`)
+    against a two-hop join, for both a current and a legacy generation.
+    Settle by querying those resources against the same field-tested
+    tenant and checking whether they return rows where
+    `storage/PhysicalDisks` returned none
+    (`docs/notes/intersight-inventory-model.md`, "Follow-up 2026-09-01",
+    §13) before deciding whether to build it.
 
 ---
 
