@@ -26,6 +26,7 @@ import argparse
 import asyncio
 import re
 from collections import Counter
+from collections.abc import Mapping
 from typing import Any
 
 from app.config import get_settings
@@ -42,6 +43,11 @@ from app.infrastructure.providers.intersight.client import (
     IntersightUnreachableError,
 )
 from app.infrastructure.providers.intersight.signing import IntersightKeyError
+
+# Matches `intersight.mapping._BYTES_PER_MB` — a `storage.PhysicalDisk`'s
+# `Size` is documented "in MB" and this collector assumes 2**20 bytes,
+# the same assumption `_check_disk_capacity` mirrors below.
+_MIB = 1024 * 1024
 
 
 def _int(value: object) -> int | None:
@@ -260,7 +266,9 @@ async def _inspect(client: IntersightClient, *, show_names: int, sample: int) ->
             _p(f"  {name}")
 
     await _check_memory_unit(client, collected)
-    await _check_boot_optimized_storage(client, collected)
+    controller_owner = await _storage_controller_owner_map(client)
+    await _check_boot_optimized_storage(client, collected, controller_owner)
+    await _check_disk_capacity(client, collected, controller_owner)
 
     _header("VERDICT")
     if not matching:
@@ -422,30 +430,31 @@ async def _resource_by_owner(
     return counts
 
 
-async def _check_boot_optimized_storage(
-    client: IntersightClient, summaries: list[dict[str, Any]]
-) -> None:
+async def _storage_controller_owner_map(client: IntersightClient) -> dict[str, str]:
     """
-    Check whether Cisco's M.2/SD boot-optimized storage subsystem
-    explains a server reporting zero `storage.PhysicalDisk` rows.
+    `storage.Controller` `Moid` -> owning server `Moid`, following the
+    same `ComputeBoard` fallback the collector itself now uses.
 
-    `pci.Device` was checked and ruled out during the follow-up research
-    that prompted this (`docs/notes/intersight-inventory-model.md`,
-    "Follow-up 2026-09-01", §12 — it is a GPU-riser identity MO with no
-    storage relationship). The leading remaining explanation is that a
-    server boots from an M.2 RAID module or legacy SD card, modelled as
-    `storage.FlexUtilController`/`FlexUtilPhysicalDrive` (current
-    generation) or `storage.FlexFlashController`/`FlexFlashPhysicalDrive`
-    (legacy) — separate MO classes the collector does not query, joined
-    through `compute.Board` rather than `ComputeBlade`/`ComputeRackUnit`
-    directly. See ADR-0017's UNVERIFIED list, item 11.
+    Shared by sections 5 and 6, both of which need to resolve a disk to
+    its server through its controller. A local copy of
+    `IntersightProvider._owning_server`'s logic rather than importing it:
+    this tool is a probe an operator runs and should not be coupled to
+    the collector's internals.
+
+    `storage.Controller` carries THREE owner relationships
+    (`ComputeBlade`/`ComputeRackUnit`/`ComputeBoard`, confirmed against
+    Cisco's own generated Go SDK, model_storage_controller.go). Prints
+    how many resolved which way, since "0 direct, all via ComputeBoard"
+    was a real, live-confirmed defect in the collector's original join —
+    see ADR-0017's "The `ComputeBoard` join gap".
 
     Args:
         client (IntersightClient): A connected client.
-        summaries (list[dict[str, Any]]): The sampled servers.
-    """
-    _header("5. BOOT-OPTIMIZED STORAGE — does M.2/SD explain a 0-drive report?")
 
+    Returns:
+        dict[str, str]: `storage.Controller` `Moid` -> owning server
+            `Moid`.
+    """
     board_owner: dict[str, str] = {}
     async for row in client.list_all("compute/Boards", select="Moid,ComputeBlade,ComputeRackUnit"):
         moid = str(row.get("Moid") or "")
@@ -453,15 +462,6 @@ async def _check_boot_optimized_storage(
         if moid and owner:
             board_owner[moid] = owner
 
-    # `storage.Controller` carries THREE owner relationships
-    # (`ComputeBlade`/`ComputeRackUnit`/`ComputeBoard`, confirmed against
-    # Cisco's own generated Go SDK, model_storage_controller.go), but the
-    # collector's existing join only follows the first two. If a
-    # controller populates only `ComputeBoard`, the collector's current
-    # `storage/Controllers` join drops it — and every disk under it —
-    # silently. Tracked separately so a live run can tell "genuinely no
-    # controller" apart from "a join gap in code that already runs
-    # today," which is a different, higher-priority kind of finding.
     direct = 0
     via_board = 0
     unresolved = 0
@@ -490,6 +490,41 @@ async def _check_boot_optimized_storage(
         )
     if unresolved:
         _p(f"                         {unresolved} joined via neither — genuinely unowned")
+    return controller_owner
+
+
+async def _check_boot_optimized_storage(
+    client: IntersightClient, summaries: list[dict[str, Any]], controller_owner: dict[str, str]
+) -> None:
+    """
+    Check whether Cisco's M.2/SD boot-optimized storage subsystem
+    explains a server reporting zero `storage.PhysicalDisk` rows.
+
+    `pci.Device` was checked and ruled out during the follow-up research
+    that prompted this (`docs/notes/intersight-inventory-model.md`,
+    "Follow-up 2026-09-01", §12 — it is a GPU-riser identity MO with no
+    storage relationship). The leading remaining explanation is that a
+    server boots from an M.2 RAID module or legacy SD card, modelled as
+    `storage.FlexUtilController`/`FlexUtilPhysicalDrive` (current
+    generation) or `storage.FlexFlashController`/`FlexFlashPhysicalDrive`
+    (legacy) — separate MO classes the collector does not query, joined
+    through `compute.Board` rather than `ComputeBlade`/`ComputeRackUnit`
+    directly. See ADR-0017's UNVERIFIED list, item 11.
+
+    Args:
+        client (IntersightClient): A connected client.
+        summaries (list[dict[str, Any]]): The sampled servers.
+        controller_owner (dict[str, str]): `storage.Controller` `Moid` ->
+            owning server `Moid`, from `_storage_controller_owner_map`.
+    """
+    _header("5. BOOT-OPTIMIZED STORAGE — does M.2/SD explain a 0-drive report?")
+
+    board_owner: dict[str, str] = {}
+    async for row in client.list_all("compute/Boards", select="Moid,ComputeBlade,ComputeRackUnit"):
+        moid = str(row.get("Moid") or "")
+        owner = mapping.moref(row.get("ComputeBlade")) or mapping.moref(row.get("ComputeRackUnit"))
+        if moid and owner:
+            board_owner[moid] = owner
 
     disks_by_controller = await _resource_by_owner(
         client, "storage/PhysicalDisks", select="Moid,StorageController"
@@ -578,6 +613,88 @@ async def _check_boot_optimized_storage(
         _p("              or there is a storage class not covered here.")
     else:
         _p("N/A: every sampled server reported at least one storage.PhysicalDisk row.")
+
+
+def _drive_capacity_bytes(disk: Mapping[str, Any]) -> int | None:
+    """
+    A drive's capacity in bytes, mirroring
+    `intersight.mapping._capacity_bytes` exactly.
+
+    A local copy rather than importing the mapping module's private
+    helper, matching this file's own convention (see `_int`'s
+    docstring): this tool is a probe an operator runs, not a caller
+    entitled to the collector's internals.
+
+    Args:
+        disk (Mapping[str, Any]): A `storage.PhysicalDisk` row.
+
+    Returns:
+        int | None: The capacity, or None when neither field parses.
+    """
+    exact = _int(disk.get("NonCoercedSizeBytes"))
+    if exact:
+        return exact
+    size_mb = _int(disk.get("Size"))
+    return size_mb * _MIB if size_mb else None
+
+
+async def _check_disk_capacity(
+    client: IntersightClient, summaries: list[dict[str, Any]], controller_owner: dict[str, str]
+) -> None:
+    """
+    Flag every drive whose capacity the mapping cannot parse, with the
+    raw fields Intersight actually sent for it.
+
+    Prompted by a live report: one server's drives all showed correct
+    model/serial/type/health but "size unknown", while the Intersight UI
+    showed a real size for the same drives. `NonCoercedSizeBytes` and
+    `Size` are the only two fields the mapping reads for capacity
+    (ADR-0017's storage section); this checks both directly rather than
+    guessing at a third field or a sentinel value.
+
+    Args:
+        client (IntersightClient): A connected client.
+        summaries (list[dict[str, Any]]): The sampled servers, for
+            resolving a flagged drive's serial in the printout.
+        controller_owner (dict[str, str]): `storage.Controller` `Moid` ->
+            owning server `Moid`, from `_storage_controller_owner_map`.
+    """
+    _header("6. DISK CAPACITY — flags any drive the mapping could not size")
+
+    serial_by_server = {
+        str(s.get("Moid") or ""): str(s.get("Serial") or s.get("Moid") or "?") for s in summaries
+    }
+    select = "Moid,DiskId,Model,Type,Protocol,Size,NonCoercedSizeBytes,StorageController"
+    total = 0
+    flagged = 0
+    try:
+        async for disk in client.list_all("storage/PhysicalDisks", select=select):
+            total += 1
+            if _drive_capacity_bytes(disk) is not None:
+                continue
+            flagged += 1
+            controller = mapping.moref(disk.get("StorageController"))
+            server = controller_owner.get(controller or "") if controller else None
+            serial = serial_by_server.get(server or "", server or "unknown server")
+            _p(
+                f"  {serial}  disk {disk.get('DiskId') or disk.get('Moid')}"
+                f"  {disk.get('Model') or '—'}"
+            )
+            _p(f"    Type={disk.get('Type')!r}  Protocol={disk.get('Protocol')!r}")
+            _p(
+                f"    Size={disk.get('Size')!r}"
+                f"  NonCoercedSizeBytes={disk.get('NonCoercedSizeBytes')!r}"
+            )
+    except IntersightError as exc:
+        _p(f"could not read storage/PhysicalDisks: {exc}")
+        return
+
+    _p(f"\n{flagged} of {total} sampled drive(s) could not be sized.")
+    if flagged:
+        _p("Compare Type/Protocol above against the drives that DID size correctly —")
+        _p("a difference there (e.g. an NVMe drive alongside sized SAS/SATA ones) points")
+        _p("at a protocol-specific field this collector does not read yet. Report the raw")
+        _p("values above; ADR-0017's storage section is where the fix would land.")
 
 
 def main(argv: list[str] | None = None) -> None:
