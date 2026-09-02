@@ -128,6 +128,12 @@ class UcsManagerProvider:
             cpu_units_all = await client.query_classid("processorUnit")
             disk_units_all = await client.query_classid("storageLocalDisk")
             psu_units_all = await client.query_classid("equipmentPsu")
+            # `graphicsCard`, not `coprocessorCard` — confirmed via Cisco's
+            # own UI documentation ("Inventory > GPUs") and the
+            # NVIDIA-GRID-specific compute/graphics mode enum. See
+            # docs/cisco-collectors.md, "GPUs (coprocessor cards vs.
+            # graphics cards)".
+            card_units_all = await client.query_classid("graphicsCard")
             # Exactly two per domain in practice (the redundant FI pair),
             # so this is cheap regardless of fleet size.
             network_elements = await client.query_classid("networkElement")
@@ -159,6 +165,11 @@ class UcsManagerProvider:
             # them; a blade server reports none. See
             # docs/cisco-collectors.md, "Power supplies (PSUs)".
             psu_units_by_server = _group_by_owning_server_dn(psu_units_all, server_dns=server_dns)
+            # `graphicsCard`'s parent is `computeBoard`, a DN path segment
+            # directly under the server (`.../blade-3/board/graphics-
+            # card-1`), the same pattern `processorUnit` already uses —
+            # unlike PSUs, this joins for blades and rack units alike.
+            card_units_by_server = _group_by_owning_server_dn(card_units_all, server_dns=server_dns)
 
             for server_mo in servers:
                 mgmt_if = _bmc_interface(mgmt_ifs_by_server[server_mo.dn], server_dn=server_mo.dn)
@@ -174,6 +185,7 @@ class UcsManagerProvider:
                     cpu_units=cpu_units_by_server[server_mo.dn],
                     disk_units=disk_units_by_server[server_mo.dn],
                     psu_units=psu_units_by_server[server_mo.dn],
+                    card_units=card_units_by_server[server_mo.dn],
                     switches_by_id=switches_by_id,
                 )
         finally:

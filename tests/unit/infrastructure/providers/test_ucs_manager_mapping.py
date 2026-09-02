@@ -555,6 +555,24 @@ def _psu_mo(**overrides: object) -> SimpleNamespace:
     return SimpleNamespace(**defaults)
 
 
+def _card_mo(**overrides: object) -> SimpleNamespace:
+    defaults = {
+        "dn": "sys/chassis-1/blade-3/board/graphics-card-1",
+        "id": "1",
+        "presence": "equipped",
+        "model": "UCSC-GPU-A100",
+        "vendor": "NVIDIA",
+        "serial": "GPU12345678",
+        "oper_state": "operable",
+        "power": "ok",
+        "pci_addr": "0000:af:00.0",
+        "firmware_version": "96.00.5E.00.02",
+        "temperature": "42.5",
+    }
+    defaults.update(overrides)
+    return SimpleNamespace(**defaults)
+
+
 class TestCpuAndStorage:
     def test_cpu_model_from_first_equipped_processor(self) -> None:
         result = compute_unit_to_provider_server(
@@ -805,3 +823,156 @@ class TestPsus:
             psu_units=[_psu_mo(psu_wattage=None)],
         )
         assert result.psus[0]["capacity_watts"] is None
+
+
+class TestGpus:
+    """Added 2026-09-02 at the user's request. `graphicsCard`, not
+    `coprocessorCard` — confirmed via Cisco's own UI documentation
+    ("Inventory > GPUs") and the NVIDIA-GRID-specific compute/graphics
+    mode enum. See mapping._gpu and docs/cisco-collectors.md, "GPUs
+    (coprocessor cards vs. graphics cards)".
+    """
+
+    def test_an_equipped_gpu_is_reported(self) -> None:
+        result = compute_unit_to_provider_server(
+            _blade(),
+            manager_id="mgr_1",
+            profile_by_dn={},
+            template_dn_by_name={},
+            mgmt_if=None,
+            mgmt_ip_by_parent_dn={},
+            switches_by_id={},
+            ext_eth_ifs=[],
+            host_eth_ifs=[],
+            cpu_units=[],
+            disk_units=[],
+            card_units=[_card_mo()],
+        )
+        assert len(result.gpus) == 1
+        gpu = result.gpus[0]
+        assert gpu["vendor"] == "NVIDIA"
+        assert gpu["model"] == "UCSC-GPU-A100"
+        assert gpu["serial"] == "GPU12345678"
+        assert gpu["pci_address"] == "0000:af:00.0"
+        assert gpu["firmware_version"] == "96.00.5E.00.02"
+        assert gpu["health"] == "UP"
+        assert gpu["temperature_celsius"] == 42.5
+
+    def test_a_failed_gpu_reports_down(self) -> None:
+        result = compute_unit_to_provider_server(
+            _blade(),
+            manager_id="mgr_1",
+            profile_by_dn={},
+            template_dn_by_name={},
+            mgmt_if=None,
+            mgmt_ip_by_parent_dn={},
+            switches_by_id={},
+            ext_eth_ifs=[],
+            host_eth_ifs=[],
+            cpu_units=[],
+            disk_units=[],
+            card_units=[_card_mo(oper_state="inoperable")],
+        )
+        assert result.gpus[0]["health"] == "DOWN"
+
+    def test_an_empty_gpu_slot_is_not_reported(self) -> None:
+        result = compute_unit_to_provider_server(
+            _blade(),
+            manager_id="mgr_1",
+            profile_by_dn={},
+            template_dn_by_name={},
+            mgmt_if=None,
+            mgmt_ip_by_parent_dn={},
+            switches_by_id={},
+            ext_eth_ifs=[],
+            host_eth_ifs=[],
+            cpu_units=[],
+            disk_units=[],
+            card_units=[_card_mo(presence="empty")],
+        )
+        assert result.gpus == ()
+
+    def test_no_card_units_defaults_to_empty(self) -> None:
+        """`card_units` defaults to `()` so the many call sites that
+        predate this field need no change.
+        """
+        result = compute_unit_to_provider_server(
+            _blade(),
+            manager_id="mgr_1",
+            profile_by_dn={},
+            template_dn_by_name={},
+            mgmt_if=None,
+            mgmt_ip_by_parent_dn={},
+            switches_by_id={},
+            ext_eth_ifs=[],
+            host_eth_ifs=[],
+            cpu_units=[],
+            disk_units=[],
+        )
+        assert result.gpus == ()
+
+    def test_not_applicable_temperature_is_none_not_a_parse_error(self) -> None:
+        """The same sentinel `storageLocalDisk.size` uses for "no reading
+        available" — not zero degrees, and not a crash.
+        """
+        result = compute_unit_to_provider_server(
+            _blade(),
+            manager_id="mgr_1",
+            profile_by_dn={},
+            template_dn_by_name={},
+            mgmt_if=None,
+            mgmt_ip_by_parent_dn={},
+            switches_by_id={},
+            ext_eth_ifs=[],
+            host_eth_ifs=[],
+            cpu_units=[],
+            disk_units=[],
+            card_units=[_card_mo(temperature="not-applicable")],
+        )
+        assert result.gpus[0]["temperature_celsius"] is None
+
+    def test_missing_temperature_is_none(self) -> None:
+        result = compute_unit_to_provider_server(
+            _blade(),
+            manager_id="mgr_1",
+            profile_by_dn={},
+            template_dn_by_name={},
+            mgmt_if=None,
+            mgmt_ip_by_parent_dn={},
+            switches_by_id={},
+            ext_eth_ifs=[],
+            host_eth_ifs=[],
+            cpu_units=[],
+            disk_units=[],
+            card_units=[_card_mo(temperature=None)],
+        )
+        assert result.gpus[0]["temperature_celsius"] is None
+
+    def test_memory_and_power_telemetry_are_none_not_zero(self) -> None:
+        """No field for any of these exists on `graphicsCard` or
+        `graphicsController` — a capability ceiling, not a failure.
+        """
+        result = compute_unit_to_provider_server(
+            _blade(),
+            manager_id="mgr_1",
+            profile_by_dn={},
+            template_dn_by_name={},
+            mgmt_if=None,
+            mgmt_ip_by_parent_dn={},
+            switches_by_id={},
+            ext_eth_ifs=[],
+            host_eth_ifs=[],
+            cpu_units=[],
+            disk_units=[],
+            card_units=[_card_mo()],
+        )
+        gpu = result.gpus[0]
+        for field in (
+            "memory_bytes",
+            "memory_type",
+            "ecc_mode_enabled",
+            "correctable_error_count",
+            "uncorrectable_error_count",
+            "power_watts",
+        ):
+            assert gpu[field] is None, field

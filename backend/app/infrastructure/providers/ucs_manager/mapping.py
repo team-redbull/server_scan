@@ -389,6 +389,126 @@ def _storage_drives(disk_units: list[Any]) -> tuple[tuple[dict[str, object], ...
     return tuple(drives), total_bytes
 
 
+_NOT_APPLICABLE_TEMP = "not-applicable"
+
+
+def _gpu_temperature_celsius(mo: Any) -> float | None:
+    """
+    A GPU's reported temperature.
+
+    `GraphicsCard.temperature` is typed `string` in the SDK (every XML
+    attribute is), but unlike every other GraphicsCard status field it
+    validates against a decimal-number regex
+    (`^([\\-]?)([123]?[1234]?)([0-9]{0,36})(([.])([0-9]{1,10}))?$`) with
+    a `"not-applicable"` sentinel for unknown — the same shape
+    `storageLocalDisk.size` uses for a real numeric reading, not the
+    enum-value lists every status field (`power`/`thermal`/`oper_state`)
+    uses. Added in UCS Manager 4.0(2a), after the MO class itself
+    (2.1(3a)) — a real sensor reading added later, not part of the
+    original identity-only shape.
+
+    **The unit is unverified.** No docstring states it, on this field or
+    anywhere else in this SDK. Assumed Celsius by convention — every
+    other temperature reading in this platform (Redfish's GPU/CPU
+    telemetry) is Celsius, and `Gpu.temperature_celsius`'s own name
+    already commits to it — but that is this collector's assumption, not
+    a documented fact. Settle against a live server with a known GPU
+    temperature before trusting it in a health policy.
+
+    Args:
+        mo (Any): A `graphicsCard` MO.
+
+    Returns:
+        float | None: The parsed value, or `None` for the
+            `"not-applicable"` sentinel, an absent field, or anything
+            unparseable.
+    """
+    raw = getattr(mo, "temperature", None)
+    if raw is None or str(raw).strip().lower() == _NOT_APPLICABLE_TEMP:
+        return None
+    try:
+        return float(raw)
+    except ValueError:
+        return None
+
+
+def _gpu(mo: Any) -> dict[str, object]:
+    """
+    One `graphicsCard` as the platform's GPU shape.
+
+    Added 2026-09-02, using `graphicsCard`/`graphicsController` rather
+    than the also-existing `coprocessorCard` — confirmed as the correct
+    class two ways: Cisco's own UCS Manager System Monitoring Guide and
+    server install guides document GPU inventory living under
+    **Equipment > ... > Inventory > GPUs**, populated by NVIDIA GPU
+    cards; and `GraphicsCardConsts.MODE_COMPUTE`/`MODE_GRAPHICS` is the
+    documented NVIDIA GRID/vGPU compute-vs-graphics mode toggle, a
+    GPU-specific concept with no reason to exist on unrelated hardware.
+    `coprocessorCard` has no such confirmation anywhere and is not used
+    here — see docs/cisco-collectors.md, "GPUs (coprocessor cards vs.
+    graphics cards)" for what would settle it if that turns out wrong.
+
+    `graphicsController` (`graphicsCard`'s child MO, one per GPU die on
+    a multi-GPU card) carries no field this collector doesn't already
+    have from `graphicsCard` itself — checked and not queried separately.
+
+    Args:
+        mo (Any): A `graphicsCard` MO.
+
+    Returns:
+        dict[str, object]: Keys mirroring `app.domain.models.hardware.Gpu`.
+            `memory_bytes`/`memory_type`/`ecc_mode_enabled`/error counts/
+            `power_watts` are `None` by construction — no field for any
+            of them exists on `graphicsCard` or `graphicsController`.
+            `temperature_celsius` is real, unlike everywhere else in
+            this platform's Cisco collectors — see
+            `_gpu_temperature_celsius`.
+    """
+    return {
+        "vendor": getattr(mo, "vendor", None) or None,
+        "model": getattr(mo, "model", None) or None,
+        "serial": getattr(mo, "serial", None) or None,
+        "health": _oper_state(mo),
+        "pci_address": getattr(mo, "pci_addr", None) or None,
+        "firmware_version": getattr(mo, "firmware_version", None) or None,
+        "memory_bytes": None,
+        "memory_type": None,
+        "ecc_mode_enabled": None,
+        "correctable_error_count": None,
+        "uncorrectable_error_count": None,
+        "temperature_celsius": _gpu_temperature_celsius(mo),
+        "power_watts": None,
+    }
+
+
+def _gpus(card_units: Iterable[Any]) -> tuple[dict[str, object], ...]:
+    """
+    Summarize one server's GPUs.
+
+    `graphicsCard`'s only parent is `computeBoard` — a DN path segment
+    directly under the server's own DN (confirmed via `ComputeBoard`'s
+    own `mo_meta`: `rn="board"`, parents `computeBlade`/
+    `computeRackUnit`/`computeServerUnit`), the same pattern
+    `processorUnit` already uses (`.../board/cpu-1`). The existing
+    ancestor-walk join therefore resolves a GPU's owning server with no
+    new logic, for both blades and rack units — unlike PSUs, which have
+    no such path back to a blade at all.
+
+    Args:
+        card_units (Iterable[Any]): `graphicsCard` MOs owned by one
+            server.
+
+    Returns:
+        tuple[dict[str, object], ...]: One entry per equipped card. An
+            unequipped slot is not reported, matching every other
+            equipped-only collection in this module.
+
+    See docs/cisco-collectors.md, "GPUs (coprocessor cards vs. graphics
+    cards)".
+    """
+    return tuple(_gpu(mo) for mo in card_units if is_equipped(mo))
+
+
 def _psu_wattage(mo: Any) -> int | None:
     """
     A PSU's rated capacity in watts.
@@ -471,6 +591,7 @@ def compute_unit_to_provider_server(
     disk_units: list[Any],
     switches_by_id: dict[str, Any],
     psu_units: Iterable[Any] = (),
+    card_units: Iterable[Any] = (),
     provider_type: str = "UCS_MANAGER",
 ) -> ProviderServer:
     """
@@ -503,6 +624,8 @@ def compute_unit_to_provider_server(
             rather than being required, unlike every other sub-resource
             argument here, so the many existing call sites that predate
             this field did not all need updating for it.
+        card_units (Iterable[Any]): Its `graphicsCard` MOs (GPUs).
+            Defaults to `()` for the same reason `psu_units` does.
         provider_type (str): Which collector observed this server.
 
     Returns:
@@ -543,6 +666,7 @@ def compute_unit_to_provider_server(
         storage_total_bytes=storage_total_bytes,
         storage_drives=storage_drives,
         psus=_psus(psu_units),
+        gpus=_gpus(card_units),
         attachments=(
             _attachments(
                 ext_eth_ifs,

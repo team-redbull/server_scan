@@ -118,7 +118,7 @@ collectors:
     password: ""
 
     # How many domains to collect concurrently. Each domain costs a login
-    # plus 12 queries no matter how many servers it holds
+    # plus 13 queries no matter how many servers it holds
     # (docs/adr/0014-ucs-central-multi-domain-collector.md), and domains
     # are independent, so this bounds wall-clock time without bounding
     # what gets collected.

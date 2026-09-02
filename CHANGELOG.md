@@ -104,12 +104,23 @@ than that.
   `docs/cisco-collectors.md`, "Power supplies (PSUs)".
 - **UCS Manager/Central now report PSU identity and health too**, same
   `power.psu_count`/`power.failed_psu_count` metrics as Intersight
-  above. One more query per domain (12 now, was 11). Same rack-only
-  limitation as Intersight — a blade's PSUs belong to its shared
-  chassis, not to the blade. `--dry-run` also prints a `power=` field
-  UCS Manager's `equipmentPsu` reports separately from `oper_state`,
-  collected but not yet folded into `health` — see
-  `docs/cisco-collectors.md`, "Power supplies (PSUs)", for why.
+  above. Same rack-only limitation as Intersight — a blade's PSUs
+  belong to its shared chassis, not to the blade. `--dry-run` also
+  prints a `power=` field UCS Manager's `equipmentPsu` reports
+  separately from `oper_state`, collected but not yet folded into
+  `health` — see `docs/cisco-collectors.md`, "Power supplies (PSUs)",
+  for why.
+- **UCS Manager/Central now report GPU identity, and real temperature
+  telemetry** — from `graphicsCard`, not the also-existing
+  `coprocessorCard`, which Cisco's own UI documentation never ties to
+  GPU hardware. Works for blades and rack units alike, unlike PSUs.
+  `temperature_celsius` is genuine sensor data (unlike every other
+  Cisco collector in this platform, which reports GPU telemetry as
+  `None` — a real capability ceiling of their object models, not this
+  one); its unit is assumed Celsius by convention, unverified against
+  live hardware. See `docs/cisco-collectors.md`, "GPUs (coprocessor
+  cards vs. graphics cards)". One more query per domain (13 now, was
+  9 before this and the PSU addition above).
 - **A fleet-wide "Across all sites" card** on the sites overview, and
   `standalone` now labelled properly in every vendor breakdown.
 - **BMC addresses display as plain hosts** in the UI and the collector

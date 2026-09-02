@@ -521,6 +521,98 @@ the answer into `_psu()` and delete this section's uncertainty — the
 same "settle it live" pattern already used for `TotalMemory`'s unit
 (ADR-0017) and the `ComputeBoard` join gap.
 
+## GPUs (coprocessor cards vs. graphics cards)
+
+**Added 2026-09-02**, at the user's request. `ucsmsdk` (confirmed
+`0.9.27`, installed) declares **two** separate GPU-shaped MO families,
+and picking the wrong one would either miss real GPUs or mislabel
+unrelated hardware as one:
+
+- `coprocessor.CoprocessorCard` — introduced UCS Manager 4.0(1a).
+  Identity fields only (`model`/`vendor`/`serial`/`revision`/`pci_addr`/
+  `pci_slot`/`device_id` family), `oper_state`/`power`/`thermal` status
+  enums, **no `firmware_version`, no numeric telemetry field of any
+  kind.**
+- `graphics.GraphicsCard` (+ its child `graphics.GraphicsController`,
+  one per GPU die on a multi-GPU card) — introduced UCS Manager 2.1(3a),
+  materially extended over its lifetime. Same identity/status fields as
+  `CoprocessorCard`, **plus** `firmware_version` (2.2(7b)) and
+  `temperature` (4.0(2a)).
+
+### Why `graphicsCard`, not `coprocessorCard`
+
+Neither class's own docstrings say which one models a physical GPU —
+the SDK doesn't editorialize. Settled from two independent, official
+sources instead:
+
+1. **Cisco's own UCS Manager System Monitoring Guide and server
+   install guides** (e.g. the UCS C240 M7 and B200 M4 install guides,
+   both fetched from cisco.com) document GPU inventory living at
+   **Equipment → … → Inventory → GPUs**, populated once an NVIDIA GPU
+   card is physically installed and the server rediscovered. Nothing in
+   any of Cisco's own documentation ties `coprocessorCard` to GPU
+   hardware at all — it isn't mentioned in GPU-related install or
+   monitoring guides anywhere this was checked.
+2. **`GraphicsCardConsts.MODE_COMPUTE = "compute"` /
+   `MODE_GRAPHICS = "graphics"`** is the documented NVIDIA GRID/vGPU
+   compute-vs-graphics operating-mode toggle — a concept with no reason
+   to exist on any hardware that isn't a GPU. `CoprocessorCard` has no
+   equivalent field.
+
+Both are also confirmed present, byte-identical in field shape, on the
+current `CiscoUcs/ucsmsdk` GitHub `master` — this isn't an artifact of
+one pinned version. `ucscsdk` (UCS Central's own SDK) has **no**
+`coprocessor` package at all, and no `graphics` class either at the
+usual mirrored path — moot either way, since UCS Central never reads
+per-server hardware from its own SDK; every field here comes from
+`UcsManagerProvider`, which `UcsCentralProvider` wraps per domain (see
+"UCS Central domain discovery and pruning" below). If real hardware
+ever turns up a GPU visible under `coprocessorCard` but not
+`graphicsCard`, that would be the live evidence to revisit this
+decision — none exists yet.
+
+### Fields collected
+
+| `Gpu` field | From `graphicsCard` | Why |
+|---|---|---|
+| `vendor` | `vendor` | Identity |
+| `model` | `model` | Identity |
+| `serial` | `serial` | Identity |
+| `pci_address` | `pci_addr` | Identity |
+| `firmware_version` | `firmware_version` | Real field, unlike `coprocessorCard` |
+| `health` | `oper_state`, via the shared `normalize_oper_state` helper | Same field/vocabulary every other OperState-sourced health value in this platform uses |
+| `temperature_celsius` | `temperature` | See below — the one genuinely new kind of data this addition brings |
+| `memory_bytes`, `memory_type`, `ecc_mode_enabled`, error counts, `power_watts` | — | No field for any of them exists on `graphicsCard` or `graphicsController`; `None` by construction, the same capability ceiling already confirmed twice for Intersight's `graphics.Card` |
+
+Only equipped cards are reported, via `is_equipped()` — the same
+presence check used everywhere else in this module.
+
+### `temperature` — real telemetry, unlike everywhere else in this file
+
+Every other Cisco-sourced status-shaped field in this codebase
+(`oper_state`, `power`, `thermal`, `perf`, PSU's `power`, …) is one of a
+fixed enum list — `MoPropertyMeta`'s constructor is handed a list of
+valid strings. `GraphicsCard.temperature` is different: it validates
+against a **decimal-number regex**
+(`^([\-]?)([123]?[1234]?)([0-9]{0,36})(([.])([0-9]{1,10}))?$`) with a
+`"not-applicable"` sentinel for unknown — the identical shape
+`storageLocalDisk.size` uses for its own confirmed-numeric MB reading —
+and it was added in 4.0(2a), a full point release after the MO class
+itself (2.1(3a)), consistent with a real sensor reading being added to
+an already-shipped identity-only object rather than being part of its
+original shape.
+
+**The unit is still unverified.** No docstring anywhere in this SDK
+states it. Assumed Celsius — every other temperature reading this
+platform collects (Redfish's GPU/CPU telemetry) is Celsius, and
+`Gpu.temperature_celsius`'s own name already commits to it — but that
+is this collector's assumption, following the same convention as
+`TotalMemory`'s unit before ADR-0017 settled it live, not a documented
+fact. `"not-applicable"` maps to `None`, mirroring
+`storageLocalDisk.size`'s identical sentinel handling
+(`_disk_capacity_bytes`). Settle by reading this field off a live
+server with a GPU whose actual temperature is known.
+
 ## SDK behaviour, sessions and timeouts
 
 ### `ucsmsdk` (UCS Manager)
@@ -737,11 +829,12 @@ are global in Central and already correct.
 
 ### Cost, and the shape this deliberately is not
 
-Two Central queries, then per collected domain one login plus the 12
+Two Central queries, then per collected domain one login plus the 13
 domain-wide queries `UcsManagerProvider` issues (pinned by
-`test_scales_query_count_independently_of_fleet_size`; 12 as of
-`equipmentPsu`'s addition, "Power supplies (PSUs)" above — was 11, then
-10 at earlier points in this file's own history). **That per-domain cost
+`test_scales_query_count_independently_of_fleet_size`; 13 as of
+`graphicsCard`'s addition below — was 12 after `equipmentPsu` ("Power
+supplies (PSUs)" above), 11 before that, 10 at earlier points in this
+file's own history). **That per-domain cost
 is flat in server count** — a domain holding 500 servers costs the same
 as one holding 10 — so the only levers are how many domains get
 contacted (pruning) and how many at once (`concurrency`, from

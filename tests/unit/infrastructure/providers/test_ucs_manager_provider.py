@@ -332,6 +332,35 @@ class TestListServers:
 
         assert server.psus == ()
 
+    async def test_a_blades_own_gpu_joins_directly_unlike_psus(self) -> None:
+        """Unlike `equipmentPsu`, `graphicsCard`'s parent (`computeBoard`)
+        is a DN path segment directly under the server itself
+        (`sys/chassis-1/blade-1/board/graphics-card-1`) for both blades
+        and rack units — confirmed via `ComputeBoard`'s own `mo_meta`.
+        The ancestor-walk join resolves it with no capability gap.
+        """
+        domain = _domain()
+        domain["graphicsCard"] = [
+            SimpleNamespace(
+                dn="sys/chassis-1/blade-1/board/graphics-card-1",
+                id="1",
+                presence="equipped",
+                model="UCSC-GPU-A100",
+                vendor="NVIDIA",
+                serial="GPU12345678",
+                oper_state="operable",
+                power="ok",
+                pci_addr="0000:af:00.0",
+                firmware_version="96.00.5E.00.02",
+                temperature="42.5",
+            )
+        ]
+        [server] = await _collect(_provider(FakeUcsClient(responses=domain)))
+
+        assert len(server.gpus) == 1
+        assert server.gpus[0]["vendor"] == "NVIDIA"
+        assert server.gpus[0]["temperature_celsius"] == 42.5
+
     async def test_management_ip_pool_address_under_the_profile_dn_is_preferred(self) -> None:
         """Real hardware, unlike UCSPE, can have `mgmtIf.ext_ip` unset while
         the service profile's management IP address policy already
@@ -487,7 +516,7 @@ class TestListServers:
         servers = await _collect(_provider(client))
 
         assert len(servers) == 50
-        assert len([c for c in client.calls if c.startswith("query_classid:")]) == 12
+        assert len([c for c in client.calls if c.startswith("query_classid:")]) == 13
 
     async def test_skips_non_equipped_servers(self) -> None:
         domain = _domain()
