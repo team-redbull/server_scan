@@ -2,15 +2,22 @@ name: CI
 
 on:
   push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+    branches: ["**"]
 
-# Supersede an in-flight run when a PR is pushed to again. Never cancel a
-# main run — that one can be mid-publish.
+# No `pull_request` trigger: GitHub matches a workflow run to a PR by
+# commit SHA regardless of what triggered it, so a `push` run on the PR's
+# head branch already shows up as its check — adding `pull_request` back
+# would only produce a second, duplicate run for the same commit. The
+# tradeoff: a PR opened from a fork lives on a branch this repo never
+# sees a `push` for, so it would get no CI at all under this trigger.
+# Re-add `pull_request: {branches: [main]}` if this repo ever takes
+# contributions from forks.
+#
+# Supersede an in-flight run when its branch is pushed to again. Never
+# cancel a main run — that one can be mid-publish.
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 permissions:
   contents: read
@@ -248,9 +255,11 @@ jobs:
     name: Publish images (GHCR)
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    # Never against untested or not-yet-merged code.
+    # Never against untested or not-yet-merged code. `push` is this
+    # workflow's only trigger, so `github.ref` alone decides the branch —
+    # an `event_name` check here would never actually differ.
     needs: [lint, test, frontend, e2e]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main'
     permissions:
       contents: write # the "Tag the release" step below pushes the new git tag
       packages: write # docker/login-action pushes images to ghcr.io
