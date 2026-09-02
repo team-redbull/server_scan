@@ -102,6 +102,14 @@ than that.
   none. Writing a health policy against `power.failed_psu_count`: it
   compares a PSU's `health` to `"DOWN"`, not `"FAILED"` — see
   `docs/cisco-collectors.md`, "Power supplies (PSUs)".
+- **UCS Manager/Central now report PSU identity and health too**, same
+  `power.psu_count`/`power.failed_psu_count` metrics as Intersight
+  above. One more query per domain (12 now, was 11). Same rack-only
+  limitation as Intersight — a blade's PSUs belong to its shared
+  chassis, not to the blade. `--dry-run` also prints a `power=` field
+  UCS Manager's `equipmentPsu` reports separately from `oper_state`,
+  collected but not yet folded into `health` — see
+  `docs/cisco-collectors.md`, "Power supplies (PSUs)", for why.
 - **A fleet-wide "Across all sites" card** on the sites overview, and
   `standalone` now labelled properly in every vendor breakdown.
 - **BMC addresses display as plain hosts** in the UI and the collector

@@ -772,6 +772,13 @@ async def _dry_run_one_manager(
                 f"  serial={psu.get('serial') or '—'}"
                 f"  {f'{capacity}W' if isinstance(capacity, int) else 'wattage unknown'}"
                 f"  health={psu.get('health')}"
+                # UCS Manager only: the equipmentPsu MO's separate `power`
+                # field, collected alongside oper_state so a live run can
+                # show which one tracks a real PSU failure more reliably
+                # before this settles on one (docs/cisco-collectors.md,
+                # "Power supplies (PSUs)"). Always "—" for a provider that
+                # doesn't report it, Intersight included.
+                f"  power={psu.get('oper_power') or '—'}"
             )
     print(f"\n{manager.name}: {count} server(s) reported. Nothing was written.")
     return count

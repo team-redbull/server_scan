@@ -127,6 +127,7 @@ class UcsManagerProvider:
             host_eth_ifs_all = await client.query_classid("adaptorHostEthIf")
             cpu_units_all = await client.query_classid("processorUnit")
             disk_units_all = await client.query_classid("storageLocalDisk")
+            psu_units_all = await client.query_classid("equipmentPsu")
             # Exactly two per domain in practice (the redundant FI pair),
             # so this is cheap regardless of fleet size.
             network_elements = await client.query_classid("networkElement")
@@ -148,6 +149,16 @@ class UcsManagerProvider:
             )
             cpu_units_by_server = _group_by_owning_server_dn(cpu_units_all, server_dns=server_dns)
             disk_units_by_server = _group_by_owning_server_dn(disk_units_all, server_dns=server_dns)
+            # A rack unit owns its own PSU(s) directly (`sys/rack-unit-3/
+            # psu-1`), but a blade's PSUs live under its chassis
+            # (`sys/chassis-1/psu-1`), a *sibling* of the blade
+            # (`sys/chassis-1/blade-1`) rather than an ancestor of it —
+            # `equipmentPsu` carries no relationship to an individual
+            # blade at all. This same DN-ancestor-walk join therefore
+            # silently drops chassis-owned PSUs rather than misattributing
+            # them; a blade server reports none. See
+            # docs/cisco-collectors.md, "Power supplies (PSUs)".
+            psu_units_by_server = _group_by_owning_server_dn(psu_units_all, server_dns=server_dns)
 
             for server_mo in servers:
                 mgmt_if = _bmc_interface(mgmt_ifs_by_server[server_mo.dn], server_dn=server_mo.dn)
@@ -162,6 +173,7 @@ class UcsManagerProvider:
                     host_eth_ifs=host_eth_ifs_by_server[server_mo.dn],
                     cpu_units=cpu_units_by_server[server_mo.dn],
                     disk_units=disk_units_by_server[server_mo.dn],
+                    psu_units=psu_units_by_server[server_mo.dn],
                     switches_by_id=switches_by_id,
                 )
         finally:

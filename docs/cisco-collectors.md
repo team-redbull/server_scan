@@ -441,6 +441,86 @@ been exercised against a live domain when that update was written. That
 is still true: no live UCS Central validation has happened, so nothing
 has since confirmed these fields against real hardware.
 
+## Power supplies (PSUs)
+
+**Added 2026-09-02**, at the user's request, and the first UCS field this
+collector reports that the platform's domain model already had a slot
+for but no provider had ever filled — `app.domain.models.hardware.Psu`/
+`Power` and the health engine's `power.psu_count`/`power.failed_psu_count`
+metrics predate this collector (see ADR-0017's Intersight PSU section for
+the fuller history and the `power.failed_psu_count` comparison bug that
+fix caught and corrected — vendor-neutral, so it applies here unchanged).
+
+`equipmentPsu` (confirmed against the installed `ucsmsdk==0.9.27` source,
+`mometa/equipment/EquipmentPsu.py`) declares five parent classes:
+`computeRackUnit`, `equipmentChassis`, `equipmentFex`,
+`equipmentRackEnclosure`, `networkElement` — **no relationship to an
+individual blade at all.**
+
+- **Rack-mount servers**: a PSU's DN (`sys/rack-unit-3/psu-1`) is a
+  direct child of the rack unit's own DN, so `ucs_common
+  .group_by_owning_server_dn`'s existing ancestor-walk join resolves it
+  the same way it does every other grandchild MO. No new join logic was
+  needed.
+- **Blade servers**: a PSU's DN (`sys/chassis-1/psu-1`) is a child of the
+  **chassis**, a *sibling* of the blade (`sys/chassis-1/blade-1`), not an
+  ancestor of it. The same ancestor-walk join therefore finds no match
+  and silently drops it — **a blade server reports no PSUs through this
+  collector.** This is a real capability gap, not a bug: nothing about
+  `equipmentPsu` lets a query attribute a shared chassis PSU to one
+  specific blade among several. Reporting it once per chassis, shared
+  across every blade in it, would be a materially different feature —
+  not implemented.
+
+### Fields collected, and why only these
+
+| `Psu` field | From `equipmentPsu` | Why |
+|---|---|---|
+| `id` | `id` (bay number, `"1"`–`"6"` per the schema's own range) | Identity |
+| `model` | `model` | Identity |
+| `serial` | `serial` | Identity |
+| `health` | `oper_state`, via the shared `normalize_oper_state` helper (UP/DOWN/DISABLED/UNKNOWN) | Same field and vocabulary Intersight's `psu()` already uses for the identical purpose — keeping `Psu.health` mean the same thing regardless of vendor is what lets one health-policy rule work correctly no matter which collector produced the data. |
+| `capacity_watts` | `psu_wattage` | Already a real `uint` (`prop_meta` range `0-20000`), no string-parsing or unit ambiguity. |
+
+**Only equipped slots are reported at all**, via the existing
+`ucs_common.is_equipped()` helper (checking `presence`, the same field
+already used to skip an unpopulated CPU socket or disk bay). An empty
+PSU bay is a different claim from a PSU that failed — a server
+provisioned with fewer PSUs than physical bays would otherwise show a
+permanent "failed" PSU it never had, corrupting
+`power.failed_psu_count` for exactly the servers that setting exists to
+protect.
+
+**Deliberately not collected**, because nothing currently consumes them
+— `vendor`, `revision`, `part_number`, `psu_type`, `psu_input_src`,
+`psu_firmware_version`, `thermal`, `voltage`, `perf`. All real fields on
+`equipmentPsu`; none has a health metric, a UI field, or any other
+reader yet. Add one only when something is built that actually needs
+it — see the GPU-telemetry and CPU-model sections above for the same
+principle applied earlier in this file.
+
+### `oper_power` — a second signal, collected but not yet trusted
+
+`equipmentPsu` carries a **second, separate** state field: `power`
+(`degraded`/`error`/`failed`/`off`/`ok`/`online`/... — a materially
+different enum from `oper_state`'s, and specifically about whether the
+PSU is delivering power, not the MO's general operational state). Unlike
+every other field above, this one is collected into the provider's dict
+under `oper_power` **without being folded into `Psu.health`** — it is not
+part of the `Psu` domain model, is never persisted, and is surfaced only
+in `tools/run_collector.py --dry-run`'s PSU line (`... health=UP
+power=ok`), always `—` for a provider that doesn't report it
+(Intersight has no equivalent field).
+
+**Why both, deliberately unreduced to one:** nothing here settles whether
+`oper_state` or `power` tracks a real PSU failure more reliably — that
+needs a live domain with an actual bad PSU, and no such data exists yet.
+Reducing to one signal now would be a guess dressed as a decision. Once a
+live run shows the two agreeing or disagreeing on a real failure, fold
+the answer into `_psu()` and delete this section's uncertainty — the
+same "settle it live" pattern already used for `TotalMemory`'s unit
+(ADR-0017) and the `ComputeBoard` join gap.
+
 ## SDK behaviour, sessions and timeouts
 
 ### `ucsmsdk` (UCS Manager)

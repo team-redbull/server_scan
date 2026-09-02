@@ -277,10 +277,11 @@ class Settings(BaseSettings):
     # (one login valid across the fleet; the addresses come from Central,
     # so INVENTORY_UCS_MANAGER_IP is not used by this collector).
     #
-    # Domains are independent, and each costs a login plus ~9 queries no
-    # matter how many servers it holds, so this bounds wall-clock without
-    # bounding correctness. Kept modest: every concurrent domain is one
-    # blocking SDK call parked in a worker thread.
+    # Domains are independent, and each costs a login plus 12 queries no
+    # matter how many servers it holds (docs/adr/0014-ucs-central-multi-
+    # domain-collector.md), so this bounds wall-clock without bounding
+    # correctness. Kept modest: every concurrent domain is one blocking
+    # SDK call parked in a worker thread.
     ucs_central_domain_concurrency: int = 4
 
     # No `ome_inventory_concurrency`: the Dell collector's expensive pass is

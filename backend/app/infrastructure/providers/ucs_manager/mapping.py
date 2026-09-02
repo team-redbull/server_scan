@@ -389,6 +389,74 @@ def _storage_drives(disk_units: list[Any]) -> tuple[tuple[dict[str, object], ...
     return tuple(drives), total_bytes
 
 
+def _psu_wattage(mo: Any) -> int | None:
+    """
+    A PSU's rated capacity in watts.
+
+    Args:
+        mo (Any): An `equipmentPsu` MO.
+
+    Returns:
+        int | None: The parsed wattage, or `None` when absent or
+            unparseable — not zero, which would read as a PSU rated for
+            no power at all.
+    """
+    raw = getattr(mo, "psu_wattage", None)
+    if raw is None:
+        return None
+    try:
+        return int(str(raw))
+    except ValueError:
+        return None
+
+
+def _psu(mo: Any) -> dict[str, object]:
+    """
+    One `equipmentPsu` as the platform's PSU shape.
+
+    Args:
+        mo (Any): An `equipmentPsu` MO.
+
+    Returns:
+        dict[str, object]: Keys mirroring `app.domain.models.hardware.Psu`,
+            plus `oper_power` — the MO's separate `power` field
+            (ok/failed/error/off/degraded/...), collected alongside
+            `oper_state` deliberately unreduced to one signal. Not part
+            of the `Psu` domain model and not persisted — surfaced only
+            in the dry-run print, so a live run can show whether
+            `oper_state` or `power` tracks a real PSU failure more
+            reliably before this settles on one. See
+            docs/cisco-collectors.md, "Power supplies (PSUs)".
+    """
+    return {
+        "id": getattr(mo, "id", None) or None,
+        "model": getattr(mo, "model", None) or None,
+        "serial": getattr(mo, "serial", None) or None,
+        "health": _oper_state(mo),
+        "capacity_watts": _psu_wattage(mo),
+        "oper_power": getattr(mo, "power", None) or None,
+    }
+
+
+def _psus(psu_units: Iterable[Any]) -> tuple[dict[str, object], ...]:
+    """
+    Summarize one server's PSUs.
+
+    Args:
+        psu_units (Iterable[Any]): `equipmentPsu` MOs owned by one server.
+
+    Returns:
+        tuple[dict[str, object], ...]: One entry per equipped PSU slot.
+            An unequipped slot is not reported at all — it is not a
+            failed PSU, it is a bay this server was never populated
+            with, and counting it would permanently misreport
+            `power.failed_psu_count` for any server provisioned with
+            fewer PSUs than bays. See docs/cisco-collectors.md, "Power
+            supplies (PSUs)".
+    """
+    return tuple(_psu(mo) for mo in psu_units if is_equipped(mo))
+
+
 def compute_unit_to_provider_server(
     server_mo: Any,
     *,
@@ -402,6 +470,7 @@ def compute_unit_to_provider_server(
     cpu_units: list[Any],
     disk_units: list[Any],
     switches_by_id: dict[str, Any],
+    psu_units: Iterable[Any] = (),
     provider_type: str = "UCS_MANAGER",
 ) -> ProviderServer:
     """
@@ -427,6 +496,13 @@ def compute_unit_to_provider_server(
         disk_units (list[Any]): Its `storageLocalDisk` MOs.
         switches_by_id (dict[str, Any]): Domain `networkElement` MOs
             keyed by `id` (`"A"`/`"B"`), passed through to `_attachments`.
+        psu_units (Iterable[Any]): Its `equipmentPsu` MOs. Only populated
+            for a rack-mount server — a blade's PSUs belong to its shared
+            chassis, not to the blade, and `equipmentPsu` carries no
+            relationship a blade could join through. Defaults to `()`
+            rather than being required, unlike every other sub-resource
+            argument here, so the many existing call sites that predate
+            this field did not all need updating for it.
         provider_type (str): Which collector observed this server.
 
     Returns:
@@ -466,6 +542,7 @@ def compute_unit_to_provider_server(
         memory_total_bytes=total_memory_mb * _BYTES_PER_MB,
         storage_total_bytes=storage_total_bytes,
         storage_drives=storage_drives,
+        psus=_psus(psu_units),
         attachments=(
             _attachments(
                 ext_eth_ifs,

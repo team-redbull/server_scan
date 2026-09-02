@@ -273,6 +273,65 @@ class TestListServers:
         assert server.nic_macs == ("00:aa:bb:cc:dd:ee",)
         assert [a.fabric for a in server.attachments] == ["A"]
 
+    async def test_a_rack_units_own_psu_joins_directly(self) -> None:
+        """`equipmentPsu` is a direct child of `computeRackUnit`'s own DN
+        (`sys/rack-unit-3/psu-1`), so the ancestor-walk join resolves it
+        the same way it does every other grandchild MO.
+        """
+        domain = _domain(computeBlade=[])
+        domain["computeRackUnit"] = [
+            SimpleNamespace(
+                dn="sys/rack-unit-3",
+                name="rack-3",
+                presence="equipped",
+                assigned_to_dn="",
+                total_memory="524288",
+            )
+        ]
+        domain["equipmentPsu"] = [
+            SimpleNamespace(
+                dn="sys/rack-unit-3/psu-1",
+                id="1",
+                presence="equipped",
+                model="UCSC-PSU1-1050W",
+                serial="LIT12345678",
+                oper_state="operable",
+                power="ok",
+                psu_wattage="1050",
+            )
+        ]
+        [server] = await _collect(_provider(FakeUcsClient(responses=domain)))
+
+        assert len(server.psus) == 1
+        assert server.psus[0]["health"] == "UP"
+        assert server.psus[0]["capacity_watts"] == 1050
+
+    async def test_a_blade_chassis_psu_is_not_attributed_to_the_blade(self) -> None:
+        """A blade's PSUs belong to its shared chassis
+        (`sys/chassis-1/psu-1`) — a *sibling* of the blade
+        (`sys/chassis-1/blade-1`), not an ancestor of it. The
+        ancestor-walk join correctly finds no match and drops the PSU
+        rather than misattributing it to the blade. This is the
+        documented capability gap, not a bug — see
+        docs/cisco-collectors.md, "Power supplies (PSUs)".
+        """
+        domain = _domain()
+        domain["equipmentPsu"] = [
+            SimpleNamespace(
+                dn="sys/chassis-1/psu-1",
+                id="1",
+                presence="equipped",
+                model="UCSB-PSU-2500ACPL",
+                serial="DCA12345678",
+                oper_state="operable",
+                power="ok",
+                psu_wattage="2500",
+            )
+        ]
+        [server] = await _collect(_provider(FakeUcsClient(responses=domain)))
+
+        assert server.psus == ()
+
     async def test_management_ip_pool_address_under_the_profile_dn_is_preferred(self) -> None:
         """Real hardware, unlike UCSPE, can have `mgmtIf.ext_ip` unset while
         the service profile's management IP address policy already
@@ -428,7 +487,7 @@ class TestListServers:
         servers = await _collect(_provider(client))
 
         assert len(servers) == 50
-        assert len([c for c in client.calls if c.startswith("query_classid:")]) == 11
+        assert len([c for c in client.calls if c.startswith("query_classid:")]) == 12
 
     async def test_skips_non_equipped_servers(self) -> None:
         domain = _domain()

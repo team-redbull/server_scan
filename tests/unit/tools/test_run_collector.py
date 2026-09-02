@@ -529,8 +529,51 @@ class TestDryRun:
         )
         out = capsys.readouterr().out
         assert "psus        : 2" in out
-        assert "psu 1  PSU-750W  serial=PSU-1  750W  health=UP" in out
-        assert "psu 2  PSU-750W  serial=PSU-2  750W  health=DOWN" in out
+        assert "psu 1  PSU-750W  serial=PSU-1  750W  health=UP  power=—" in out
+        assert "psu 2  PSU-750W  serial=PSU-2  750W  health=DOWN  power=—" in out
+
+    async def test_dry_run_shows_the_raw_ucs_power_field_alongside_oper_state(
+        self, capsys: Any
+    ) -> None:
+        """UCS Manager's `equipmentPsu` carries a second, separate `power`
+        state field beside `oper_state` — collected but not yet reduced
+        to one signal, so a live run can show which tracks a real PSU
+        failure more reliably (docs/cisco-collectors.md, "Power supplies
+        (PSUs)"). A provider without it (Intersight) always prints "—".
+        """
+
+        class FakeProvider:
+            provider_type = "UCS_CENTRAL"
+
+            async def health_check(self) -> None:
+                return None
+
+            async def list_servers(self) -> Any:
+                yield ProviderServer(
+                    external_id="sys/rack-unit-3",
+                    vendor="cisco",
+                    name="rack-3",
+                    psus=(
+                        {
+                            "id": "1",
+                            "model": "UCSC-PSU1-1050W",
+                            "serial": "LIT1",
+                            "health": "UP",
+                            "capacity_watts": 1050,
+                            "oper_power": "ok",
+                        },
+                    ),
+                )
+
+        await _dry_run_one_manager(
+            _manager(),
+            credential_resolver=FakeCredentialResolver(),  # type: ignore[arg-type]
+            timeout_seconds=5.0,
+            limit=None,
+            provider_factory=_factory(FakeProvider()),
+        )
+        out = capsys.readouterr().out
+        assert "health=UP  power=ok" in out
 
     async def test_dry_run_hides_fi_identity_on_a_vnic_attachment(self, capsys: Any) -> None:
         """A vNIC structurally never carries a fabric relationship at all

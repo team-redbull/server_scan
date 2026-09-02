@@ -540,6 +540,21 @@ def _storage_disk(**overrides: object) -> SimpleNamespace:
     return SimpleNamespace(**defaults)
 
 
+def _psu_mo(**overrides: object) -> SimpleNamespace:
+    defaults = {
+        "dn": "sys/rack-unit-3/psu-1",
+        "id": "1",
+        "presence": "equipped",
+        "model": "UCSC-PSU1-1050W",
+        "serial": "LIT12345678",
+        "oper_state": "operable",
+        "power": "ok",
+        "psu_wattage": "1050",
+    }
+    defaults.update(overrides)
+    return SimpleNamespace(**defaults)
+
+
 class TestCpuAndStorage:
     def test_cpu_model_from_first_equipped_processor(self) -> None:
         result = compute_unit_to_provider_server(
@@ -679,3 +694,114 @@ class TestCpuAndStorage:
             disk_units=[_storage_disk(device_type="unspecified")],
         )
         assert result.storage_drives[0]["media_type"] == "UNKNOWN"
+
+
+class TestPsus:
+    """Added 2026-09-02 at the user's request. `health` and `oper_power`
+    are deliberately both collected from `equipmentPsu`'s two separate
+    state fields (`oper_state` and `power`) — not yet reduced to one —
+    so a live run can show which tracks a real failure more reliably.
+    Only `health` (from `oper_state`) is part of the `Psu` domain model;
+    `oper_power` is dry-run-only, see `mapping._psu`.
+    """
+
+    def test_an_equipped_psu_is_reported(self) -> None:
+        result = compute_unit_to_provider_server(
+            _blade(),
+            manager_id="mgr_1",
+            profile_by_dn={},
+            template_dn_by_name={},
+            mgmt_if=None,
+            mgmt_ip_by_parent_dn={},
+            switches_by_id={},
+            ext_eth_ifs=[],
+            host_eth_ifs=[],
+            cpu_units=[],
+            disk_units=[],
+            psu_units=[_psu_mo()],
+        )
+        assert len(result.psus) == 1
+        psu = result.psus[0]
+        assert psu["id"] == "1"
+        assert psu["model"] == "UCSC-PSU1-1050W"
+        assert psu["serial"] == "LIT12345678"
+        assert psu["capacity_watts"] == 1050
+        assert psu["health"] == "UP"
+        assert psu["oper_power"] == "ok"
+
+    def test_a_failed_psu_reports_down(self) -> None:
+        result = compute_unit_to_provider_server(
+            _blade(),
+            manager_id="mgr_1",
+            profile_by_dn={},
+            template_dn_by_name={},
+            mgmt_if=None,
+            mgmt_ip_by_parent_dn={},
+            switches_by_id={},
+            ext_eth_ifs=[],
+            host_eth_ifs=[],
+            cpu_units=[],
+            disk_units=[],
+            psu_units=[_psu_mo(oper_state="inoperable", power="failed")],
+        )
+        psu = result.psus[0]
+        assert psu["health"] == "DOWN"
+        assert psu["oper_power"] == "failed"
+
+    def test_an_empty_psu_bay_is_not_reported_as_a_failed_psu(self) -> None:
+        """A slot with no PSU installed is a different claim from a PSU
+        that failed — reporting it would permanently misreport
+        power.failed_psu_count for any server provisioned with fewer
+        PSUs than bays.
+        """
+        result = compute_unit_to_provider_server(
+            _blade(),
+            manager_id="mgr_1",
+            profile_by_dn={},
+            template_dn_by_name={},
+            mgmt_if=None,
+            mgmt_ip_by_parent_dn={},
+            switches_by_id={},
+            ext_eth_ifs=[],
+            host_eth_ifs=[],
+            cpu_units=[],
+            disk_units=[],
+            psu_units=[_psu_mo(presence="empty")],
+        )
+        assert result.psus == ()
+
+    def test_no_psu_units_defaults_to_empty(self) -> None:
+        """`psu_units` defaults to `()` so the many call sites that
+        predate this field need no change.
+        """
+        result = compute_unit_to_provider_server(
+            _blade(),
+            manager_id="mgr_1",
+            profile_by_dn={},
+            template_dn_by_name={},
+            mgmt_if=None,
+            mgmt_ip_by_parent_dn={},
+            switches_by_id={},
+            ext_eth_ifs=[],
+            host_eth_ifs=[],
+            cpu_units=[],
+            disk_units=[],
+        )
+        assert result.psus == ()
+
+    def test_wattage_is_none_not_zero_when_unparseable(self) -> None:
+        result = compute_unit_to_provider_server(
+            _blade(),
+            manager_id="mgr_1",
+            profile_by_dn={},
+            template_dn_by_name={},
+            mgmt_if=None,
+            mgmt_ip_by_parent_dn={},
+            switches_by_id={},
+            ext_eth_ifs=[],
+            host_eth_ifs=[],
+            cpu_units=[],
+            disk_units=[],
+            psu_units=[_psu_mo(psu_wattage=None)],
+        )
+        assert result.psus[0]["capacity_watts"] is None
