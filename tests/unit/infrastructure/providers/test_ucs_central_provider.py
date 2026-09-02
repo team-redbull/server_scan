@@ -793,6 +793,40 @@ class TestDomainSummaryDiagnostics:
         assert summaries["1009"]["collected_servers"] is None
         assert summaries["1010"]["collected_servers"] == 0
 
+    async def test_a_skipped_domains_summary_logs_before_collection_even_starts(self) -> None:
+        """Added 2026-09-02, at the user's request: the coverage log used
+        to be batched at the end of the whole run, the one thing the
+        streaming fix above left un-streamed. A skipped domain's summary
+        is now logged synchronously during planning — before the
+        `asyncio.as_completed` loop has even been entered — so it
+        survives a kill that happens while a *different*, slow domain is
+        still being collected. Proven by reading only the first server
+        the generator yields and confirming the skipped domain's summary
+        already fired, without draining the slow domain at all.
+        """
+        client = FakeCentralClient(
+            {
+                "computeSystem": [_domain("1009", "pruned"), _domain("1010", "slow")],
+                "lsServer": [_profile("vmware-esx-07", "pruned")],
+            }
+        )
+        provider = _provider(
+            client,
+            {
+                "10.0.0.0": FakeDomainProvider(
+                    [_server("sys/rack-unit-1", "ocp4-slow-01")], delay=0.05
+                )
+            },
+        )
+
+        with capture_logs() as events:
+            gen = provider.list_servers()
+            await anext(gen)
+            await gen.aclose()
+
+        summaries = {e["domain_id"]: e for e in _events(events, "ucs_central.domain_summary")}
+        assert summaries["1009"]["collected_servers"] is None
+
     async def test_warns_when_a_domain_reports_servers_but_returns_none(self) -> None:
         """The signature of an address that resolves, a login that does not
         work on that domain, or pruning that cut too deep.

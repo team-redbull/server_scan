@@ -875,14 +875,20 @@ domain erroring vs. the whole pod being killed) now degrade the same
 way, whereas before the fix, a killed pod lost every domain regardless
 of how many had already finished.
 
-### `_log_domains` — the check on Central's domain list
+### `_log_one_domain` — the check on Central's domain list
 
 The domain list is the one thing this collector still takes from
 Central's replica and cannot verify any other way, so every run emits
 `ucs_central.domain_summary` per registered domain. `total_physical_cnt`
 is what Central *believes* a domain holds; `collected_servers` is what
-that domain's own UCS Manager actually returned. Three failures live in
-the gap, none visible from the total ingested count:
+that domain's own UCS Manager actually returned. **Logged per domain, as
+soon as that domain's own result is known** (added 2026-09-02, alongside
+the streaming fix above) — a skipped domain right after planning, a
+collected domain the moment `as_completed` yields it — not batched at
+the end of the run the way it originally was; a kill mid-run no longer
+loses the coverage line for a domain that had already finished, the
+same way it no longer loses that domain's server data. Three failures
+live in the gap, none visible from the total ingested count:
 
 1. A domain Central lists but whose UCS Manager we could not collect from
    — an unreachable address, a login not valid on that domain, or pruning

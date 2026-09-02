@@ -472,15 +472,25 @@ resolves.
 
 **One wrinkle Redfish's version doesn't have.** `as_completed` hands
 back whichever awaitable finishes next — the *result*, not which
-original domain produced it — but `_log_domains` needs a
-`collected_by_id` mapping to log its per-domain
-reported-vs-collected comparison. `_collect_domain` itself was left
-unchanged (still returns `list[ProviderServer]`, still logs its own
-`domain_collected`/`domain_failed` events internally); a new thin
+original domain produced it — but the per-domain coverage log (below)
+needs to know which domain a result belongs to. `_collect_domain` itself
+was left unchanged (still returns `list[ProviderServer]`, still logs its
+own `domain_collected`/`domain_failed` events internally); a new thin
 wrapper, `_collect_domain_result`, pairs the result with its
-`DomainTarget` so the correlation survives the reordering. `_log_domains`
-itself still runs once, after the loop, unchanged — it is an end-of-run
-summary, not something that needed to move per-domain.
+`DomainTarget` so the correlation survives the reordering.
+
+~~`_log_domains` itself still runs once, after the loop, unchanged — it
+is an end-of-run summary, not something that needed to move
+per-domain.~~ **Corrected same-day, at the user's request**: it *was*
+still batched, and the user asked for it not to be — "the logs and the
+data are no longer coupled" was true but left a real gap, since a kill
+mid-run still lost every coverage line for domains that had already
+succeeded. `_log_domains` is now `_log_one_domain`, called once per
+domain rather than once for the whole run: immediately after planning
+for a skipped domain (nothing about it is going to change), and inside
+the `as_completed` loop for a collected one, right where its servers are
+already being yielded. No behavior change to what gets logged, only to
+when.
 
 **Not done, and worth a future look**: Redfish also wraps its whole run
 in `asyncio.timeout(self._run_budget)` — a self-imposed deadline that

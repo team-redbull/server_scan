@@ -501,59 +501,78 @@ class UcsCentralProvider:
         targets, domain_mo_by_id = await self._plan()
         sem = asyncio.Semaphore(self._concurrency)
 
+        # A skipped domain's coverage line is already fully known — it was
+        # never contacted, and nothing about that changes while the
+        # targets below are collected — so it is logged now rather than
+        # waiting for the whole run, same as a collected domain now logs
+        # its own line the moment it finishes rather than at the end.
+        collected_ids = {t.domain_id for t in targets}
+        for domain_id, mo in domain_mo_by_id.items():
+            if domain_id not in collected_ids:
+                self._log_one_domain(mo, collected=None)
+
         tasks = [
             asyncio.create_task(self._collect_domain_result(target, sem)) for target in targets
         ]
-        collected_by_id: dict[str, int] = {}
         for finished in asyncio.as_completed(tasks):
             target, servers = await finished
-            collected_by_id[target.domain_id] = len(servers)
+            self._log_one_domain(domain_mo_by_id.get(target.domain_id), collected=len(servers))
             for provider_server in servers:
                 yield provider_server
 
-        self._log_domains(domain_mo_by_id, collected_by_id=collected_by_id)
-
-    def _log_domains(
-        self, domain_mo_by_id: dict[str, Any], *, collected_by_id: dict[str, int]
-    ) -> None:
+    def _log_one_domain(self, mo: Any | None, *, collected: int | None) -> None:
         """
-        Emit per-domain coverage, comparing what UCS Central believes each
-        domain holds against what that domain's UCS Manager returned.
+        Emit one domain's coverage, comparing what UCS Central believes it
+        holds against what that domain's UCS Manager actually returned.
+
+        Called once per domain, as soon as that domain's own result is
+        known — for a skipped domain, immediately after planning (nothing
+        about it is going to change); for a collected domain, the moment
+        `list_servers()`'s `asyncio.as_completed` loop yields it — rather
+        than batched at the end of the run the way it used to be. A
+        domain that already logged its own coverage line survives a kill
+        at `activeDeadlineSeconds` the same way its server data now does;
+        before this, the coverage lines were the one thing the streaming
+        fix above (ADR-0014, 2026-09-02) left still batched.
 
         See docs/cisco-collectors.md, "UCS Central domain discovery and
         pruning".
 
         Args:
-            domain_mo_by_id (dict[str, Any]): Registered `computeSystem` MOs
-                keyed by domain id.
-            collected_by_id (dict[str, int]): Servers collected per domain.
-                A domain absent from this mapping was never contacted, and
-                is reported as None rather than 0.
+            mo (Any | None): The registered `computeSystem` MO for this
+                domain, or `None` if UCS Central never listed it at all
+                (should not happen in practice — every `DomainTarget`
+                comes from a `computeSystem` row — but guarded rather
+                than assumed).
+            collected (int | None): Servers collected from this domain,
+                or `None` for a domain that was never contacted (skipped
+                by pruning, or missing an address).
         """
-        for domain_id, mo in domain_mo_by_id.items():
-            reported = getattr(mo, "total_physical_cnt", None)
-            collected = collected_by_id.get(domain_id)
-            logger.info(
-                "ucs_central.domain_summary",
+        if mo is None:
+            return
+        domain_id = str(getattr(mo, "id", "") or "")
+        reported = getattr(mo, "total_physical_cnt", None)
+        logger.info(
+            "ucs_central.domain_summary",
+            domain_id=domain_id,
+            domain_name=getattr(mo, "name", None),
+            address=getattr(mo, "address", None),
+            inventory_status=getattr(mo, "inventory_status", None),
+            last_refreshed=getattr(mo, "last_refreshed_ts", None),
+            reported_servers=reported,
+            collected_servers=collected,
+        )
+        if collected == 0 and str(reported or "0") not in ("0", ""):
+            logger.warning(
+                "ucs_central.domain_collected_nothing",
                 domain_id=domain_id,
                 domain_name=getattr(mo, "name", None),
                 address=getattr(mo, "address", None),
-                inventory_status=getattr(mo, "inventory_status", None),
-                last_refreshed=getattr(mo, "last_refreshed_ts", None),
                 reported_servers=reported,
-                collected_servers=collected,
+                hint=(
+                    "UCS Central reports this domain holds servers, but its own UCS "
+                    "Manager returned none. Check that the address is reachable and "
+                    "that INVENTORY_UCS_MANAGER_USERNAME/_PASSWORD is valid on this "
+                    "domain — see the ucs_central.domain_failed entry if there is one."
+                ),
             )
-            if collected == 0 and str(reported or "0") not in ("0", ""):
-                logger.warning(
-                    "ucs_central.domain_collected_nothing",
-                    domain_id=domain_id,
-                    domain_name=getattr(mo, "name", None),
-                    address=getattr(mo, "address", None),
-                    reported_servers=reported,
-                    hint=(
-                        "UCS Central reports this domain holds servers, but its own UCS "
-                        "Manager returned none. Check that the address is reachable and "
-                        "that INVENTORY_UCS_MANAGER_USERNAME/_PASSWORD is valid on this "
-                        "domain — see the ucs_central.domain_failed entry if there is one."
-                    ),
-                )

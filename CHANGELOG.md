@@ -138,6 +138,12 @@ than that.
   existing pattern) — a domain that finished before a kill keeps its
   data regardless of what else was still running. No action needed;
   this ships fixed.
+- **UCS Central's per-domain coverage log (`ucs_central.domain_summary`)
+  was still batched at the end of the run even after the fix above** —
+  the one thing it left un-streamed. Now logs each domain's coverage
+  line the moment that domain's own result is known (a skipped domain
+  right after planning, a collected domain as soon as it finishes),
+  same as its server data.
 - **The Intersight collector was silently missing every drive, and on
   some hardware every GPU and CPU model, because `storage.Controller`
   never joined to its server.** Confirmed live against a real tenant: 0
