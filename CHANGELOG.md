@@ -118,6 +118,15 @@ than that.
 
 ### Fixed
 
+- **A UCS Central run killed at its deadline (or OOMKilled) used to lose
+  every domain's data, not just the ones still in progress.**
+  `list_servers()` gathered every concurrently-collected domain before
+  yielding any of them, so nothing reached Mongo until the whole batch
+  finished. Now streams each domain's servers the moment that domain
+  completes (`asyncio.as_completed`, matching the Redfish collector's
+  existing pattern) — a domain that finished before a kill keeps its
+  data regardless of what else was still running. No action needed;
+  this ships fixed.
 - **The Intersight collector was silently missing every drive, and on
   some hardware every GPU and CPU model, because `storage.Controller`
   never joined to its server.** Confirmed live against a real tenant: 0

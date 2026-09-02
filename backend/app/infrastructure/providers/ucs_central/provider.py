@@ -448,9 +448,40 @@ class UcsCentralProvider:
             )
             return collected
 
+    async def _collect_domain_result(
+        self, target: DomainTarget, sem: asyncio.Semaphore
+    ) -> tuple[DomainTarget, list[ProviderServer]]:
+        """
+        `_collect_domain`, paired with the target that produced it.
+
+        A thin wrapper rather than changing `_collect_domain`'s own return
+        shape: `asyncio.as_completed` hands back whichever awaitable
+        finishes next, in completion order, not submission order — the
+        result has to carry its own domain identity, since nothing about
+        *which* task just finished says which domain it was.
+
+        Args:
+            target (DomainTarget): The domain to collect from.
+            sem (asyncio.Semaphore): Limits how many domains run at once.
+
+        Returns:
+            tuple[DomainTarget, list[ProviderServer]]: The target and
+                whatever `_collect_domain` produced for it.
+        """
+        return target, await self._collect_domain(target, sem)
+
     async def list_servers(self) -> AsyncIterator[ProviderServer]:
         """
         Collect every domain worth contacting and yield their servers.
+
+        Yields each domain's servers as that domain finishes rather than
+        gathering the fleet, so a run killed at its deadline has already
+        persisted what completed — the same shape
+        `..redfish.provider.RedfishStandaloneProvider.list_servers`
+        already uses, and for the same reason: before this, nothing was
+        yielded until every domain in flight had finished, so a kill at
+        `activeDeadlineSeconds` lost the *entire* run rather than just
+        the domains still in progress.
 
         Must be iterated to exhaustion, or closed via `contextlib.aclosing`.
 
@@ -469,19 +500,18 @@ class UcsCentralProvider:
         self._collection_errors.clear()
         targets, domain_mo_by_id = await self._plan()
         sem = asyncio.Semaphore(self._concurrency)
-        per_domain = await asyncio.gather(
-            *(self._collect_domain(target, sem) for target in targets)
-        )
 
-        collected_by_id = {
-            target.domain_id: len(servers)
-            for target, servers in zip(targets, per_domain, strict=True)
-        }
-        self._log_domains(domain_mo_by_id, collected_by_id=collected_by_id)
-
-        for servers in per_domain:
+        tasks = [
+            asyncio.create_task(self._collect_domain_result(target, sem)) for target in targets
+        ]
+        collected_by_id: dict[str, int] = {}
+        for finished in asyncio.as_completed(tasks):
+            target, servers = await finished
+            collected_by_id[target.domain_id] = len(servers)
             for provider_server in servers:
                 yield provider_server
+
+        self._log_domains(domain_mo_by_id, collected_by_id=collected_by_id)
 
     def _log_domains(
         self, domain_mo_by_id: dict[str, Any], *, collected_by_id: dict[str, int]

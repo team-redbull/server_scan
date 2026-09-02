@@ -445,3 +445,58 @@ of 152 domains with zero failed domains; 52 were pruned by
 `INVENTORY_COLLECTOR_NAME_PATTERN`, which is pruning working as
 designed, not a fault.
 
+## Update (2026-09-02): `list_servers()` streams per domain, not per fleet
+
+**The defect.** `list_servers()` used `asyncio.gather()` across every
+domain's `_collect_domain()` call. `gather()` does not return until every
+domain in the batch has finished — even a domain that completed
+instantly sat waiting in memory for the slowest one. Nothing was
+`yield`ed, and so nothing was written to Mongo (`IngestService.ingest`
+consumes the generator directly), until the entire domain sweep
+completed. A run killed by the CronJob's `activeDeadlineSeconds` (or
+OOMKilled — see `INVENTORY_UCS_CENTRAL_DOMAIN_CONCURRENCY`'s sizing
+guidance) therefore lost the **whole run's** data, not just the domains
+still in flight — an all-or-nothing failure mode with no partial
+credit, discovered by walking through exactly what the code does rather
+than by a live incident.
+
+**The fix, and where the pattern came from.** `..redfish.provider.
+RedfishStandaloneProvider.list_servers()` already solves the identical
+problem with `asyncio.as_completed()` — it yields each host's servers as
+that host finishes, in completion order, so a killed run has already
+persisted whatever completed. `UcsCentralProvider.list_servers()` now
+does the same: `asyncio.create_task` per domain, `asyncio.as_completed`
+over the tasks, yielding each domain's servers the moment that domain
+resolves.
+
+**One wrinkle Redfish's version doesn't have.** `as_completed` hands
+back whichever awaitable finishes next — the *result*, not which
+original domain produced it — but `_log_domains` needs a
+`collected_by_id` mapping to log its per-domain
+reported-vs-collected comparison. `_collect_domain` itself was left
+unchanged (still returns `list[ProviderServer]`, still logs its own
+`domain_collected`/`domain_failed` events internally); a new thin
+wrapper, `_collect_domain_result`, pairs the result with its
+`DomainTarget` so the correlation survives the reordering. `_log_domains`
+itself still runs once, after the loop, unchanged — it is an end-of-run
+summary, not something that needed to move per-domain.
+
+**Not done, and worth a future look**: Redfish also wraps its whole run
+in `asyncio.timeout(self._run_budget)` — a self-imposed deadline that
+stops the run cleanly and logs what didn't finish *before*
+`activeDeadlineSeconds` kills the pod with no summary at all.
+`UcsCentralProvider` has no equivalent yet; only the streaming half of
+Redfish's pattern was ported here. Adding a matching run budget would
+close the gap between "the K8s Job dies with no explanation" and "the
+collector says so itself" — deferred, not because it isn't worth doing,
+but because it is a separate decision (a new setting, a new
+`INVENTORY_UCS_CENTRAL_RUN_BUDGET_SECONDS`-shaped default to pick) from
+the streaming fix this update is about.
+
+Proven with a test that submits a slow domain *first* and a fast domain
+*second*, then asserts the fast domain's servers arrive first —
+`test_domains_stream_as_they_finish_not_after_the_whole_fleet`. A
+gather-then-yield implementation still passes a weaker "both arrive
+eventually" check, which is why the test asserts arrival order rather
+than just membership.
+

@@ -737,9 +737,11 @@ are global in Central and already correct.
 
 ### Cost, and the shape this deliberately is not
 
-Two Central queries, then per collected domain one login plus the 10
+Two Central queries, then per collected domain one login plus the 12
 domain-wide queries `UcsManagerProvider` issues (pinned by
-`test_scales_query_count_independently_of_fleet_size`). **That per-domain cost
+`test_scales_query_count_independently_of_fleet_size`; 12 as of
+`equipmentPsu`'s addition, "Power supplies (PSUs)" above — was 11, then
+10 at earlier points in this file's own history). **That per-domain cost
 is flat in server count** — a domain holding 500 servers costs the same
 as one holding 10 — so the only levers are how many domains get
 contacted (pruning) and how many at once (`concurrency`, from
@@ -753,16 +755,32 @@ domain-wide-query-plus-client-side-join that `UcsManagerProvider` already
 implements collapses that to a constant number of requests per domain,
 and `group_by_owning_server_dn` is what makes the join exact.
 
-Per-domain results are buffered into a list rather than streamed through
-a fan-in queue: one domain's `ProviderServer` list is small next to the
-managed objects `UcsManagerProvider` already holds for that same domain
-while joining them, so a queue would add machinery to save nothing.
+**Two different levels of "streamed," worth telling apart.** Within one
+domain, `_collect_domain` still buffers that domain's servers into a
+plain list rather than fanning them out through a per-server queue — one
+domain's `ProviderServer` list is small next to the managed objects
+`UcsManagerProvider` already holds for that same domain while joining
+them, so a queue would add machinery to save nothing, and that
+reasoning is unchanged. *Across* domains, though, `list_servers()` no
+longer waits for the whole batch: it yields each domain's list the
+moment that domain finishes (`asyncio.as_completed`, ADR-0014's
+2026-09-02 update), not after every concurrent domain resolves
+(`asyncio.gather`, the original and now-replaced shape). Getting finer
+than per-domain — streaming individual servers across domains as they
+complete — was considered and rejected for the same reason as above: it
+would need a real fan-in queue for a saving this collector's domain
+sizes don't make worth it.
 
 A failing domain is caught, logged as `ucs_central.domain_failed` with a
 `collected_before_failure` count, and contributes an empty list — an
 unreachable or slow domain must never cost the fleet its entire run,
 mirroring `tools.run_collector._run_one_manager`'s per-manager
-isolation.
+isolation. Since ADR-0014's 2026-09-02 update, this also means a domain
+that already finished keeps its data even if a *different* domain is
+what triggers `activeDeadlineSeconds` — the two failure modes (one
+domain erroring vs. the whole pod being killed) now degrade the same
+way, whereas before the fix, a killed pod lost every domain regardless
+of how many had already finished.
 
 ### `_log_domains` — the check on Central's domain list
 

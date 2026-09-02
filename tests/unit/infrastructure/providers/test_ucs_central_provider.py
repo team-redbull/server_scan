@@ -29,6 +29,7 @@ multi-domain orchestration layered on top of them.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from types import SimpleNamespace
 from typing import Any
@@ -123,11 +124,23 @@ class FakeCentralClient:
 class FakeDomainProvider:
     """Stands in for a per-domain `UcsManagerProvider`."""
 
-    def __init__(self, servers: list[ProviderServer], *, error: Exception | None = None) -> None:
+    def __init__(
+        self,
+        servers: list[ProviderServer],
+        *,
+        error: Exception | None = None,
+        delay: float = 0.0,
+    ) -> None:
         self._servers = servers
         self._error = error
+        # Only used to make one domain finish observably after another in
+        # `test_domains_stream_as_they_finish_not_after_the_whole_fleet` —
+        # every other test leaves this at 0.
+        self._delay = delay
 
     async def list_servers(self) -> AsyncIterator[ProviderServer]:
+        if self._delay:
+            await asyncio.sleep(self._delay)
         if self._error is not None:
             raise self._error
         for server in self._servers:
@@ -413,6 +426,36 @@ class TestListServers:
         assert sorted(client.queried) == ["computeSystem", "lsServer"]
         assert client.calls[0] == "login"
         assert client.calls[-1] == "logout"
+
+    async def test_domains_stream_as_they_finish_not_after_the_whole_fleet(self) -> None:
+        """`list_servers()` must yield a domain's servers as soon as that
+        domain finishes, not wait for every domain in the batch —
+        otherwise a run killed at its `activeDeadlineSeconds` loses the
+        *entire* run instead of just the domains still in flight. Proven
+        by making the domain submitted *first* finish *last*: a
+        gather-then-yield implementation would still pass a naive "both
+        arrive eventually" check, so this asserts arrival order instead.
+        """
+        client = FakeCentralClient(
+            {
+                "computeSystem": [_domain("1", "slow-domain"), _domain("2", "fast-domain")],
+                "lsServer": [],
+            }
+        )
+        provider = _provider(
+            client,
+            {
+                "10.0.0.1": FakeDomainProvider(
+                    [_server("sys/rack-unit-1", "ocp4-slow-01")], delay=0.05
+                ),
+                "10.0.0.2": FakeDomainProvider([_server("sys/rack-unit-2", "ocp4-fast-01")]),
+            },
+            name_pattern="",
+        )
+
+        arrival_order = [server.name async for server in provider.list_servers()]
+
+        assert arrival_order == ["ocp4-fast-01", "ocp4-slow-01"]
 
     async def test_collects_every_domain_and_reroots_external_ids(self) -> None:
         client = FakeCentralClient(
