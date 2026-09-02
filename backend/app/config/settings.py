@@ -92,6 +92,20 @@ class Settings(BaseSettings):
 
     # --- GPU model catalog ---
     #
+    # Field name matches the env var suffix exactly (`gpu_models` ->
+    # `INVENTORY_GPU_MODELS`), the same convention `sites` -> `INVENTORY_SITES`
+    # already uses — pydantic-settings derives the env var name from the
+    # field name with no alias, so the two must agree letter for letter or
+    # the configured value is silently ignored (`extra="ignore"` above
+    # means an unrecognized env var never raises). This field was
+    # originally named `gpu_model_catalog`, which pydantic-settings read
+    # as `INVENTORY_GPU_MODEL_CATALOG` — a name nothing else in this repo
+    # (`.env.example`, the Helm chart, this file's own docstring above)
+    # ever documented or set, so `INVENTORY_GPU_MODELS` was silently a
+    # no-op until this was renamed. Confirmed live, not just by reading:
+    # `Settings()` genuinely returned the `INVENTORY_GPU_MODEL_CATALOG`
+    # value and ignored `INVENTORY_GPU_MODELS` before this fix.
+    #
     # Neither Cisco management plane this platform collects from
     # (Intersight's `graphics.Card`, UCS Manager's `graphicsCard`) reports
     # a GPU's memory size or power draw anywhere — confirmed against both
@@ -114,7 +128,7 @@ class Settings(BaseSettings):
     # feature did not exist. Only fills a gap the API left `None` — a
     # PID this deployment already knows the answer for is not entitled to
     # override a value a future API version starts reporting for real.
-    gpu_model_catalog: str = ""
+    gpu_models: str = ""
 
     # --- Regex / classification safety ---
     regex_max_pattern_length: int = 200

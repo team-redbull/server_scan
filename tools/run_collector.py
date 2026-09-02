@@ -658,7 +658,7 @@ async def _dry_run_one_manager(
     )
     sites = site_catalog(settings.sites if settings is not None else get_settings().sites)
     gpus_catalog = gpu_catalog(
-        settings.gpu_model_catalog if settings is not None else get_settings().gpu_model_catalog
+        settings.gpu_models if settings is not None else get_settings().gpu_models
     )
     print(f"\n=== {manager.name} ({manager.type.value} @ {manager.endpoint}) ===")
     if name_pattern:
@@ -927,7 +927,7 @@ async def _run(
             site_repo=MongoSiteRepository(mongo),
             manager_repo=manager_repo,
             sites=site_catalog(settings.sites),
-            gpu_catalog=gpu_catalog(settings.gpu_model_catalog),
+            gpu_catalog=gpu_catalog(settings.gpu_models),
             classification_service=ClassificationService(
                 rule_repo=rule_repo, engine=regex_engine, mongo=mongo
             ),

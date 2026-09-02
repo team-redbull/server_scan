@@ -140,6 +140,18 @@ than that.
 
 ### Fixed
 
+- **`INVENTORY_GPU_MODELS` was silently ignored — the `Settings` field
+  was named `gpu_model_catalog`, which pydantic-settings reads as
+  `INVENTORY_GPU_MODEL_CATALOG`, a name nothing else in this repo (this
+  file's own earlier entry included) ever documented or set.** Setting
+  `INVENTORY_GPU_MODELS`, exactly as `.env.example` and the Helm chart
+  say to, silently enriched nothing — no error, no warning, because an
+  unrecognized env var is ignored by design (same as an unset one). The
+  field is now named `gpu_models`, matching `INVENTORY_GPU_MODELS`
+  letter for letter, the same convention `sites`/`INVENTORY_SITES`
+  already used correctly. Any deployment that already set
+  `INVENTORY_GPU_MODELS` needs no change — it now actually takes effect
+  where before it silently didn't.
 - **A UCS Central run killed at its deadline (or OOMKilled) used to lose
   every domain's data, not just the ones still in progress.**
   `list_servers()` gathered every concurrently-collected domain before
