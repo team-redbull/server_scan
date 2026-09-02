@@ -61,7 +61,11 @@ from app.infrastructure.mongodb.site_repository import MongoSiteRepository
 from app.infrastructure.providers.intersight.provider import IntersightProvider
 from app.infrastructure.providers.openmanage.provider import OpenManageProvider
 from app.infrastructure.providers.redfish.provider import RedfishStandaloneProvider
-from app.infrastructure.providers.redfish.targets import load_targets
+from app.infrastructure.providers.redfish.targets import (
+    RedfishCredential,
+    RedfishTarget,
+    load_targets,
+)
 from app.infrastructure.providers.ucs_central.provider import UcsCentralProvider
 
 logger = structlog.get_logger(__name__)
@@ -90,18 +94,73 @@ def _openmanage_provider(
     timeout_seconds: float,
     settings: Settings,
 ) -> ServerInventoryProvider:
-    """One OpenManage Enterprise appliance, enumerating and inventorying the
-    whole Dell fleet — see `_PROVIDER_FACTORIES`' comment below.
+    """OME says who exists, each server's iDRAC says what it is — see
+    `_PROVIDER_FACTORIES`' comment below.
     """
+    # Raised here, before any connection is attempted, so a half-configured
+    # deployment gets the variable names to set rather than a per-BMC 401
+    # that reads like a fleet of bad passwords. `_run` turns
+    # `ManagerNotConfiguredError` into exit code 2 with this message.
+    if not settings.ome_bmc_username or not settings.ome_bmc_password:
+        raise ManagerNotConfiguredError(
+            "The Dell collector reads hardware from each server's iDRAC over "
+            "Redfish, so it needs a BMC login as well as the OME appliance "
+            "login. Set INVENTORY_OME_BMC_USERNAME and "
+            "INVENTORY_OME_BMC_PASSWORD. See "
+            "docs/adr/0019-dell-identity-from-ome-hardware-from-redfish.md."
+        )
+    bmc_credential = RedfishCredential(
+        # Named, not anonymous: this string is what the Redfish collector's
+        # auth guard and every log line report in place of the secret.
+        name="ome-bmc",
+        username=settings.ome_bmc_username,
+        password=settings.ome_bmc_password,
+    )
+
+    def redfish_for(targets: list[RedfishTarget]) -> ServerInventoryProvider:
+        """
+        Build the hardware pass over the BMCs OME just named.
+
+        Args:
+            targets (list[RedfishTarget]): The discovered fleet.
+
+        Returns:
+            ServerInventoryProvider: The Redfish collector, tuned by the
+                shared `redfish_*` settings — same protocol, same class of
+                device, so deliberately not a second set of knobs.
+        """
+        return RedfishStandaloneProvider(
+            manager=manager,
+            targets=targets,
+            connect_timeout=settings.redfish_connect_timeout_seconds,
+            read_timeout=settings.redfish_read_timeout_seconds,
+            host_budget_seconds=settings.redfish_host_budget_seconds,
+            run_budget_seconds=settings.redfish_run_budget_seconds,
+            fleet_concurrency=settings.redfish_fleet_concurrency,
+            auth_failure_threshold=settings.redfish_auth_failure_threshold,
+            auth_failure_budget=settings.redfish_auth_failure_budget,
+            tls_min_version=settings.redfish_tls_min_version,
+            debug_http=_debug_http_enabled(),
+        )
+
     return OpenManageProvider(
         manager=manager,
         credentials=credentials,
         timeout_seconds=timeout_seconds,
-        # Reused only to skip the expensive per-device inventory for
-        # profiles that certainly hold nothing of ours; the authoritative
-        # name filter is still `_NameFilteredProvider`.
+        bmc_credential=bmc_credential,
+        redfish_provider_factory=redfish_for,
+        # Applied before any BMC is contacted: the expensive pass here is
+        # per-server, not per-appliance. The authoritative name filter is
+        # still `_NameFilteredProvider`.
         name_pattern=settings.collector_name_pattern,
-        concurrency=settings.ome_inventory_concurrency,
+        bmc_port=settings.ome_bmc_port,
+        bmc_verify_tls=settings.ome_bmc_verify_tls,
+        bmc_verify_tls_reason=(
+            None
+            if settings.ome_bmc_verify_tls
+            else "INVENTORY_OME_BMC_VERIFY_TLS is off: iDRACs ship a factory self-signed certificate"
+        ),
+        bmc_ca_bundle=settings.redfish_ca_bundle or None,
     )
 
 

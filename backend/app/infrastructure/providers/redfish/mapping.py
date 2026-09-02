@@ -25,7 +25,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.domain.enums import HealthSeverity, MediaType, Vendor
-from app.domain.ports.provider import ProviderServer
+from app.domain.ports.provider import ProviderNic, ProviderServer
 
 _MIB = 1024**2
 _GIB = 1024**3
@@ -539,6 +539,57 @@ def macs_from_interfaces(interfaces: list[dict[str, Any]] | None) -> tuple[str, 
     return tuple(macs)
 
 
+# Redfish `EthernetInterface.LinkStatus` onto `LinkState`'s value set.
+# These four are the schema's enumeration, so unlike OME's link status
+# there is nothing to guess at here. `NoLink` and `LinkDown` are distinct
+# in Redfish — no carrier vs. carrier but down — and both map to DOWN,
+# which is the only distinction `LinkState` models.
+_LINK_STATUS = {
+    "LinkUp": "UP",
+    "Up": "UP",
+    "LinkDown": "DOWN",
+    "Down": "DOWN",
+    "NoLink": "DOWN",
+}
+
+
+def nics_from_interfaces(interfaces: list[dict[str, Any]] | None) -> tuple[ProviderNic, ...]:
+    """
+    Build the per-interface view from a server's `EthernetInterfaces`.
+
+    `macs_from_interfaces` above stays the flat MAC set identity
+    correlation keys on; this is the richer view that populates
+    `NetworkInfo.interfaces`. Both read the same members — an interface
+    with no usable MAC still appears here, because a NIC that reports a
+    name and a link state is worth showing even unaddressed.
+
+    Args:
+        interfaces (list[dict[str, Any]] | None): The `EthernetInterfaces`
+            members, or None when the collection could not be read.
+
+    Returns:
+        tuple[ProviderNic, ...]: One entry per interface, named by `Name`
+            then `Id`. Empty when the collection was unread or empty —
+            `ProviderServer.nics` has no "not read" state, and the MAC set
+            beside it already carries that distinction.
+    """
+    if not interfaces:
+        return ()
+    nics: list[ProviderNic] = []
+    for interface in interfaces:
+        mac = interface.get("MACAddress") or interface.get("PermanentMACAddress")
+        speed = interface.get("SpeedMbps")
+        nics.append(
+            ProviderNic(
+                name=str(interface.get("Name") or interface.get("Id") or "").strip(),
+                mac=mac.strip() if isinstance(mac, str) and mac.strip() else None,
+                speed_mbps=speed if isinstance(speed, int) and not isinstance(speed, bool) else None,
+                link_state=_LINK_STATUS.get(str(interface.get("LinkStatus") or ""), "UNKNOWN"),
+            )
+        )
+    return tuple(nics)
+
+
 def memory_bytes(system: dict[str, Any], dimms: list[dict[str, Any]] | None) -> int | None:
     """
     A server's total memory, in bytes.
@@ -648,6 +699,7 @@ def system_to_provider_server(
         serial=_clean_serial(system.get("SerialNumber")),
         system_uuid=system.get("UUID") or None,
         nic_macs=macs_from_interfaces(interfaces),
+        nics=nics_from_interfaces(interfaces),
         # Composed from the host we connected to plus the system's own
         # path — never from the operator's raw string, so a credential
         # accidentally written into an address can never reach MongoDB.

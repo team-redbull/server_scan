@@ -1,0 +1,383 @@
+"""The Dell collector: OME names the servers, Redfish measures them.
+
+The seam under test is the join. Both halves are faked — an OME client
+returning canned profile/device JSON, and a stand-in for the Redfish pass
+returning canned `ProviderServer`s — because what can actually break here
+is the correlation between them, not either vendor's own mapping.
+
+See docs/adr/0019-dell-identity-from-ome-hardware-from-redfish.md.
+"""
+
+from __future__ import annotations
+
+from collections.abc import AsyncIterator
+from typing import Any, Self
+
+import pytest
+
+from app.domain.enums import ManagerType, Vendor
+from app.domain.models.common import AuditFields
+from app.domain.models.manager import Manager
+from app.domain.ports.credentials import ManagerConnection
+from app.domain.ports.provider import ProviderServer
+from app.infrastructure.providers.openmanage.provider import OpenManageProvider
+from app.infrastructure.providers.redfish.targets import RedfishCredential, RedfishTarget
+
+pytestmark = pytest.mark.asyncio
+
+
+def _manager() -> Manager:
+    """
+    The manager every run in this module reports under.
+
+    Returns:
+        Manager: An OPENMANAGE manager pointing at a fake appliance.
+    """
+    return Manager(
+        _id="mgr-ome-1",
+        name="ome-1",
+        type=ManagerType.OPENMANAGE,
+        site_id="site-1",
+        endpoint="ome.example",
+        audit=AuditFields.new(),
+    )
+
+
+def _profile(name: str, idrac: str, *, template: str = "RHOCP Worker v4") -> dict[str, Any]:
+    """
+    One `/ProfileService/Profiles` entry.
+
+    Args:
+        name (str): The profile name, which becomes the server's name.
+        idrac (str): The profile's `TargetName`, i.e. its iDRAC address.
+        template (str): The deployment template name.
+
+    Returns:
+        dict[str, Any]: The profile as OME reports it.
+    """
+    return {
+        "ProfileName": name,
+        "TargetName": idrac,
+        "TemplateName": template,
+        "TemplateId": 412,
+    }
+
+
+def _device(idrac: str, *, service_tag: str, model: str = "PowerEdge R650") -> dict[str, Any]:
+    """
+    One `/DeviceService/Devices` entry.
+
+    Args:
+        idrac (str): The device's `DeviceName`, joined to a profile by it.
+        service_tag (str): The Dell service tag.
+        model (str): The device model.
+
+    Returns:
+        dict[str, Any]: The device as OME reports it.
+    """
+    return {"DeviceName": idrac, "DeviceServiceTag": service_tag, "Model": model}
+
+
+class _FakeOmeClient:
+    """Stands in for `OmeClient`, answering the two bulk calls from canned
+    JSON and recording that it was used as a context manager.
+    """
+
+    def __init__(self, profiles: list[dict[str, Any]], devices: list[dict[str, Any]]) -> None:
+        """
+        Args:
+            profiles (list[dict[str, Any]]): `/ProfileService/Profiles`.
+            devices (list[dict[str, Any]]): `/DeviceService/Devices`.
+        """
+        self._profiles = profiles
+        self._devices = devices
+        self.paths: list[str] = []
+
+    async def __aenter__(self) -> Self:
+        """
+        Returns:
+            Self: The logged-in client.
+        """
+        return self
+
+    async def __aexit__(self, *_: object) -> None:
+        """Log out. No-op for the fake."""
+        return None
+
+    async def get_all(self, path: str) -> list[dict[str, Any]]:
+        """
+        Answer one bulk enumeration call.
+
+        Args:
+            path (str): The OME collection path.
+
+        Returns:
+            list[dict[str, Any]]: The canned entries for that path.
+        """
+        self.paths.append(path)
+        return self._profiles if "Profile" in path else self._devices
+
+
+class _FakeRedfish:
+    """Stands in for the Redfish pass: records the targets it was built
+    with and yields one canned server per target.
+    """
+
+    def __init__(self, targets: list[RedfishTarget], servers: list[ProviderServer]) -> None:
+        """
+        Args:
+            targets (list[RedfishTarget]): What the Dell collector discovered.
+            servers (list[ProviderServer]): What to yield for them.
+        """
+        self.targets = targets
+        self._servers = servers
+        self.collection_errors: tuple[str, ...] = ()
+
+    async def list_servers(self) -> AsyncIterator[ProviderServer]:
+        """
+        Yields:
+            ProviderServer: Each canned server in order.
+        """
+        for server in self._servers:
+            yield server
+
+
+def _collected(host: str, **overrides: Any) -> ProviderServer:
+    """
+    A server as the Redfish pass would report it, before the OME join.
+
+    Args:
+        host (str): The BMC this system was collected from.
+        **overrides (Any): Fields to replace on the result.
+
+    Returns:
+        ProviderServer: The Redfish half of a collected Dell server.
+    """
+    defaults: dict[str, Any] = {
+        "external_id": f"redfish://{host}/redfish/v1/Systems/System.Embedded.1",
+        "vendor": Vendor.DELL.value,
+        "name": "ocp4-nyc-prod-worker-03",
+        "model": "PowerEdge R650",
+        "serial": "7XKD9P3",
+        # The real shape the Redfish mapping emits: scheme-rewritten origin
+        # plus the system's own path, not a bare `https://host`.
+        "bmc_address_raw": f"redfish://{host}/redfish/v1/Systems/System.Embedded.1",
+        "cpu_sockets": 2,
+        "cpu_cores": 32,
+        "cpu_threads": 64,
+        "storage_total_bytes": 4_320_000_000_000,
+    }
+    return ProviderServer(**{**defaults, **overrides})
+
+
+def _provider(
+    *,
+    profiles: list[dict[str, Any]],
+    devices: list[dict[str, Any]],
+    servers: list[ProviderServer],
+    name_pattern: str = "",
+) -> tuple[OpenManageProvider, dict[str, Any]]:
+    """
+    Build a provider wired to both fakes.
+
+    Args:
+        profiles (list[dict[str, Any]]): Canned OME profiles.
+        devices (list[dict[str, Any]]): Canned OME devices.
+        servers (list[ProviderServer]): What the Redfish pass reports.
+        name_pattern (str): The pre-filter to apply.
+
+    Returns:
+        tuple[OpenManageProvider, dict[str, Any]]: The provider, and a dict
+            the Redfish fake is recorded into as `"redfish"`.
+    """
+    recorded: dict[str, Any] = {}
+
+    def factory(targets: list[RedfishTarget]) -> Any:
+        recorded["redfish"] = _FakeRedfish(targets, servers)
+        return recorded["redfish"]
+
+    provider = OpenManageProvider(
+        manager=_manager(),
+        credentials=ManagerConnection(endpoint="ome.example", username="u", password="p"),
+        timeout_seconds=5.0,
+        bmc_credential=RedfishCredential(name="ome-bmc", username="bu", password="bp"),
+        redfish_provider_factory=factory,
+        name_pattern=name_pattern,
+    )
+    provider._new_client = lambda: _FakeOmeClient(profiles, devices)  # type: ignore[method-assign]
+    return provider, recorded
+
+
+class TestDiscovery:
+    """What OME is asked, and which servers survive to cost a BMC session."""
+
+    async def test_enumerates_with_two_bulk_calls(self) -> None:
+        """Two calls regardless of fleet size — the whole point of using OME
+        for discovery rather than walking devices.
+        """
+        provider, _ = _provider(
+            profiles=[_profile("ocp4-nyc-prod-worker-03", "10.0.0.1")],
+            devices=[_device("10.0.0.1", service_tag="7XKD9P3")],
+            servers=[_collected("10.0.0.1")],
+        )
+        client = _FakeOmeClient([], [])
+        provider._new_client = lambda: client  # type: ignore[method-assign]
+        [server async for server in provider.list_servers()]
+        assert client.paths == ["/ProfileService/Profiles", "/DeviceService/Devices"]
+
+    async def test_the_name_filter_runs_before_any_bmc_is_contacted(self) -> None:
+        """The expensive pass is per-server here, so a non-matching profile
+        must never become a target. This is the difference from the
+        standalone Redfish collector, where the filter is deliberately off
+        because a BMC does not know the server's name.
+        """
+        provider, recorded = _provider(
+            profiles=[
+                _profile("ocp4-nyc-prod-worker-03", "10.0.0.1"),
+                _profile("vmhost-two-14", "10.0.0.2"),
+            ],
+            devices=[
+                _device("10.0.0.1", service_tag="7XKD9P3"),
+                _device("10.0.0.2", service_tag="ZZZZZZZ"),
+            ],
+            servers=[_collected("10.0.0.1")],
+            name_pattern="^ocp",
+        )
+        [server async for server in provider.list_servers()]
+        assert [t.host for t in recorded["redfish"].targets] == ["10.0.0.1"]
+
+    async def test_a_profile_with_no_address_is_reported_not_dropped_silently(self) -> None:
+        """There is nothing to collect it from, but a run that quietly
+        skipped servers would report a complete success over a partial fleet.
+        """
+        provider, recorded = _provider(
+            profiles=[_profile("ocp4-nyc-prod-worker-03", "")],
+            devices=[],
+            servers=[],
+        )
+        assert [server async for server in provider.list_servers()] == []
+        assert recorded == {} or recorded["redfish"].targets == []
+        assert any("no iDRAC address" in error for error in provider.collection_errors)
+
+    async def test_the_profile_name_reaches_the_target(self) -> None:
+        """`RedfishTarget.name` becomes `override_name`, which is what keeps
+        a Dell server named the thing site parsing needs rather than
+        whatever iDRAC calls it.
+        """
+        provider, recorded = _provider(
+            profiles=[_profile("ocp4-nyc-prod-worker-03", "10.0.0.1")],
+            devices=[_device("10.0.0.1", service_tag="7XKD9P3")],
+            servers=[_collected("10.0.0.1")],
+        )
+        [server async for server in provider.list_servers()]
+        target = recorded["redfish"].targets[0]
+        assert target.name == "ocp4-nyc-prod-worker-03"
+        assert target.credential.username == "bu"
+
+
+class TestTheJoin:
+    """Putting OME's identity back onto what the BMC measured."""
+
+    async def test_the_spt_comes_from_ome(self) -> None:
+        """Redfish has no concept of a deployment template, so this field
+        exists only because the two halves are joined.
+        """
+        provider, _ = _provider(
+            profiles=[_profile("ocp4-nyc-prod-worker-03", "10.0.0.1")],
+            devices=[_device("10.0.0.1", service_tag="7XKD9P3")],
+            servers=[_collected("10.0.0.1")],
+        )
+        [server] = [s async for s in provider.list_servers()]
+        assert server.profile_template_name == "RHOCP Worker v4"
+        assert server.profile_template_external_id == "412"
+
+    async def test_the_bmc_address_keeps_its_metal3_shape(self) -> None:
+        """The Redfish pass reports `https://<host>`; a Dell server's stored
+        address must stay the `idrac-virtualmedia://` form a Metal3
+        BareMetalHost round-trips. Collecting over Redfish must not
+        silently downgrade it.
+        """
+        provider, _ = _provider(
+            profiles=[_profile("ocp4-nyc-prod-worker-03", "10.0.0.1")],
+            devices=[_device("10.0.0.1", service_tag="7XKD9P3")],
+            servers=[_collected("10.0.0.1")],
+        )
+        [server] = [s async for s in provider.list_servers()]
+        assert server.bmc_address_raw == (
+            "idrac-virtualmedia://10.0.0.1/redfish/v1/Systems/System.Embedded.1"
+        )
+
+    async def test_measured_hardware_always_wins(self) -> None:
+        """The whole reason for the architecture: what the BMC reports is
+        not overwritten by anything OME says.
+        """
+        provider, _ = _provider(
+            profiles=[_profile("ocp4-nyc-prod-worker-03", "10.0.0.1")],
+            devices=[_device("10.0.0.1", service_tag="OME-TAG", model="OME Model")],
+            servers=[_collected("10.0.0.1", serial="BMC-TAG", model="BMC Model")],
+        )
+        [server] = [s async for s in provider.list_servers()]
+        assert server.serial == "BMC-TAG"
+        assert server.model == "BMC Model"
+        assert server.cpu_threads == 64
+        assert server.storage_total_bytes == 4_320_000_000_000
+
+    async def test_ome_fills_only_what_the_bmc_left_empty(self) -> None:
+        """A BMC that reports no model still yields a modelled server,
+        because OME knows it.
+        """
+        provider, _ = _provider(
+            profiles=[_profile("ocp4-nyc-prod-worker-03", "10.0.0.1")],
+            devices=[_device("10.0.0.1", service_tag="7XKD9P3", model="PowerEdge R650")],
+            servers=[_collected("10.0.0.1", model=None, serial=None)],
+        )
+        [server] = [s async for s in provider.list_servers()]
+        assert server.model == "PowerEdge R650"
+        assert server.serial == "7XKD9P3"
+
+    async def test_several_systems_behind_one_bmc_all_get_the_identity(self) -> None:
+        """Joined on the BMC host, not the name, so a chassis reporting more
+        than one system does not leave the second one unidentified.
+        """
+        provider, _ = _provider(
+            profiles=[_profile("ocp4-nyc-prod-worker-03", "10.0.0.1")],
+            devices=[_device("10.0.0.1", service_tag="7XKD9P3")],
+            servers=[
+                _collected("10.0.0.1", external_id="sys-1"),
+                _collected("10.0.0.1", external_id="sys-2"),
+            ],
+        )
+        servers = [s async for s in provider.list_servers()]
+        assert [s.profile_template_name for s in servers] == ["RHOCP Worker v4"] * 2
+
+    async def test_the_manager_id_is_this_run_s(self) -> None:
+        """The Redfish pass is constructed with the same manager, but the
+        join asserts it rather than trusting the factory to have done so.
+        """
+        provider, _ = _provider(
+            profiles=[_profile("ocp4-nyc-prod-worker-03", "10.0.0.1")],
+            devices=[_device("10.0.0.1", service_tag="7XKD9P3")],
+            servers=[_collected("10.0.0.1", manager_id="something-else")],
+        )
+        [server] = [s async for s in provider.list_servers()]
+        assert server.manager_id == "mgr-ome-1"
+
+
+class TestPartialRuns:
+    """A run that reached OME but not every BMC must say so."""
+
+    async def test_redfish_errors_are_carried_through(self) -> None:
+        """`tools.run_collector` reads `collection_errors` to report PARTIAL.
+        Losing the Redfish pass's own per-host failures here would report a
+        complete success over a fleet half of which was unreachable.
+        """
+        provider, recorded = _provider(
+            profiles=[_profile("ocp4-nyc-prod-worker-03", "10.0.0.1")],
+            devices=[_device("10.0.0.1", service_tag="7XKD9P3")],
+            servers=[_collected("10.0.0.1")],
+        )
+        servers = []
+        async for server in provider.list_servers():
+            recorded["redfish"].collection_errors = ("10.0.0.2: unreachable",)
+            servers.append(server)
+        assert provider.collection_errors == ("10.0.0.2: unreachable",)

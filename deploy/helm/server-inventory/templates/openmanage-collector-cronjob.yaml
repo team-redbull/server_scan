@@ -2,13 +2,21 @@
 The Dell collector: one CronJob against one OpenManage Enterprise
 appliance, which manages the whole Dell estate.
 
-The pod talks only to OME. Two bulk REST calls enumerate every server
-profile and managed device; the servers whose name matches `namePattern`
-are then inventoried over per-device calls that OME serves from each
-server's iDRAC. `envFrom` pulls the shared vendor Secret for the
-appliance login (INVENTORY_OME_IP/_USERNAME/_PASSWORD).
+The pod talks to OME *and* to every collected server's iDRAC. Two bulk
+REST calls against the appliance enumerate every server profile and
+managed device; the servers whose name matches `namePattern` then have
+their hardware read from their own BMC over Redfish.
 
-See docs/dell-collectors.md.
+So this pod needs egress to the whole Dell BMC network, not just to the
+appliance, and `envFrom` pulls two logins from the shared vendor Secret:
+INVENTORY_OME_IP/_USERNAME/_PASSWORD for the appliance, and
+INVENTORY_OME_BMC_USERNAME/_PASSWORD for the iDRACs.
+
+Cost is per *server* here, not per appliance — ~25 requests against each
+collected machine — which is why this runs on the Redfish collector's
+cadence rather than hourly. See
+docs/adr/0019-dell-identity-from-ome-hardware-from-redfish.md and
+docs/dell-collectors.md.
 */ -}}
 {{- if .Values.collectors.ome.enabled }}
 apiVersion: batch/v1
@@ -44,10 +52,16 @@ spec:
                 # here rather than in the API ConfigMap this also mounts.
                 - name: INVENTORY_COLLECTOR_NAME_PATTERN
                   value: {{ .Values.collectors.namePattern | quote }}
-                # How many servers to inventory at once. Collector-scoped
-                # like the pattern above.
-                - name: INVENTORY_OME_INVENTORY_CONCURRENCY
-                  value: {{ .Values.collectors.ome.inventoryConcurrency | quote }}
+                # BMCs contacted at once, and the TLS policy for them.
+                # Collector-scoped like the pattern above. Everything else
+                # about talking to a BMC comes from the shared `redfish_*`
+                # defaults — same protocol, same class of device.
+                - name: INVENTORY_REDFISH_FLEET_CONCURRENCY
+                  value: {{ .Values.collectors.ome.bmcConcurrency | quote }}
+                - name: INVENTORY_OME_BMC_VERIFY_TLS
+                  value: {{ .Values.collectors.ome.bmcVerifyTls | quote }}
+                - name: INVENTORY_OME_BMC_PORT
+                  value: {{ .Values.collectors.ome.bmcPort | quote }}
                 - name: INVENTORY_MONGO_URI
                   valueFrom:
                     secretKeyRef:
