@@ -238,6 +238,13 @@ false positives this surfaced, and the rollback triggers.
   Intersight, and what to send back.
 - Corrected a standing inaccuracy: there is no `AuthProvider`/RBAC
   scaffolding. Every endpoint is unauthenticated, writes included.
+- **`deploy/air-gapped-images.txt`** — every container image an
+  air-gapped deployment needs, in one place: the two published
+  application images, their UBI build-time base images, and the
+  local-dev-only MongoDB/Redis images, each labelled required-to-deploy
+  vs. required-only-to-build. `docs/air-gap.md`'s own image table was
+  also stale (`ubi-minimal:9.4`, the base image moved to `9.8` in a
+  prior release) — it now points here instead of duplicating pins.
 
 ---
 

@@ -64,21 +64,24 @@ tarball cache) that has pre-fetched every package in the lockfile — `npm
 ci` refuses to resolve anything not already in the lockfile, so the mirror
 only needs exactly what's listed there, not the whole npm registry.
 
-## Container base images
+## Container images
 
-| Image | Used for |
-|---|---|
-| `registry.access.redhat.com/ubi9/ubi-minimal:9.4` | backend runtime |
-| `registry.access.redhat.com/ubi9/nodejs-22:latest` | frontend build stage (discarded, not shipped) |
-| `registry.access.redhat.com/ubi9/nginx-124:latest` | frontend runtime |
-| `docker.io/library/mongo:8` | local dev only — production MongoDB is an externally provisioned service (see `deploy/README.md`) |
-| `docker.io/library/redis:8-alpine` | local dev only — same |
+**`deploy/air-gapped-images.txt`** is the full, current list — the two
+published application images (`server_scan-api`, `server_scan-frontend`),
+the UBI base images each is built from, and the local-dev-only MongoDB/
+Redis images — with why each one is needed and whether it is required
+for deployment or only for building the images yourself. Keep that file
+in sync with `Containerfile`, `frontend/Containerfile`,
+`.github/workflows/ci.yml` and `scripts/dev-up.sh` rather than
+duplicating the version pins here.
 
-All four UBI images pull from Red Hat's registry, which is mirrorable via a
-standard Red Hat registry sync (`skopeo sync` or an internal Quay/Artifactory
-proxy) under the same subscription/EULA terms as any other UBI usage. The
-two `docker.io` images are dev-only and never appear in the production
-image or the deploy manifests.
+All UBI images pull from Red Hat's registry, which is mirrorable via a
+standard Red Hat registry sync (`skopeo sync` or an internal Quay/
+Artifactory proxy) under the same subscription/EULA terms as any other
+UBI usage. `docker.io/library/mongo` and `docker.io/library/redis` are
+dev-only and never appear in the production image or the deploy
+manifests — see `deploy/README.md` for why production MongoDB/Redis are
+this chart's caller's problem, not this repo's.
 
 ## What's still open
 
