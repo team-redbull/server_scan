@@ -150,7 +150,7 @@ class Settings(BaseSettings):
     # asked only who exists, and each server's own iDRAC is asked what it
     # is. One shared read-only iDRAC account for the estate, as
     # `INVENTORY_OME_BMC_USERNAME`/`_PASSWORD`. See
-    # docs/adr/0019-dell-identity-from-ome-hardware-from-redfish.md.
+    # docs/adr/0020-dell-identity-from-ome-hardware-from-redfish.md.
     ome_bmc_username: str = ""
     ome_bmc_password: str = ""
     ome_bmc_port: int = 443
@@ -286,7 +286,7 @@ class Settings(BaseSettings):
     # No `ome_inventory_concurrency`: the Dell collector's expensive pass is
     # per-server against each BMC, not per-device against the appliance, and
     # it is bounded by `redfish_fleet_concurrency` with every other BMC
-    # knob. See docs/adr/0019.
+    # knob. See docs/adr/0020.
 
     # Which servers a collector is allowed to ingest at all, as a regex
     # matched against the server's name (`re.search`, so "starts with" is

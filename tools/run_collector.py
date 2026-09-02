@@ -107,7 +107,7 @@ def _openmanage_provider(
             "Redfish, so it needs a BMC login as well as the OME appliance "
             "login. Set INVENTORY_OME_BMC_USERNAME and "
             "INVENTORY_OME_BMC_PASSWORD. See "
-            "docs/adr/0019-dell-identity-from-ome-hardware-from-redfish.md."
+            "docs/adr/0020-dell-identity-from-ome-hardware-from-redfish.md."
         )
     bmc_credential = RedfishCredential(
         # Named, not anonymous: this string is what the Redfish collector's
@@ -727,8 +727,9 @@ async def _dry_run_one_manager(
                     f"        [{a.interface_kind:8}] if={a.server_interface}"
                     f"  admin={a.admin_state} oper={a.oper_state}"
                 )
-        # Per-NIC detail for the providers that report it (OpenManage);
-        # the flat `nic macs` line above is all a provider without it has.
+        # Per-NIC detail for the providers that report it — Redfish, and so
+        # the Dell collector that delegates to it. The flat `nic macs` line
+        # above is all a provider without it has.
         for nic in ps.nics:
             speed = f"  {nic.speed_mbps}mbps" if nic.speed_mbps else ""
             print(f"        nic {nic.name}  mac={nic.mac or '—'}  {nic.link_state}{speed}")

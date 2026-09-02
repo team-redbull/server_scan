@@ -20,7 +20,7 @@ appliance. `name_pattern` is therefore applied before a single BMC is
 contacted, and the CronJob runs on the Redfish collector's cadence rather
 than hourly.
 
-See docs/adr/0019-dell-identity-from-ome-hardware-from-redfish.md, and
+See docs/adr/0020-dell-identity-from-ome-hardware-from-redfish.md, and
 docs/dell-collectors.md for the OME field/endpoint facts.
 """
 
@@ -53,7 +53,7 @@ class OpenManageProvider:
 
     One instance covers one OME appliance and every Dell server it manages.
 
-    See docs/adr/0019-dell-identity-from-ome-hardware-from-redfish.md.
+    See docs/adr/0020-dell-identity-from-ome-hardware-from-redfish.md.
     """
 
     provider_type = _PROVIDER_TYPE

@@ -15,7 +15,7 @@ INVENTORY_OME_BMC_USERNAME/_PASSWORD for the iDRACs.
 Cost is per *server* here, not per appliance — ~25 requests against each
 collected machine — which is why this runs on the Redfish collector's
 cadence rather than hourly. See
-docs/adr/0019-dell-identity-from-ome-hardware-from-redfish.md and
+docs/adr/0020-dell-identity-from-ome-hardware-from-redfish.md and
 docs/dell-collectors.md.
 */ -}}
 {{- if .Values.collectors.ome.enabled }}

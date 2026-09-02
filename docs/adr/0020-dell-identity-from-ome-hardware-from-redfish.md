@@ -1,7 +1,7 @@
-# ADR-0019: Dell collection splits — identity from OME, hardware from Redfish
+# ADR-0020: Dell collection splits — identity from OME, hardware from Redfish
 
 - Status: Accepted
-- Date: 2026-08-31
+- Date: 2026-09-02
 - Supersedes the collection half of the original Dell collector
   (`docs/dell-collectors.md`, "Collection flow")
 

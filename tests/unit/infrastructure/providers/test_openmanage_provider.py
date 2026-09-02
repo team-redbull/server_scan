@@ -5,7 +5,7 @@ returning canned profile/device JSON, and a stand-in for the Redfish pass
 returning canned `ProviderServer`s — because what can actually break here
 is the correlation between them, not either vendor's own mapping.
 
-See docs/adr/0019-dell-identity-from-ome-hardware-from-redfish.md.
+See docs/adr/0020-dell-identity-from-ome-hardware-from-redfish.md.
 """
 
 from __future__ import annotations

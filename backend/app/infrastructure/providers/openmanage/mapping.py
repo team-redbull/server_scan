@@ -7,7 +7,7 @@ scanner — see docs/dell-collectors.md for the provenance.
 
 This module maps **identity only**. Hardware detail comes from each
 server's iDRAC over Redfish, not from OME's `InventoryDetails` — see
-docs/adr/0019-dell-identity-from-ome-hardware-from-redfish.md. The CPU,
+docs/adr/0020-dell-identity-from-ome-hardware-from-redfish.md. The CPU,
 memory, storage and NIC mappers that used to live here were deleted with
 that change rather than left unreachable; they rested on heuristics (disk
 capacity parsed out of the model string, threads as `2 x cores`) that

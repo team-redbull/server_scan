@@ -68,7 +68,7 @@ where one exists.
 ## Collection flow
 
 **OME discovers, Redfish collects** — see
-`docs/adr/0019-dell-identity-from-ome-hardware-from-redfish.md` for why,
+`docs/adr/0020-dell-identity-from-ome-hardware-from-redfish.md` for why,
 and for what the OME-only design got wrong.
 
 `OpenManageProvider.list_servers` makes the two bulk calls once
@@ -136,7 +136,7 @@ MAC on the validated path, so `bmc_mac` is left unset.
 
 **Everything below described the OME-only collector, whose hardware
 mappers were deleted in
-`docs/adr/0019-dell-identity-from-ome-hardware-from-redfish.md`.** Hardware
+`docs/adr/0020-dell-identity-from-ome-hardware-from-redfish.md`.** Hardware
 now comes from each server's iDRAC over Redfish, which reports measured
 values and needs none of these heuristics.
 
@@ -145,7 +145,7 @@ appliance run to learn, and a fact without its provenance becomes folklore
 nobody dares change. The OME field names are still the reference if anyone
 ever needs `InventoryDetails` again — as a fallback, a cross-check, or for
 a field Redfish does not carry. And the *reasons* these fields could not be
-trusted are the entire justification for ADR-0019: delete them and the next
+trusted are the entire justification for ADR-0020: delete them and the next
 person re-derives the same wrong design.
 
 Read it as history. None of the functions named below still exist.

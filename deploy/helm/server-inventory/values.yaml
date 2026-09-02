@@ -264,7 +264,7 @@ collectors:
   #
   # This needs TWO logins — the appliance's and a shared read-only iDRAC
   # account — and egress from the collector pod to the whole BMC network.
-  # See docs/adr/0019-dell-identity-from-ome-hardware-from-redfish.md.
+  # See docs/adr/0020-dell-identity-from-ome-hardware-from-redfish.md.
   ome:
     enabled: false
     ip: ""
