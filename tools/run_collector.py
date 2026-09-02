@@ -44,6 +44,7 @@ from app.domain.ports.provider import ProviderServer, ServerInventoryProvider
 from app.domain.services.health.metrics import build_default_registry
 from app.domain.services.regex_engine import RegexModuleEngine
 from app.domain.value_objects.bmc_address import parse_bmc_address
+from app.domain.value_objects.gpu_catalog import gpu_catalog
 from app.domain.value_objects.site import parse_site_code, site_catalog
 from app.infrastructure.credentials import EnvConnectionResolver
 from app.infrastructure.credentials.env import resolve_login
@@ -656,6 +657,9 @@ async def _dry_run_one_manager(
         name_pattern,
     )
     sites = site_catalog(settings.sites if settings is not None else get_settings().sites)
+    gpus_catalog = gpu_catalog(
+        settings.gpu_model_catalog if settings is not None else get_settings().gpu_model_catalog
+    )
     print(f"\n=== {manager.name} ({manager.type.value} @ {manager.endpoint}) ===")
     if name_pattern:
         print(f"    (only servers whose name matches {name_pattern!r} are shown/collected)")
@@ -748,6 +752,7 @@ async def _dry_run_one_manager(
                 f"  {drive.get('media_type')}  {size}  health={drive.get('health')}"
             )
         for gpu in ps.gpus or ():
+            gpu = gpus_catalog.enrich(gpu)
             gpu_memory = gpu.get("memory_bytes")
             gpu_size = (
                 _format_capacity(gpu_memory) if isinstance(gpu_memory, int) else "VRAM unknown"
@@ -922,6 +927,7 @@ async def _run(
             site_repo=MongoSiteRepository(mongo),
             manager_repo=manager_repo,
             sites=site_catalog(settings.sites),
+            gpu_catalog=gpu_catalog(settings.gpu_model_catalog),
             classification_service=ClassificationService(
                 rule_repo=rule_repo, engine=regex_engine, mongo=mongo
             ),

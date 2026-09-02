@@ -587,6 +587,28 @@ decision — none exists yet.
 Only equipped cards are reported, via `is_equipped()` — the same
 presence check used everywhere else in this module.
 
+### `INVENTORY_GPU_MODELS` — filling the `memory_bytes` gap this API leaves
+
+**Added 2026-09-02.** Neither `graphicsCard` here nor Intersight's
+`graphics.Card` (`docs/adr/0017-intersight-collector.md`) reports GPU
+memory size anywhere — confirmed against both SDKs' full field sets and
+Cisco's own metrics API, per the table above. What both *do* report is
+the card's PID (`model`, e.g. `P1001-200`), Cisco's stable per-SKU part
+number.
+
+`app.domain.value_objects.gpu_catalog.GpuCatalog` is a deployment-supplied
+lookup from that PID to a friendly name and VRAM size, parsed from
+`INVENTORY_GPU_MODELS` (`PID:Friendly Name:VRAM_GB` triples,
+comma-separated — see `.env.example`), the same "config, not code" shape
+`INVENTORY_SITES` already uses (`docs/adr/0018-sites-from-configuration.md`).
+`IngestService.gpu_catalog.enrich()` runs on every GPU a provider
+reports, for both Cisco collectors, before the `Gpu` model is built: a
+known PID gets its `model` replaced by the friendly name and
+`memory_bytes` filled in; an unknown PID, or a value a future API
+version actually reports, passes through unchanged. Unset (the
+default), it enriches nothing — the bare PID and `memory_bytes: None`
+this section otherwise documents.
+
 ### `temperature` — real telemetry, unlike everywhere else in this file
 
 Every other Cisco-sourced status-shaped field in this codebase

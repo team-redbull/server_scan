@@ -44,6 +44,17 @@ config:
   # several keys. From the command line it has to be
   #     --set-string 'config.sites=nyc:New York City\,tlv:Tel Aviv'
   sites: ""
+
+  # GPU PIDs this deployment can name a real model and VRAM size for, as
+  # `PID:Friendly Name:VRAM_GB` triples. Neither UCS Manager's
+  # `graphicsCard` nor Intersight's `graphics.Card` reports GPU memory —
+  # both only report the PID (e.g. `P1001-200`) — so this is the only
+  # source for it. Empty enriches nothing, which is correct for a
+  # deployment with no GPU fleet or an unlisted PID; a malformed entry
+  # fails the collector pod at startup rather than silently reporting no
+  # VRAM for a PID it was told about. Same comma-splitting gotcha as
+  # `sites` above applies to `--set` on the command line.
+  gpuModels: ""
   logLevel: INFO
   metricsEnabled: "true"
   defaultPageSize: "50"

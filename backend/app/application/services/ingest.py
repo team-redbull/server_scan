@@ -73,6 +73,7 @@ from app.domain.services.classification import ClassifiableServer
 from app.domain.services.normalize import normalize_text
 from app.domain.services.search_tokens import build_search_tokens
 from app.domain.value_objects.bmc_address import parse_bmc_address
+from app.domain.value_objects.gpu_catalog import GpuCatalog
 from app.domain.value_objects.mac_address import normalize_mac
 from app.domain.value_objects.site import SiteCatalog, parse_site_code
 from app.utils.ids import new_id
@@ -243,6 +244,9 @@ def _drive_from_dict(data: dict[str, object]) -> StorageDrive:
     )
 
 
+_EMPTY_GPU_CATALOG = GpuCatalog(definitions=())
+
+
 class IngestService:
     """Runs a full provider ingest: upsert referenced sites/managers, then
     normalize/correlate/upsert every `ProviderServer` the provider yields.
@@ -255,12 +259,14 @@ class IngestService:
         site_repo: SiteRepositoryPort,
         manager_repo: ManagerRepositoryPort,
         sites: SiteCatalog,
+        gpu_catalog: GpuCatalog = _EMPTY_GPU_CATALOG,
         classification_service: ClassificationService | None = None,
         health_service: HealthPolicyService | None = None,
         audit: AuditService | None = None,
     ) -> None:
         self._server_repo = server_repo
         self._sites = sites
+        self._gpu_catalog = gpu_catalog
         self._site_repo = site_repo
         self._manager_repo = manager_repo
         self._classification_service = classification_service
@@ -569,7 +575,9 @@ class IngestService:
                 ),
             ),
             gpus=_carry_forward(
-                [_gpu_from_dict(g) for g in ps.gpus] if ps.gpus is not None else None,
+                [_gpu_from_dict(self._gpu_catalog.enrich(g)) for g in ps.gpus]
+                if ps.gpus is not None
+                else None,
                 existing_hardware.gpus if existing_hardware else None,
                 default=[],
             ),

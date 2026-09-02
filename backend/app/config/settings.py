@@ -90,6 +90,32 @@ class Settings(BaseSettings):
     # default, so dev and CI need set nothing.
     sites: str = ""
 
+    # --- GPU model catalog ---
+    #
+    # Neither Cisco management plane this platform collects from
+    # (Intersight's `graphics.Card`, UCS Manager's `graphicsCard`) reports
+    # a GPU's memory size or power draw anywhere — confirmed against both
+    # SDKs' full field sets and, for Intersight, Cisco's own official
+    # metrics API too. See docs/cisco-collectors.md, "GPUs (coprocessor
+    # cards vs. graphics cards)".
+    #
+    # What both *do* report is the card's PID (Cisco's own part-number
+    # scheme, e.g. `P1001-200`), stable per SKU. This maps a PID this
+    # deployment recognizes to a friendly name and its known VRAM, as
+    # `PID:Friendly Name:VRAM_GB` triples, comma-separated:
+    #
+    #     INVENTORY_GPU_MODELS="P1001-200:NVIDIA A100 40GB:40,P1010-200:NVIDIA H100 80GB:80"
+    #
+    # Deliberately configuration, not a hardcoded table in this repo — a
+    # PID-to-SKU mapping is operator knowledge (Cisco's own spec sheets),
+    # not something this codebase should assert as fact, and new GPU
+    # models ship faster than a release cycle. Empty enriches nothing,
+    # so a deployment that never sets this behaves exactly as if the
+    # feature did not exist. Only fills a gap the API left `None` — a
+    # PID this deployment already knows the answer for is not entitled to
+    # override a value a future API version starts reporting for real.
+    gpu_model_catalog: str = ""
+
     # --- Regex / classification safety ---
     regex_max_pattern_length: int = 200
     regex_match_timeout_seconds: float = 0.25

@@ -126,6 +126,17 @@ than that.
 - **BMC addresses display as plain hosts** in the UI and the collector
   dry run — no `redfish://…/v1/Systems/1`, no `:623`. The full URI is
   still stored for the Metal3 round-trip.
+- **`INVENTORY_GPU_MODELS` fills in the VRAM neither Cisco management
+  plane reports.** Both UCS Manager's `graphicsCard` and Intersight's
+  `graphics.Card` report a GPU's PID (e.g. `P1001-200`) but never its
+  memory size or power draw — confirmed against both SDKs' full field
+  sets and Cisco's own metrics API. Set it to a comma-separated
+  `PID:Friendly Name:VRAM_GB` list (Helm: `config.gpuModels`) and a
+  matching PID is reported under its friendly name with a real
+  `memory_bytes`; a PID this deployment hasn't listed is reported
+  exactly as the collector saw it, and a real value a future API
+  version reports is never overridden. Leaving it unset (the default)
+  enriches nothing, matching today's behavior exactly.
 
 ### Fixed
 
