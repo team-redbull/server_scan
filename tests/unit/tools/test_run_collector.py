@@ -121,17 +121,36 @@ class TestBuildProvider:
     async def test_builds_a_provider_for_openmanage(self) -> None:
         """The Dell entry point: one OME appliance covers the whole Dell
         estate, so `_build_provider` needs no per-domain login the way
-        UCS Central does.
+        UCS Central does — but it does need a BMC login on top of the
+        OME one, since `_openmanage_provider` reads each server's
+        hardware from its own iDRAC rather than from OME
+        (docs/adr/0020-dell-identity-from-ome-hardware-from-redfish.md).
         """
         resolver = FakeCredentialResolver()
         provider = await _build_provider(
             _manager(type=ManagerType.OPENMANAGE),
             credential_resolver=resolver,
             timeout_seconds=5.0,
-            settings=_settings(),
+            settings=_settings(ome_bmc_username="bmc-admin", ome_bmc_password="bmc-secret"),
         )
         assert provider.provider_type == ManagerType.OPENMANAGE.value
         assert resolver.resolved == [ManagerType.OPENMANAGE]
+
+    async def test_openmanage_without_a_bmc_login_is_rejected_before_connecting(self) -> None:
+        """The Dell collector's own `ManagerNotConfiguredError` — a half-
+        configured deployment gets the variable names to set rather than
+        a per-BMC 401 that reads like a fleet of bad passwords.
+        """
+        with pytest.raises(ManagerNotConfiguredError) as excinfo:
+            await _build_provider(
+                _manager(type=ManagerType.OPENMANAGE),
+                credential_resolver=FakeCredentialResolver(),
+                timeout_seconds=5.0,
+                settings=_settings(),
+            )
+        message = str(excinfo.value)
+        assert "INVENTORY_OME_BMC_USERNAME" in message
+        assert "INVENTORY_OME_BMC_PASSWORD" in message
 
     async def test_builds_a_provider_for_ucs_central(self) -> None:
         """The one Cisco entry point: Central discovers every registered
