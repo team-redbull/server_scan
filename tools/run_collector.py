@@ -158,7 +158,9 @@ def _openmanage_provider(
         bmc_verify_tls_reason=(
             None
             if settings.ome_bmc_verify_tls
-            else "INVENTORY_OME_BMC_VERIFY_TLS is off: iDRACs ship a factory self-signed certificate"
+            else (
+                "INVENTORY_OME_BMC_VERIFY_TLS is off: iDRACs ship a factory self-signed certificate"
+            )
         ),
         bmc_ca_bundle=settings.redfish_ca_bundle or None,
     )

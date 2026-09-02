@@ -583,7 +583,9 @@ def nics_from_interfaces(interfaces: list[dict[str, Any]] | None) -> tuple[Provi
             ProviderNic(
                 name=str(interface.get("Name") or interface.get("Id") or "").strip(),
                 mac=mac.strip() if isinstance(mac, str) and mac.strip() else None,
-                speed_mbps=speed if isinstance(speed, int) and not isinstance(speed, bool) else None,
+                speed_mbps=(
+                    speed if isinstance(speed, int) and not isinstance(speed, bool) else None
+                ),
                 link_state=_LINK_STATUS.get(str(interface.get("LinkStatus") or ""), "UNKNOWN"),
             )
         )
