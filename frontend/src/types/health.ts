@@ -150,6 +150,7 @@ export const POLICY_CATEGORIES = [
   "network",
   "connectivity",
   "power",
+  "gpu",
 ] as const;
 export type PolicyCategory = (typeof POLICY_CATEGORIES)[number];
 

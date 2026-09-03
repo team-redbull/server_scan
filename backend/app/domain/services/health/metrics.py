@@ -33,7 +33,7 @@ class MetricType(StrEnum):
 class MetricDef:
     name: str
     type: MetricType
-    category: str  # cpu | memory | storage | network | connectivity | power
+    category: str  # cpu | memory | storage | network | connectivity | power | gpu
     description: str
     resolver: Callable[[dict[str, Any]], Any]
     enum_values: tuple[str, ...] | None = None
@@ -177,6 +177,60 @@ def build_default_registry() -> MetricRegistry:
             category="power",
             description="Count of PSUs with health == DOWN",
             resolver=lambda f: _get(f, "power.failed_psu_count", 0),
+        )
+    )
+    registry.register(
+        MetricDef(
+            name="storage.warning_drive_count",
+            type=MetricType.INT,
+            category="storage",
+            description="Count of drives with health == WARNING",
+            resolver=lambda f: _get(f, "storage.warning_drive_count", 0),
+        )
+    )
+    registry.register(
+        MetricDef(
+            name="network.interface_count",
+            type=MetricType.INT,
+            category="network",
+            description="Number of network interfaces reported",
+            resolver=lambda f: _get(f, "network.interface_count", 0),
+        )
+    )
+    registry.register(
+        MetricDef(
+            name="network.links_up_count",
+            type=MetricType.INT,
+            category="network",
+            description="Count of interfaces with link_state == UP",
+            resolver=lambda f: _get(f, "network.links_up_count", 0),
+        )
+    )
+    registry.register(
+        MetricDef(
+            name="gpu.count",
+            type=MetricType.INT,
+            category="gpu",
+            description="Number of GPUs reported",
+            resolver=lambda f: _get(f, "gpu.count", 0),
+        )
+    )
+    registry.register(
+        MetricDef(
+            name="gpu.failed_count",
+            type=MetricType.INT,
+            category="gpu",
+            description="Count of GPUs reporting CRITICAL or DOWN health",
+            resolver=lambda f: _get(f, "gpu.failed_count", 0),
+        )
+    )
+    registry.register(
+        MetricDef(
+            name="gpu.uncorrectable_error_count",
+            type=MetricType.INT,
+            category="gpu",
+            description="Uncorrectable ECC errors summed across the server's GPUs",
+            resolver=lambda f: _get(f, "gpu.uncorrectable_error_count", 0),
         )
     )
     return registry
