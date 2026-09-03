@@ -553,6 +553,103 @@ _LINK_STATUS = {
 }
 
 
+# Redfish `Status.State` values that mean "this bay holds no working PSU",
+# mapped onto the platform's UP/DOWN/DISABLED/UNKNOWN vocabulary — the one
+# `app.domain.models.hardware.Psu.health` uses, and which
+# `power.failed_psu_count` counts `DOWN` from. Deliberately NOT
+# `HealthSeverity`: a policy counting "CRITICAL" here would count nothing,
+# the mirror of the bug facts.py records for the OK/DOWN confusion.
+_PSU_STATE = {
+    "Enabled": "UP",
+    "StandbyOffline": "UP",
+    "StandbySpare": "UP",
+    "Disabled": "DISABLED",
+    "UnavailableOffline": "DOWN",
+}
+
+
+def _psu_health(supply: dict[str, Any]) -> str:
+    """
+    One power supply's state, in the platform's vocabulary.
+
+    `Status.Health` decides it when present, because a PSU that is
+    `Enabled` but `Critical` is a failed PSU, not a working one. `Warning`
+    maps to `UNKNOWN` rather than `DOWN`: it is a degraded supply still
+    delivering power, and `power.failed_psu_count` counting it would raise
+    a CRITICAL finding for a server that has not lost redundancy. The raw
+    strings ride along in `redfish_status` so a live run can settle this
+    on evidence — see `psus_from_supplies`.
+
+    Args:
+        supply (dict[str, Any]): One `PowerSupply` resource.
+
+    Returns:
+        str: UP, DOWN, DISABLED, or UNKNOWN.
+    """
+    status = supply.get("Status")
+    status = status if isinstance(status, dict) else {}
+    health = str(status.get("Health") or "")
+    if health == "Critical":
+        return "DOWN"
+    if health == "Warning":
+        return "UNKNOWN"
+    state = str(status.get("State") or "")
+    if health == "OK" and state not in _PSU_STATE:
+        return "UP"
+    return _PSU_STATE.get(state, "UNKNOWN")
+
+
+def psus_from_supplies(supplies: list[dict[str, Any]] | None) -> tuple[dict[str, object], ...] | None:
+    """
+    Map a chassis's power supplies onto the platform's PSU shape.
+
+    An **absent** supply is dropped rather than reported as failed, the
+    same rule the Cisco collectors apply to an unequipped PSU bay: a
+    chassis with four bays and two supplies fitted is not a server with two
+    failed PSUs, and counting it as one would permanently misreport
+    `power.failed_psu_count` for every partially-populated chassis.
+
+    Args:
+        supplies (list[dict[str, Any]] | None): `PowerSupply` resources,
+            from either schema generation, or None when unread.
+
+    Returns:
+        tuple[dict[str, object], ...] | None: One entry per fitted supply,
+            with keys mirroring `app.domain.models.hardware.Psu` plus
+            `redfish_status` — the raw `Health`/`State` pair, carried
+            unreduced for the dry-run print the way the Cisco mapping
+            carries `oper_power`. Not persisted. None propagates "unread",
+            which `_carry_forward` needs to keep stored PSUs on a run that
+            could not reach the chassis.
+    """
+    if supplies is None:
+        return None
+    psus: list[dict[str, object]] = []
+    for supply in supplies:
+        if is_absent(supply):
+            continue
+        status = supply.get("Status")
+        status = status if isinstance(status, dict) else {}
+        psus.append(
+            {
+                "id": str(
+                    supply.get("MemberId") or supply.get("Id") or supply.get("Name") or ""
+                )
+                or None,
+                "model": supply.get("Model") or None,
+                "serial": supply.get("SerialNumber") or None,
+                "health": _psu_health(supply),
+                "capacity_watts": _as_int(
+                    supply.get("PowerCapacityWatts") or supply.get("CapacityWatts")
+                ),
+                "redfish_status": (
+                    f"{status.get('Health') or '—'}/{status.get('State') or '—'}"
+                ),
+            }
+        )
+    return tuple(psus)
+
+
 def nics_from_interfaces(interfaces: list[dict[str, Any]] | None) -> tuple[ProviderNic, ...]:
     """
     Build the per-interface view from a server's `EthernetInterfaces`.
@@ -649,6 +746,7 @@ def system_to_provider_server(
     dimms: list[dict[str, Any]] | None,
     interfaces: list[dict[str, Any]] | None,
     bmc_mac: str | None,
+    psus: tuple[dict[str, object], ...] | None = None,
     gpu_metrics_by_processor: dict[str, dict[str, Any]] | None = None,
     gpu_environment_by_processor: dict[str, dict[str, Any]] | None = None,
     extra_gpus: tuple[dict[str, object], ...] = (),
@@ -671,6 +769,8 @@ def system_to_provider_server(
         interfaces (list[dict[str, Any]] | None): `EthernetInterfaces`
             members.
         bmc_mac (str | None): The BMC's own MAC.
+        psus (tuple[dict[str, object], ...] | None): Fitted power supplies
+            from this system's chassis, or None when unread.
         gpu_metrics_by_processor (dict[str, dict[str, Any]] | None): Each
             GPU processor's own `ProcessorMetrics`, keyed by `@odata.id`.
         gpu_environment_by_processor (dict[str, dict[str, Any]] | None):
@@ -723,6 +823,7 @@ def system_to_provider_server(
         memory_total_bytes=memory_bytes(system, dimms),
         storage_total_bytes=storage_total,
         storage_drives=storage_drives,
+        psus=psus,
         gpus=gpus,
         # A standalone server has no fabric interconnect, so there is
         # nothing to attach. An empty tuple keeps the seeded
