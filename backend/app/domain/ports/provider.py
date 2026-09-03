@@ -68,6 +68,13 @@ class ProviderNic:
     speed_mbps: int | None
     link_state: str
 
+    # Where the NIC physically is, as its own BMC identifies it. The raw
+    # identifier by default (iDRAC's FQDD, `NIC.Integrated.1-1-1`), which
+    # a vendor-specific collector may rewrite into that vendor's readable
+    # form — the Dell collector renders it `controller/port/partition`,
+    # `1/1/1`. `None` when the BMC reports nothing to place the NIC by.
+    location: str | None = None
+
 
 @dataclass(frozen=True, slots=True)
 class ProviderServer:

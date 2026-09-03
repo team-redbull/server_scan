@@ -39,7 +39,11 @@ from app.domain.ports.credentials import ManagerConnection
 from app.domain.ports.provider import ProviderServer
 from app.domain.value_objects.bmc_address import parse_bmc_address
 from app.infrastructure.providers.openmanage.client import OmeClient
-from app.infrastructure.providers.openmanage.mapping import OmeIdentity, identity_from_profile
+from app.infrastructure.providers.openmanage.mapping import (
+    OmeIdentity,
+    dell_port_nics,
+    identity_from_profile,
+)
 from app.infrastructure.providers.redfish.targets import RedfishCredential, RedfishTarget
 
 logger = structlog.get_logger(__name__)
@@ -317,6 +321,13 @@ class OpenManageProvider:
         return dataclasses.replace(
             server,
             manager_id=self._manager.id,
+            # Dell-specific, so applied here rather than in the shared
+            # Redfish mapping: only a Dell collector knows an iDRAC FQDD
+            # well enough to tell a second NPAR partition from a second
+            # physical port. `nic_macs` is deliberately left whole — it is
+            # the identity correlation key, and a server already ingested
+            # with all sixteen MACs must keep matching on any of them.
+            nics=dell_port_nics(server.nics),
             profile_template_name=identity.profile_template_name,
             profile_template_external_id=identity.profile_template_external_id,
             bmc_address_raw=identity.bmc_address_raw or server.bmc_address_raw,

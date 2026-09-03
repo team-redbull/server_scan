@@ -192,6 +192,9 @@ export interface NetworkInterface {
   mac: string;
   speed_mbps?: number | null;
   link_state: LinkState;
+  /** `controller/port/partition` on Dell (`1/1/1`), the BMC's own raw
+   *  identifier elsewhere. Absent when the BMC places the NIC by nothing. */
+  location?: string | null;
 }
 
 export interface NetworkInfo {

@@ -569,9 +569,9 @@ def nics_from_interfaces(interfaces: list[dict[str, Any]] | None) -> tuple[Provi
 
     Returns:
         tuple[ProviderNic, ...]: One entry per interface, named by `Name`
-            then `Id`. Empty when the collection was unread or empty —
-            `ProviderServer.nics` has no "not read" state, and the MAC set
-            beside it already carries that distinction.
+            then `Id`, and located by `Id`. Empty when the collection was
+            unread or empty — `ProviderServer.nics` has no "not read" state,
+            and the MAC set beside it already carries that distinction.
     """
     if not interfaces:
         return ()
@@ -579,14 +579,22 @@ def nics_from_interfaces(interfaces: list[dict[str, Any]] | None) -> tuple[Provi
     for interface in interfaces:
         mac = interface.get("MACAddress") or interface.get("PermanentMACAddress")
         speed = interface.get("SpeedMbps")
+        # `Id` is carried through as `location` rather than dropped: on
+        # iDRAC it is the FQDD (`NIC.Integrated.1-1-1`), the only thing
+        # distinguishing one partition from another, while `Name` is the
+        # same generic "System Ethernet Interface" on every one of them.
+        # A vendor collector that understands the identifier rewrites this
+        # into a readable form; see `..openmanage.mapping.dell_port_nics`.
+        identifier = str(interface.get("Id") or "").strip()
         nics.append(
             ProviderNic(
-                name=str(interface.get("Name") or interface.get("Id") or "").strip(),
+                name=str(interface.get("Name") or identifier or "").strip(),
                 mac=mac.strip() if isinstance(mac, str) and mac.strip() else None,
                 speed_mbps=(
                     speed if isinstance(speed, int) and not isinstance(speed, bool) else None
                 ),
                 link_state=_LINK_STATUS.get(str(interface.get("LinkStatus") or ""), "UNKNOWN"),
+                location=identifier or None,
             )
         )
     return tuple(nics)
