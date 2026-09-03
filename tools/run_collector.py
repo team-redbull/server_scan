@@ -788,6 +788,13 @@ async def _dry_run_one_manager(
                 # "Power supplies (PSUs)"). Always "—" for a provider that
                 # doesn't report it, Intersight included.
                 f"  power={psu.get('oper_power') or '—'}"
+                # Redfish only, and there for the same reason: the raw
+                # `Status.Health`/`Status.State` pair, so a live run can
+                # settle whether mapping Warning to UNKNOWN rather than
+                # DOWN is right before that becomes a CRITICAL finding.
+                # Absent for every provider that doesn't report it, so a
+                # Cisco PSU line is unchanged.
+                f"{f'  status={psu["redfish_status"]}' if psu.get('redfish_status') else ''}"
             )
     print(f"\n{manager.name}: {count} server(s) reported. Nothing was written.")
     return count
