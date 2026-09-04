@@ -319,6 +319,89 @@ jobs:
           git tag -a "$NEW_TAG" -m "$NEW_TAG"
           git push origin "$NEW_TAG"
 
+      # What changed in a release is derived from the commits in it, not
+      # from a file somebody has to remember to edit. A hand-maintained
+      # CHANGELOG.md was tried and removed: releases here are unattended
+      # (ADR-0010 tags and publishes on every push to main), so nobody is
+      # present at the moment a version is cut, and its `## Unreleased`
+      # heading was never renamed — entries sat under it for six releases,
+      # telling operators to act on changes they already had.
+      #
+      # Conventional Commits already decide the version number; this reads
+      # the same subjects to say what is in it. That means the release
+      # notes can never drift from the release, and a good commit message
+      # is now the only thing anyone has to write.
+      - name: Publish the release notes
+        env:
+          NEW_TAG: ${{ steps.version.outputs.version_tag }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # The previous tag reachable from this commit, not the newest
+          # tag overall: a tag left on a rebased-away commit must not be
+          # treated as the start of this range.
+          previous="$(git describe --tags --abbrev=0 "$NEW_TAG^" 2>/dev/null || true)"
+          if [ -n "$previous" ]; then
+            range="$previous..$NEW_TAG"
+            echo "notes range: $range"
+          else
+            range="$NEW_TAG"
+            echo "notes range: everything up to $NEW_TAG (no earlier tag)"
+          fi
+          git log --no-merges --format=%s "$range" > /tmp/subjects.txt
+          # The subjects arrive as a file path, not on stdin: `python3 -`
+          # already reads the program itself from stdin, so a second
+          # redirect there silently feeds the script nothing.
+          python3 - "$NEW_TAG" "$previous" /tmp/subjects.txt > /tmp/notes.md <<'PY'
+          import pathlib, re, sys
+
+          tag, previous, subjects = sys.argv[1], sys.argv[2], sys.argv[3]
+          # Conventional Commits, same grammar the version step reads.
+          pattern = re.compile(r"^(?P<type>[a-z]+)(?P<scope>\([^)]*\))?(?P<bang>!)?: (?P<rest>.+)$")
+          groups: dict[str, list[str]] = {}
+          other: list[str] = []
+          headings = {
+              "breaking": "Breaking",
+              "feat": "New features",
+              "fix": "Fixed",
+              "perf": "Performance",
+              "docs": "Documentation",
+          }
+          for line in (l.strip() for l in pathlib.Path(subjects).read_text().splitlines()):
+              if not line:
+                  continue
+              m = pattern.match(line)
+              if not m:
+                  other.append(line)
+                  continue
+              # A `!` marks the change that forced the major bump, so it
+              # leads regardless of its type.
+              key = "breaking" if m["bang"] else m["type"]
+              if key not in headings:
+                  # refactor/test/chore/style/ci: real work, but nothing an
+                  # operator can observe. Deliberately dropped.
+                  continue
+              groups.setdefault(key, []).append(m["rest"])
+
+          out = []
+          for key, heading in headings.items():
+              if groups.get(key):
+                  out.append(f"### {heading}\n")
+                  out += [f"- {item}" for item in groups[key]]
+                  out.append("")
+          if other:
+              out.append("### Other\n")
+              out += [f"- {item}" for item in other]
+              out.append("")
+          if not out:
+              out = ["No operator-visible changes in this release.", ""]
+          if previous:
+              out.append(f"**Full changelog:** {previous}...{tag}")
+          print("\n".join(out))
+          PY
+          cat /tmp/notes.md
+          gh release create "$NEW_TAG" --title "$NEW_TAG" --notes-file /tmp/notes.md
+
       - name: Log in to GHCR
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:

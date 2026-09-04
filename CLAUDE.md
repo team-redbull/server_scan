@@ -154,43 +154,40 @@ is a real mistake, not a style preference.
    codebase still read in the previous style; convert a file when you are
    already changing it, not as a sweep of its own.
 
-9. **Every release says what changed and what is new — keep
-   `CHANGELOG.md`'s `## Unreleased` section current as you work.**
-   Added 2026-08-30 at the user's request.
+9. **The release notes are the commit subjects — so write the subject
+   for whoever deploys it.** Changed 2026-09-05 at the user's request;
+   this *replaces* the hand-maintained `CHANGELOG.md`, which is deleted.
 
-   Releases are automatic: every push to `main` that passes CI tags the
+   Releases are unattended: every push to `main` that passes CI tags the
    commit and publishes both images, with the version derived from
-   Conventional Commits (ADR-0010). That gives a correct version number
-   and says nothing about *why* the release matters, which is what this
-   file supplies.
+   Conventional Commits (ADR-0010). A file someone has to remember to
+   edit never survives that, and this one did not — nobody is present at
+   the moment a version is cut, so its `## Unreleased` heading was never
+   renamed and entries sat under it for six releases, telling operators
+   to act on changes they already had.
 
-   The rule is not "write release notes at release time" — by then the
-   reasoning is gone and it degrades into a `git log` dump. **Add the
-   line in the same commit as the change**, in the same pass as the
-   quality gate (convention 7):
+   CI's `Publish the release notes` step now reads the same commit
+   subjects the version number comes from, groups them under
+   `### Breaking` / `### New features` / `### Fixed` / `### Performance`
+   / `### Documentation`, and attaches them to the GitHub Release. The
+   notes therefore cannot drift from the release, and there is nothing
+   to keep current as you work.
 
-   - Anything that changes behaviour, configuration or the operational
-     contract gets a line. Pure internals — a refactor, a test, a doc
-     typo — get nothing. If nobody outside the repo could notice it,
-     leave it out.
-   - Write for whoever deploys it, not whoever wrote it: name the
-     environment variable, the endpoint, the exit code, the Helm value.
-   - **Breaking changes lead**, under `### Breaking`, and say what an
-     operator has to *do* — including "nothing, the default is
-     unchanged" when that is true, since that is the most useful thing
-     to know.
-   - Group under `### Breaking` / `### New features` / `### Fixed` /
-     `### Documentation`. State the version the range will produce when
-     it is knowable (a `feat!:` in the range means the next tag is a
-     major).
-   - When a tag is cut, the `## Unreleased` heading becomes that
-     version with its date, and a fresh empty `## Unreleased` goes above
-     it.
+   What that asks of you, in the commit message itself:
 
-   Entries below the reconstructed history line in `CHANGELOG.md` were
-   generated from tag history and read as commit subjects. Do not treat
-   them as the standard — the `Unreleased` section written on 2026-08-30
-   is the standard.
+   - **The subject line is the release note.** `fix: correct the thing`
+     is a wasted line in a document operators read. Name the environment
+     variable, the endpoint, the exit code, the Helm value.
+   - A `!` (`feat!:`, or a `BREAKING CHANGE:` footer) both bumps the
+     major and files the line under `### Breaking`. Say what an operator
+     has to *do* — including "nothing, the default is unchanged" when
+     that is true, in the body.
+   - `refactor`, `test`, `chore`, `style` and `ci` are dropped from the
+     notes on purpose: real work, but nothing an operator can observe.
+     Use them, and do not dress an internal change as a `feat:` to make
+     it appear.
+   - The body is still worth writing. It does not reach the release
+     notes, but it is what the next session reads from `git log`.
 
 ## Current status
 

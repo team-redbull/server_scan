@@ -43,7 +43,9 @@ far, in order:
 13. **HPE OneView**, the only source for every HPE server whatever its
     iLO generation (`docs/adr/0022-oneview-only-hpe-collector.md`).
 
-`CHANGELOG.md` records what changed and what is new in each release.
+Each [GitHub Release](https://github.com/team-redbull/server_scan/releases)
+lists what changed in it, generated from the commit subjects that also
+decide its version number.
 `docs/arc42.md` is the structured architecture overview — goals,
 constraints, context, deployment view, quality scenarios, and an honest
 risk/technical-debt register. See `docs/architecture.md` for the full
