@@ -243,6 +243,12 @@ export interface ServerDetail {
   site_id: SiteCode | null;
   manager_id: string;
   source_provider: string | null;
+  /** Dotted paths into this same response that the most recent collection
+   * could not read (`hardware.storage.drives`). The stored value at such
+   * a path is either carried over from an earlier run or the model's zero
+   * — never a reading from this run, which is why the UI must not present
+   * a `0`/`[]` there as fact. */
+  unread_fields?: string[];
   tags?: string[];
   last_seen_at: string | null;
   updated_at: string;

@@ -116,6 +116,17 @@ class Server(BaseModel):
     source_provider: str | None = None
     last_seen_at: datetime | None = None
 
+    # Dotted API paths (`hardware.storage.drives`) the most recent
+    # collection could not read. Top-level, beside the other two
+    # ingestion-provenance fields, rather than a sub-object of its own:
+    # it describes the whole run, not any one subdocument.
+    #
+    # Recomputed from scratch on every ingest, never merged — a field
+    # whose carried-forward value is no longer `None` would otherwise
+    # stay flagged forever. "Never successfully read" is deliberately not
+    # expressible here; see `IngestService._carry_forward`.
+    unread_fields: list[str] = Field(default_factory=list)
+
     revision: int = 1
     created_at: datetime
     updated_at: datetime

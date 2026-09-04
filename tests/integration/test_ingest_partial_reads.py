@@ -258,3 +258,58 @@ async def test_two_servers_without_a_system_uuid_can_both_be_ingested(
 
     assert summary.errors == 0
     assert summary.fetched == 2
+
+
+async def test_the_document_records_which_fields_this_run_could_not_read(
+    mongo_holder: MongoClientHolder,
+) -> None:
+    """The display half of the same contract.
+
+    Carrying a value forward keeps the data correct but leaves the
+    document unable to say the value is stale, and a `0`/`[]` on a server
+    nobody has read yet is indistinguishable from a real reading. So the
+    run names what it could not read — and, on the next run that reads it,
+    stops naming it. The re-ingest half is the assertion that matters: a
+    list merged rather than replaced would keep every field flagged
+    forever.
+    """
+    service = _service(mongo_holder)
+    repo = MongoServerRepository(mongo_holder, cursor_secret=_CURSOR_SECRET)
+
+    async def stored() -> list[str]:
+        page = await repo.list_page(
+            filters={"identity.serial_normalized": "sn-unread-1"},
+            search=None,
+            sort="name",
+            sort_desc=False,
+            cursor=None,
+            page_size=1,
+            with_count=False,
+        )
+        return page.items[0].unread_fields
+
+    # An iLO-4 shape: identity intact, every subresource call refused.
+    await service.ingest(
+        _OneShotProvider(
+            _fully_read(
+                serial="SN-UNREAD-1",
+                nic_macs=None,
+                storage_total_bytes=None,
+                storage_drives=None,
+                gpus=None,
+            )
+        )
+    )
+
+    assert sorted(await stored()) == [
+        "hardware.gpus",
+        "hardware.storage.drives",
+        "hardware.storage.total_bytes",
+        "identity.nic_macs",
+    ]
+
+    # Same host, next run, everything read. `gpus=()` is a real answer —
+    # "there are none installed" — so it must clear the flag too.
+    await service.ingest(_OneShotProvider(_fully_read(serial="SN-UNREAD-1", gpus=())))
+
+    assert await stored() == []

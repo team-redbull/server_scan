@@ -154,7 +154,9 @@ def _opt_bool(value: object) -> bool | None:
     return value if isinstance(value, bool) else None
 
 
-def _carry_forward[T](reported: T | None, previous: T | None, *, default: T) -> T:
+def _carry_forward[T](
+    reported: T | None, previous: T | None, *, default: T, unread: list[str], name: str
+) -> T:
     """
     Resolve one optionally-reported field against what is already stored.
 
@@ -164,6 +166,12 @@ def _carry_forward[T](reported: T | None, previous: T | None, *, default: T) -> 
     and, for storage, silently clears the seeded `storage.failed_drive`
     health policy. See docs/adr/0016-redfish-standalone-collector.md.
 
+    The resolved value alone cannot say which of the two it is: a carried
+    `[]` and a genuinely-empty `[]` are the same list. So every `None`
+    also appends `name` to `unread` — the single choke point every
+    optional field already routes through, which is why the recording
+    lives here rather than at each call site.
+
     Args:
         reported (T | None): What the provider reported, or `None` if it
             could not read the field.
@@ -171,6 +179,11 @@ def _carry_forward[T](reported: T | None, previous: T | None, *, default: T) -> 
             for a server being created.
         default (T): The value for a new server whose provider reported
             nothing.
+        unread (list[str]): Accumulator for this one ingest, appended to
+            whenever `reported` is `None`. Built fresh per server so it
+            states what *this* run could not read, never a running total.
+        name (str): The field's dotted path in the API response, e.g.
+            `"hardware.storage.drives"`.
 
     Returns:
         T: The reported value when there is one, else the stored value,
@@ -178,6 +191,7 @@ def _carry_forward[T](reported: T | None, previous: T | None, *, default: T) -> 
     """
     if reported is not None:
         return reported
+    unread.append(name)
     return previous if previous is not None else default
 
 
@@ -459,6 +473,10 @@ class IngestService:
 
         existing_hardware = existing.hardware if existing is not None else None
 
+        # Recomputed from scratch on every run, never merged with the
+        # stored list — see `Server.unread_fields`.
+        unread: list[str] = []
+
         bmc_parsed = parse_bmc_address(ps.bmc_address_raw)
         bmc_mac = normalize_mac(ps.bmc_mac)
         nic_macs = _carry_forward(
@@ -467,6 +485,8 @@ class IngestService:
             else None,
             existing.identity.nic_macs if existing is not None else None,
             default=[],
+            unread=unread,
+            name="identity.nic_macs",
         )
 
         identity = Identity(
@@ -537,21 +557,29 @@ class IngestService:
                     ps.cpu_sockets,
                     existing_hardware.cpu.sockets if existing_hardware else None,
                     default=0,
+                    unread=unread,
+                    name="hardware.cpu.sockets",
                 ),
                 cores=_carry_forward(
                     ps.cpu_cores,
                     existing_hardware.cpu.cores if existing_hardware else None,
                     default=0,
+                    unread=unread,
+                    name="hardware.cpu.cores",
                 ),
                 threads=_carry_forward(
                     ps.cpu_threads,
                     existing_hardware.cpu.threads if existing_hardware else None,
                     default=0,
+                    unread=unread,
+                    name="hardware.cpu.threads",
                 ),
                 model=_carry_forward(
                     ps.cpu_model,
                     existing_hardware.cpu.model if existing_hardware else None,
                     default=None,
+                    unread=unread,
+                    name="hardware.cpu.model",
                 ),
             ),
             memory=Memory(
@@ -559,6 +587,8 @@ class IngestService:
                     ps.memory_total_bytes,
                     existing_hardware.memory.total_bytes if existing_hardware else None,
                     default=0,
+                    unread=unread,
+                    name="hardware.memory.total_bytes",
                 ),
                 modules=[],
             ),
@@ -567,6 +597,8 @@ class IngestService:
                     ps.storage_total_bytes,
                     existing_hardware.storage.total_bytes if existing_hardware else None,
                     default=0,
+                    unread=unread,
+                    name="hardware.storage.total_bytes",
                 ),
                 drives=_carry_forward(
                     [_drive_from_dict(d) for d in ps.storage_drives]
@@ -574,6 +606,8 @@ class IngestService:
                     else None,
                     existing_hardware.storage.drives if existing_hardware else None,
                     default=[],
+                    unread=unread,
+                    name="hardware.storage.drives",
                 ),
             ),
             gpus=_carry_forward(
@@ -582,12 +616,16 @@ class IngestService:
                 else None,
                 existing_hardware.gpus if existing_hardware else None,
                 default=[],
+                unread=unread,
+                name="hardware.gpus",
             ),
             power=Power(
                 psus=_carry_forward(
                     [_psu_from_dict(p) for p in ps.psus] if ps.psus is not None else None,
                     existing_hardware.power.psus if existing_hardware else None,
                     default=[],
+                    unread=unread,
+                    name="hardware.power.psus",
                 )
             ),
         )
@@ -617,6 +655,7 @@ class IngestService:
             tags=list(ps.tags),
             source_provider=provider_type,
             last_seen_at=now,
+            unread_fields=unread,
             revision=revision,
             created_at=created_at,
             updated_at=now,

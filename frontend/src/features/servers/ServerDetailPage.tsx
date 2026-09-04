@@ -90,7 +90,9 @@ export function ServerDetailPage() {
                 }
               />
             )}
-            {activeTab === "hardware" && <HardwareTab hardware={data.hardware} />}
+            {activeTab === "hardware" && (
+              <HardwareTab hardware={data.hardware} unreadFields={data.unread_fields} />
+            )}
             {activeTab === "network" && <NetworkTab network={data.network} />}
             {activeTab === "connectivity" && <ConnectivityTab connectivity={data.connectivity} />}
           </div>

@@ -127,6 +127,7 @@ class ServerDetail(BaseModel):
     tags: list[str]
     search_tokens: list[str]
     source_provider: str | None
+    unread_fields: list[str]
     last_seen_at: datetime | None
     revision: int
     created_at: datetime
@@ -155,6 +156,7 @@ class ServerDetail(BaseModel):
             tags=server.tags,
             search_tokens=server.search_tokens,
             source_provider=server.source_provider,
+            unread_fields=server.unread_fields,
             last_seen_at=server.last_seen_at,
             revision=server.revision,
             created_at=server.created_at,
