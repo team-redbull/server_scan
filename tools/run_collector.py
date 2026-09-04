@@ -776,7 +776,11 @@ async def _dry_run_one_manager(
         # above is all a provider without it has.
         for nic in ps.nics:
             speed = f"  {nic.speed_mbps}mbps" if nic.speed_mbps else ""
-            print(f"        nic {nic.name}  mac={nic.mac or '—'}  {nic.link_state}{speed}")
+            location = f"  [{nic.location}]" if nic.location else ""
+            print(
+                f"        nic {nic.name}{location}  mac={nic.mac or '—'}"
+                f"  {nic.link_state}{speed}"
+            )
         for drive in ps.storage_drives or ():
             capacity_bytes = drive.get("capacity_bytes")
             size = (
@@ -822,6 +826,13 @@ async def _dry_run_one_manager(
                 # "Power supplies (PSUs)"). Always "—" for a provider that
                 # doesn't report it, Intersight included.
                 f"  power={psu.get('oper_power') or '—'}"
+                # Redfish only, and there for the same reason: the raw
+                # `Status.Health`/`Status.State` pair, so a live run can
+                # settle whether mapping Warning to UNKNOWN rather than
+                # DOWN is right before that becomes a CRITICAL finding.
+                # Absent for every provider that doesn't report it, so a
+                # Cisco PSU line is unchanged.
+                f"{f'  status={psu["redfish_status"]}' if psu.get('redfish_status') else ''}"
             )
     print(f"\n{manager.name}: {count} server(s) reported. Nothing was written.")
     return count

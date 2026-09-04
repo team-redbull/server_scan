@@ -16,8 +16,22 @@ existed only because OME did not report the real values, and Redfish does.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import re
+from dataclasses import dataclass, replace
 from typing import Any
+
+from app.domain.ports.provider import ProviderNic
+
+# Dell's FQDD for a network interface, as iDRAC reports it in
+# `EthernetInterface.Id`: a kind, then controller-port-partition.
+#
+#     NIC.Integrated.1-1-1   integrated controller 1, port 1, partition 1
+#     NIC.Slot.2-4-3         card in slot 2, port 4, partition 3
+#
+# The three numbers are what an operator reads as a NIC's location, and
+# the partition is what NPAR multiplies: a partitioned 4-port card reports
+# 16 interfaces, four per physical port, each with its own MAC.
+_FQDD_RE = re.compile(r"^NIC\.[A-Za-z]+\.(\d+)-(\d+)-(\d+)$")
 
 
 def _opt_str(value: object) -> str | None:
@@ -59,6 +73,61 @@ def idrac_bmc_address(idrac_ip: str | None) -> str | None:
     if not ip:
         return None
     return f"idrac-virtualmedia://{ip}/redfish/v1/Systems/System.Embedded.1"
+
+
+def dell_port_nics(nics: tuple[ProviderNic, ...]) -> tuple[ProviderNic, ...]:
+    """
+    Reduce iDRAC's partition-level NICs to one entry per physical port.
+
+    NIC partitioning (NPAR) splits each physical port into up to four
+    logical functions, and iDRAC reports every one as its own
+    `EthernetInterface` with its own MAC. A 4-port partitioned card is
+    therefore 16 interfaces, which describes the server's *logical*
+    plumbing rather than what is cabled — an operator asking "how many
+    NICs does this box have" means four.
+
+    Keeping the **first** partition of each port, rather than merging them,
+    is deliberate: partition 1 is the one that exists on every Dell NIC
+    whether NPAR is enabled or not, so an unpartitioned server is
+    unaffected by this function, and the surviving entry is a real
+    interface with a real MAC rather than a synthesized summary.
+
+    An interface whose identifier is not a recognizable FQDD is kept
+    untouched. A BMC that names its NICs some other way must not have them
+    silently dropped — this filter can only ever remove something it
+    positively identified as a non-first partition.
+
+    Args:
+        nics (tuple[ProviderNic, ...]): Every interface the BMC reported,
+            as `..redfish.mapping.nics_from_interfaces` built them, with
+            `location` still holding the raw FQDD.
+
+    Returns:
+        tuple[ProviderNic, ...]: One entry per physical port, each named by
+            its FQDD and located as `controller/port/partition` (`1/1/1`),
+            plus any interface whose identifier could not be parsed, all in
+            the order the BMC reported them.
+    """
+    kept: list[ProviderNic] = []
+    for nic in nics:
+        match = _FQDD_RE.match(nic.location or "")
+        if match is None:
+            kept.append(nic)
+            continue
+        controller, port, partition = match.groups()
+        if int(partition) != 1:
+            continue
+        kept.append(
+            replace(
+                nic,
+                # The FQDD, not iDRAC's "System Ethernet Interface", which
+                # is the same string on every interface and so names none
+                # of them.
+                name=nic.location or nic.name,
+                location=f"{controller}/{port}/{partition}",
+            )
+        )
+    return tuple(kept)
 
 
 @dataclass(frozen=True, slots=True)

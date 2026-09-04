@@ -37,6 +37,7 @@ export function NetworkTab({ network }: { network: NetworkInfo | undefined }) {
             <thead>
               <tr className="text-left text-gray-500">
                 <th className="py-1 pr-4">Name</th>
+                <th className="py-1 pr-4">Location</th>
                 <th className="py-1 pr-4">MAC</th>
                 <th className="py-1 pr-4">Speed</th>
                 <th className="py-1 pr-4">Link state</th>
@@ -46,6 +47,7 @@ export function NetworkTab({ network }: { network: NetworkInfo | undefined }) {
               {interfaces.map((iface) => (
                 <tr key={`${iface.name}-${iface.mac}`}>
                   <td className="py-1 pr-4">{iface.name}</td>
+                  <td className="py-1 pr-4">{iface.location ?? "—"}</td>
                   <td className="py-1 pr-4">{iface.mac}</td>
                   <td className="py-1 pr-4">
                     {iface.speed_mbps ? `${iface.speed_mbps} Mbps` : "—"}

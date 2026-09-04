@@ -44,6 +44,7 @@ from app.infrastructure.providers.redfish.mapping import (
     gpus_from_processors,
     has_only_gpu_processors,
     is_gpu_processor,
+    psus_from_supplies,
     system_to_provider_server,
 )
 from app.infrastructure.providers.redfish.targets import RedfishTarget
@@ -512,6 +513,7 @@ class RedfishStandaloneProvider:
                         dimms=await self._optional(client, system, "Memory"),
                         interfaces=await self._optional(client, system, "EthernetInterfaces"),
                         bmc_mac=bmc_mac,
+                        psus=psus_from_supplies(await self._psus(client, system)),
                         gpu_metrics_by_processor=gpu_metrics,
                         gpu_environment_by_processor=gpu_environment,
                         extra_gpus=extra_gpus,
@@ -679,6 +681,51 @@ class RedfishStandaloneProvider:
         except (RedfishForbiddenError, RedfishProtocolError, RedfishUnreachableError) as exc:
             logger.warning("redfish.resource_skipped", resource=key, error=str(exc))
             return None
+
+    async def _psus(self, client: Any, system: dict[str, Any]) -> list[dict[str, Any]] | None:
+        """
+        Read a system's power supplies, through its chassis.
+
+        PSUs hang off `Chassis`, not `ComputerSystem`, so this follows
+        `Links.Chassis` first. Two schema generations are both live in the
+        field and both are tried: `PowerSubsystem/PowerSupplies` (Redfish
+        2020.4+, a real collection) and the deprecated `Power` resource,
+        which carries a `PowerSupplies` array inline. An iLO or iDRAC too
+        old for the former still answers the latter.
+
+        Args:
+            client (Any): The authenticated client.
+            system (dict[str, Any]): The `ComputerSystem` to start from.
+
+        Returns:
+            list[dict[str, Any]] | None: `PowerSupply` resources, or None
+                when there is no chassis link or neither path could be
+                read. None means unread, which `_carry_forward` keeps
+                stored PSUs across — an empty list would clear them.
+        """
+        links = system.get("Links", {})
+        chassis_refs = links.get("Chassis", []) if isinstance(links, dict) else []
+        if not chassis_refs or not isinstance(chassis_refs[0], dict):
+            return None
+        try:
+            chassis = await client.get(validate_odata_id(chassis_refs[0].get("@odata.id")))
+        except (RedfishForbiddenError, RedfishProtocolError, RedfishUnreachableError) as exc:
+            logger.warning("redfish.resource_skipped", resource="Chassis", error=str(exc))
+            return None
+
+        subsystem = await self._optional_link(client, chassis, "PowerSubsystem")
+        if subsystem is not None:
+            supplies = await self._optional(client, subsystem, "PowerSupplies")
+            if supplies is not None:
+                return supplies
+
+        # Deprecated since 2020.4 but still what most fielded BMCs serve:
+        # one resource with the supplies inline, not a collection.
+        power = await self._optional_link(client, chassis, "Power")
+        if power is None:
+            return None
+        inline = power.get("PowerSupplies")
+        return inline if isinstance(inline, list) else None
 
     async def _bmc_mac(self, client: Any, system: dict[str, Any]) -> str | None:
         """

@@ -30,6 +30,9 @@ class NetworkInterface(BaseModel):
     mac: str | None = None
     speed_mbps: int | None = None
     link_state: LinkState = LinkState.UNKNOWN
+    # `controller/port/partition` on Dell (`1/1/1`), the BMC's own raw
+    # identifier elsewhere. See `app.domain.ports.provider.ProviderNic`.
+    location: str | None = None
 
 
 class NetworkInfo(BaseModel):

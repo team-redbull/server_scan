@@ -522,6 +522,7 @@ class IngestService:
                     mac=normalize_mac(nic.mac),
                     speed_mbps=nic.speed_mbps,
                     link_state=_link_state(nic.link_state),
+                    location=nic.location,
                 )
                 for nic in ps.nics
             ],
