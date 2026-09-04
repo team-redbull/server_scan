@@ -74,6 +74,23 @@ than that.
 
 ### New features
 
+- **GPU VRAM is now filled in out of the box, on every vendor, with no
+  configuration.** The platform ships a built-in table of 30 NVIDIA and
+  AMD datacenter GPUs (V100 through H200 and B200, T4, the A- and
+  L-series, AMD Instinct MI100 through MI355X), every capacity taken from
+  a vendor datasheet or a Cisco UCS spec sheet. Cards are matched by
+  Cisco PID *and* by the model string Dell's iDRAC and HPE's iLO report
+  (`NVIDIA A100-PCIE-40GB`, `NVIDIA H100 80GB HBM3`), so a non-Cisco GPU
+  gets a VRAM figure for the first time — matching ignores case,
+  whitespace, separators and a leading vendor word, and is exact
+  otherwise, so `A10` and `A100` never cross-match.
+  **`INVENTORY_GPU_MODELS` (Helm: `config.gpuModels`) changed meaning: it
+  now overrides the built-in table instead of being the only source.** No
+  action needed — an existing value keeps working and still wins for the
+  identifiers it names, and every built-in row it does not name now
+  applies too. Leaving it empty no longer means "enrich nothing". A
+  vendor-reported memory value still always beats the catalog. See
+  `docs/adr/0021-built-in-gpu-catalog-with-model-matching.md`.
 - **The sites overview leads with three fleet-wide cards** — everything,
   UPI, and Hosted cluster — above the per-site cards. Each links straight
   into the pre-filtered server list

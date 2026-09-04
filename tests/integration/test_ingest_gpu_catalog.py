@@ -2,10 +2,11 @@
 stored `Server`, not just the pure `GpuCatalog.enrich()` function already
 covered by `tests/unit/domain/test_gpu_catalog.py`.
 
-Neither Cisco management plane this platform collects from reports GPU
-VRAM — see `app.domain.value_objects.gpu_catalog` — so `INVENTORY_GPU_MODELS`
-is the only source for it, and it has to survive the full pipeline
-(carry-forward, pydantic construction, Mongo round-trip) to be useful.
+No management plane this platform collects from reports GPU VRAM — see
+`app.domain.value_objects.gpu_catalog` — so the built-in table and
+`INVENTORY_GPU_MODELS` over it are the only sources for it, and an
+enriched value has to survive the full pipeline (carry-forward, pydantic
+construction, Mongo round-trip) to be useful.
 """
 
 from __future__ import annotations
@@ -103,12 +104,12 @@ async def test_a_known_pid_is_enriched_all_the_way_to_the_stored_server(
     assert [g.memory_bytes for g in gpus] == [40 * 1024**3]
 
 
-async def test_an_unconfigured_deployment_stores_the_bare_pid_unchanged(
+async def test_an_identifier_nothing_recognizes_is_stored_unchanged(
     mongo_holder: MongoClientHolder,
 ) -> None:
-    """No `IngestService.gpu_catalog` passed at all (the production
-    default) must not fail or invent a value — it stores exactly what the
-    collector reported.
+    """`P1001-200` is in neither the built-in table nor this spec, and an
+    unrecognized identifier must not fail or invent a value — it stores
+    exactly what the collector reported.
     """
     service = _service(mongo_holder, gpu_catalog=GpuCatalog.from_spec(""))
 
@@ -141,3 +142,27 @@ async def test_a_real_reported_memory_value_survives_the_full_pipeline_unchanged
     gpus = await _stored_gpus(mongo_holder, "sn-gpu-3")
     assert [g.model for g in gpus] == ["P1001-200"]
     assert [g.memory_bytes for g in gpus] == [12345]
+
+
+async def test_a_vendor_model_string_is_enriched_from_the_built_in_table(
+    mongo_holder: MongoClientHolder,
+) -> None:
+    """The multi-vendor half of ADR-0021: a Dell or HPE BMC reports no
+    Cisco PID at all, only a model string, and an unconfigured deployment
+    must still resolve it — here through the whole pipeline, not just
+    `GpuCatalog.enrich()`.
+    """
+    service = _service(mongo_holder, gpu_catalog=GpuCatalog.from_spec(""))
+
+    await service.ingest(
+        _OneShotProvider(
+            _with_one_gpu(
+                serial="SN-GPU-4",
+                gpus=({"vendor": "NVIDIA", "model": "NVIDIA A100-PCIE-40GB"},),
+            )
+        )
+    )
+
+    gpus = await _stored_gpus(mongo_holder, "sn-gpu-4")
+    assert [g.model for g in gpus] == ["NVIDIA A100 40GB"]
+    assert [g.memory_bytes for g in gpus] == [40 * 1024**3]

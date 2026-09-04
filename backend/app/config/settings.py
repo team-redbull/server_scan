@@ -106,28 +106,19 @@ class Settings(BaseSettings):
     # `Settings()` genuinely returned the `INVENTORY_GPU_MODEL_CATALOG`
     # value and ignored `INVENTORY_GPU_MODELS` before this fix.
     #
-    # Neither Cisco management plane this platform collects from
-    # (Intersight's `graphics.Card`, UCS Manager's `graphicsCard`) reports
-    # a GPU's memory size or power draw anywhere — confirmed against both
-    # SDKs' full field sets and, for Intersight, Cisco's own official
-    # metrics API too. See docs/cisco-collectors.md, "GPUs (coprocessor
-    # cards vs. graphics cards)".
-    #
-    # What both *do* report is the card's PID (Cisco's own part-number
-    # scheme, e.g. `P1001-200`), stable per SKU. This maps a PID this
-    # deployment recognizes to a friendly name and its known VRAM, as
-    # `PID:Friendly Name:VRAM_GB` triples, comma-separated:
+    # No management plane this platform collects from reports a GPU's
+    # memory size. The platform ships a built-in table instead
+    # (`app.domain.value_objects.gpu_models`), so empty is not "enrich
+    # nothing" — it is the built-in table alone. This value **overrides**
+    # that table, as `PID:Friendly Name:VRAM_GB` triples,
+    # comma-separated:
     #
     #     INVENTORY_GPU_MODELS="P1001-200:NVIDIA A100 40GB:40,P1010-200:NVIDIA H100 80GB:80"
     #
-    # Deliberately configuration, not a hardcoded table in this repo — a
-    # PID-to-SKU mapping is operator knowledge (Cisco's own spec sheets),
-    # not something this codebase should assert as fact, and new GPU
-    # models ship faster than a release cycle. Empty enriches nothing,
-    # so a deployment that never sets this behaves exactly as if the
-    # feature did not exist. Only fills a gap the API left `None` — a
-    # PID this deployment already knows the answer for is not entitled to
-    # override a value a future API version starts reporting for real.
+    # The first field is a Cisco PID or a vendor model string; both
+    # match. See docs/adr/0021-built-in-gpu-catalog-with-model-matching.md
+    # for why the "deliberately not a hardcoded table" decision this
+    # comment used to record was reversed.
     gpu_models: str = ""
 
     # --- Regex / classification safety ---

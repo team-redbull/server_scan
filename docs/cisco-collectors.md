@@ -596,18 +596,40 @@ Cisco's own metrics API, per the table above. What both *do* report is
 the card's PID (`model`, e.g. `P1001-200`), Cisco's stable per-SKU part
 number.
 
-`app.domain.value_objects.gpu_catalog.GpuCatalog` is a deployment-supplied
-lookup from that PID to a friendly name and VRAM size, parsed from
-`INVENTORY_GPU_MODELS` (`PID:Friendly Name:VRAM_GB` triples,
-comma-separated — see `.env.example`), the same "config, not code" shape
-`INVENTORY_SITES` already uses (`docs/adr/0018-sites-from-configuration.md`).
+`app.domain.value_objects.gpu_catalog.GpuCatalog` is that lookup.
 `IngestService.gpu_catalog.enrich()` runs on every GPU a provider
-reports, for both Cisco collectors, before the `Gpu` model is built: a
-known PID gets its `model` replaced by the friendly name and
-`memory_bytes` filled in; an unknown PID, or a value a future API
-version actually reports, passes through unchanged. Unset (the
-default), it enriches nothing — the bare PID and `memory_bytes: None`
-this section otherwise documents.
+reports — both Cisco collectors and the Redfish-sourced ones — before
+the `Gpu` model is built: a recognized card gets its `model` replaced by
+a friendly name and `memory_bytes` filled in; anything unrecognized, or
+a value a future API version actually reports, passes through unchanged.
+
+**Revised 2026-09-04 (`docs/adr/0021-built-in-gpu-catalog-with-model-matching.md`),
+in two ways this section originally documented the opposite of.**
+
+**It ships a default table.** `gpu_models.DEFAULT_GPU_MODELS` covers 30
+NVIDIA and AMD datacenter cards, every VRAM figure sourced from an NVIDIA
+or AMD datasheet or a Cisco UCS spec sheet (ADR-0021 lists the source per
+family). An unconfigured deployment enriches from it — the earlier "unset
+enriches nothing" behaviour is gone. `INVENTORY_GPU_MODELS`
+(`PID:Friendly Name:VRAM_GB` triples, comma-separated — see
+`.env.example`) is still read and now **overrides** the built-in table
+rather than being the only source: a configured entry wins for the
+identifiers it names, and every other built-in row survives. That keeps
+the correction case the original "config, not code" argument was really
+about, without making every estate retype NVIDIA's product line before it
+can report GPU memory.
+
+**It matches a model string as well as a PID.** A PID is Cisco-only;
+Dell's iDRAC and HPE's iLO report no PID at all, only a model string
+(`NVIDIA A100-PCIE-40GB`, `NVIDIA H100 80GB HBM3`). Both go through one
+normalization — uppercase, drop leading vendor/brand words, strip every
+separator — and are then compared for **equality**, never as a substring
+or prefix. `A10` and `A100` differ by one character and by 3x the VRAM,
+so a looser rule would report a confidently wrong number. Spellings that
+survive normalization as different strings get an explicit alias on the
+row. A bare model name is a match key only where the model shipped in one
+capacity: a GPU reporting plain `NVIDIA A100` (40GB and 80GB both exist)
+matches nothing and keeps `memory_bytes: None`.
 
 ### `temperature` — real telemetry, unlike everywhere else in this file
 

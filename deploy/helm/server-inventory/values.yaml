@@ -45,15 +45,17 @@ config:
   #     --set-string 'config.sites=nyc:New York City\,tlv:Tel Aviv'
   sites: ""
 
-  # GPU PIDs this deployment can name a real model and VRAM size for, as
-  # `PID:Friendly Name:VRAM_GB` triples. Neither UCS Manager's
-  # `graphicsCard` nor Intersight's `graphics.Card` reports GPU memory —
-  # both only report the PID (e.g. `P1001-200`) — so this is the only
-  # source for it. Empty enriches nothing, which is correct for a
-  # deployment with no GPU fleet or an unlisted PID; a malformed entry
-  # fails the collector pod at startup rather than silently reporting no
-  # VRAM for a PID it was told about. Same comma-splitting gotcha as
-  # `sites` above applies to `--set` on the command line.
+  # GPU VRAM overrides, as `PID:Friendly Name:VRAM_GB` triples. No
+  # management plane reports GPU memory, so the platform ships a built-in
+  # table of 30 NVIDIA and AMD datacenter cards — empty means that table
+  # alone, NOT "enrich nothing". Set this only to correct a row or to add
+  # a card the table does not carry; your entry wins for the identifier
+  # it names and every other built-in row still applies. The first field
+  # is a Cisco PID or a vendor model string (`NVIDIA A100-PCIE-40GB`);
+  # both match. A malformed entry fails the collector pod at startup
+  # rather than silently reporting no VRAM. Same comma-splitting gotcha
+  # as `sites` above applies to `--set` on the command line. See
+  # docs/adr/0021-built-in-gpu-catalog-with-model-matching.md.
   gpuModels: ""
   logLevel: INFO
   metricsEnabled: "true"

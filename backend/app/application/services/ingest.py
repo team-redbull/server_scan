@@ -244,7 +244,9 @@ def _drive_from_dict(data: dict[str, object]) -> StorageDrive:
     )
 
 
-_EMPTY_GPU_CATALOG = GpuCatalog(definitions=())
+# The built-in table with nothing configured over it — the same catalog a
+# deployment that never sets `INVENTORY_GPU_MODELS` gets.
+_DEFAULT_GPU_CATALOG = GpuCatalog.from_spec("")
 
 
 class IngestService:
@@ -259,7 +261,7 @@ class IngestService:
         site_repo: SiteRepositoryPort,
         manager_repo: ManagerRepositoryPort,
         sites: SiteCatalog,
-        gpu_catalog: GpuCatalog = _EMPTY_GPU_CATALOG,
+        gpu_catalog: GpuCatalog = _DEFAULT_GPU_CATALOG,
         classification_service: ClassificationService | None = None,
         health_service: HealthPolicyService | None = None,
         audit: AuditService | None = None,
