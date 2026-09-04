@@ -1,16 +1,20 @@
 """`GET /api/v1/sites` — the fixed site list and per-site statistics.
 
-Sites are a closed enum (`app.domain.enums.SiteCode`), not rows a user
-creates, so this endpoint always returns every one in a stable order
-whether or not any server currently reports one. A site with zero servers
-renders as an empty site, never as a missing card — "site four has
-nothing in it" and "site four does not exist" are different facts and the
-UI should be able to tell them apart.
+Sites are a closed set loaded from `INVENTORY_SITES` (see ADR-0018),
+not rows a user creates, so this endpoint always returns every one in a
+stable order whether or not any server currently reports one. A site with
+zero servers renders as an empty site, never as a missing card — "site
+four has nothing in it" and "site four does not exist" are different
+facts and the UI should be able to tell them apart.
 
 The `unassigned` bucket at the end counts servers whose name carries no
 site token (see `app.domain.value_objects.site`). It is deliberately
 surfaced rather than hidden: a growing unassigned count is how a naming
 drift becomes visible.
+
+Each site also reports the same counts sliced by installation type, which
+is what lets the landing page show fleet-wide UPI and hosted-cluster
+cards without a second query.
 """
 
 from __future__ import annotations
@@ -21,13 +25,14 @@ import structlog
 from fastapi import APIRouter, Depends
 
 from app.api.v1.sites_schemas import (
+    Breakdown,
     SiteStats,
     SiteStatsListResponse,
     VendorCount,
 )
 from app.config import Settings, get_settings
 from app.dependencies import get_mongo_holder, get_redis_holder
-from app.domain.enums import HealthSeverity, Vendor
+from app.domain.enums import HealthSeverity, InstallationType, Vendor
 from app.domain.ports.repository import SiteBreakdownRow
 from app.domain.value_objects.site import SiteCatalog, site_catalog
 from app.infrastructure.mongodb.client import MongoClientHolder
@@ -47,7 +52,11 @@ router = APIRouter(prefix="/api/v1", tags=["sites"])
 # next look — the same cache-aside, degrade-to-Mongo contract every other
 # read path here follows.
 _STATS_TTL_SECONDS = 30
-_STATS_CACHE_KEY = "si:1:sites:stats"
+
+# The `:2:` is a schema version, bumped whenever `SiteStats` grows a
+# field: a deploy that kept the old key would serve up to 30 seconds of
+# payloads missing the new one, which validate fine and render as zeroes.
+_STATS_CACHE_KEY = "si:2:sites:stats"
 
 # The key servers are counted under when their name carries no site.
 UNASSIGNED_SITE_ID = "unassigned"
@@ -56,6 +65,9 @@ UNASSIGNED_SITE_ID = "unassigned"
 # columns never reorder between renders.
 _VENDOR_ORDER: tuple[str, ...] = tuple(v.value for v in Vendor)
 _HEALTH_ORDER: tuple[str, ...] = tuple(s.value for s in HealthSeverity)
+_INSTALLATION_ORDER: tuple[str, ...] = tuple(t.value for t in InstallationType)
+
+_VENDOR_INDEX = {vendor: position for position, vendor in enumerate(_VENDOR_ORDER)}
 
 
 def _server_repo(
@@ -71,15 +83,62 @@ def _cache(
     return CacheClient(redis)
 
 
+def _empty_breakdown() -> Breakdown:
+    """Build a zeroed breakdown with every vendor and severity present.
+
+    Returns:
+        Breakdown: All counts at zero, all keys populated.
+    """
+    return Breakdown(
+        by_vendor=[VendorCount(vendor=vendor, count=0) for vendor in _VENDOR_ORDER],
+        by_health=dict.fromkeys(_HEALTH_ORDER, 0),
+    )
+
+
 def _empty_stats(site_id: str, *, name: str) -> SiteStats:
+    """Build a zeroed record for one site.
+
+    Args:
+        site_id (str): The site code, or `UNASSIGNED_SITE_ID`.
+        name (str): The site's display name.
+
+    Returns:
+        SiteStats: All counts at zero, all keys populated.
+    """
     return SiteStats(
         site_id=site_id,
         name=name,
-        total=0,
         by_vendor=[VendorCount(vendor=vendor, count=0) for vendor in _VENDOR_ORDER],
         by_health=dict.fromkeys(_HEALTH_ORDER, 0),
-        in_maintenance=0,
+        by_installation_type={
+            installation: _empty_breakdown() for installation in _INSTALLATION_ORDER
+        },
     )
+
+
+def _accumulate(entry: Breakdown, row: SiteBreakdownRow) -> None:
+    """Add one aggregation bucket into a breakdown, in place.
+
+    A value the current enums do not know falls into the catch-all bucket
+    (`UNKNOWN` health, no vendor column) rather than being dropped, so the
+    slice totals always add up to the fleet size.
+
+    Args:
+        entry (Breakdown): The breakdown to add into.
+        row (SiteBreakdownRow): The bucket to add.
+    """
+    entry.total += row.count
+    if row.maintenance:
+        entry.in_maintenance += row.count
+
+    if row.health in entry.by_health:
+        entry.by_health[row.health] += row.count
+    else:
+        entry.by_health[HealthSeverity.UNKNOWN.value] += row.count
+
+    position = _VENDOR_INDEX.get(row.vendor or "")
+    if position is not None:
+        entry.by_vendor[position].count += row.count
 
 
 def _pivot(rows: list[SiteBreakdownRow], sites: SiteCatalog) -> list[SiteStats]:
@@ -107,29 +166,21 @@ def _pivot(rows: list[SiteBreakdownRow], sites: SiteCatalog) -> list[SiteStats]:
     }
     stats[UNASSIGNED_SITE_ID] = _empty_stats(UNASSIGNED_SITE_ID, name="Unassigned")
 
-    vendor_index = {vendor: position for position, vendor in enumerate(_VENDOR_ORDER)}
-
     for row in rows:
         site_id = row.site_id or UNASSIGNED_SITE_ID
         entry = stats.get(site_id)
         if entry is None:
-            # A site value that is no longer in the enum (data written by
-            # an older schema). Counted under `unassigned` rather than
+            # A site value that is no longer configured (data written
+            # before a rename). Counted under `unassigned` rather than
             # dropped, so the totals still add up to the real fleet size.
             entry = stats[UNASSIGNED_SITE_ID]
 
-        entry.total += row.count
-        if row.maintenance:
-            entry.in_maintenance += row.count
+        _accumulate(entry, row)
 
-        if row.health in entry.by_health:
-            entry.by_health[row.health] += row.count
-        else:
-            entry.by_health[HealthSeverity.UNKNOWN.value] += row.count
-
-        position = vendor_index.get(row.vendor or "")
-        if position is not None:
-            entry.by_vendor[position].count += row.count
+        installation = entry.by_installation_type.get(row.installation_type or "")
+        if installation is None:
+            installation = entry.by_installation_type[InstallationType.UNCLASSIFIED.value]
+        _accumulate(installation, row)
 
     return list(stats.values())
 

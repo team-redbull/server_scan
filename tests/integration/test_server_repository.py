@@ -297,3 +297,45 @@ async def test_search_query_uses_index_scan_not_collection_scan(
 
     assert "COLLSCAN" not in explain_str
     assert "IXSCAN" in explain_str
+
+
+async def test_site_breakdown_groups_by_installation_type(
+    mongo_holder: MongoClientHolder,
+) -> None:
+    """The landing page's fleet-wide UPI/hosted cards are summed from this
+    dimension, so it has to survive the `$group` — not just be present.
+    """
+    repo = MongoServerRepository(mongo_holder, cursor_secret=_CURSOR_SECRET)
+    for i in range(3):
+        await repo.upsert(_make_server(i, site_id="tlv", installation_type=InstallationType.UPI))
+    for i in range(3, 5):
+        await repo.upsert(
+            _make_server(i, site_id="tlv", installation_type=InstallationType.HOSTED_CLUSTER)
+        )
+    await repo.upsert(
+        _make_server(
+            5,
+            site_id="nyc",
+            installation_type=InstallationType.UPI,
+            health=HealthSeverity.CRITICAL,
+        )
+    )
+
+    rows = await repo.site_breakdown()
+
+    counts = {
+        (row.site_id, row.installation_type): row.count
+        for row in rows
+        if row.site_id in {"tlv", "nyc"}
+    }
+    assert counts == {
+        ("tlv", InstallationType.UPI.value): 3,
+        ("tlv", InstallationType.HOSTED_CLUSTER.value): 2,
+        ("nyc", InstallationType.UPI.value): 1,
+    }
+    # The new key splits rows rather than replacing an existing dimension:
+    # the critical NYC server is still reported as critical.
+    critical = [row for row in rows if row.health == HealthSeverity.CRITICAL.value]
+    assert [(row.site_id, row.installation_type) for row in critical] == [
+        ("nyc", InstallationType.UPI.value)
+    ]

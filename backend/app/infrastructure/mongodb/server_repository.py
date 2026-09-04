@@ -148,21 +148,24 @@ class MongoServerRepository:
         return await self._collection.count_documents(dict(filters))
 
     async def site_breakdown(self) -> list[SiteBreakdownRow]:
-        """Per (site, vendor, health, maintenance) server counts for the
-        whole estate, in one round trip.
+        """Per (site, vendor, health, maintenance, installation type)
+        server counts for the whole estate, in one round trip.
 
         A single `$group` over every server rather than one count query
-        per site/vendor/health combination: the grouping key has a bounded
-        cardinality (5 sites x 3 vendors x 5 severities x 2 maintenance
-        states, plus the unassigned-site bucket), so this returns at most
-        a couple of hundred small rows no matter how large the estate is,
-        and the caller pivots them in Python. The alternative — a
-        `count_documents` per cell — would be ~150 round trips to build
-        one screen.
+        per cell: the grouping key has a bounded cardinality (sites x 4
+        vendors x 5 severities x 2 maintenance states x 3 installation
+        types), so the four shipped sites plus the unassigned bucket give
+        at most 600 small rows — and that stays bounded by the configured
+        site count, never by the size of the estate. The caller pivots
+        them in Python. The alternative — a `count_documents` per cell —
+        would be that many round trips to build one screen.
 
         This is a full pass over the collection, which no index avoids for
         a grouping with no match stage. That is why the route in front of
         it caches: see `app.api.v1.sites`.
+
+        Returns:
+            list[SiteBreakdownRow]: One row per non-empty combination.
         """
         pipeline: list[dict[str, Any]] = [
             {
@@ -172,6 +175,7 @@ class MongoServerRepository:
                         "vendor": "$identity.vendor",
                         "health": "$health.overall",
                         "maintenance": "$maintenance.enabled",
+                        "installation_type": "$classification.installation_type",
                     },
                     "count": {"$sum": 1},
                 }
@@ -186,6 +190,7 @@ class MongoServerRepository:
                     vendor=key.get("vendor"),
                     health=key.get("health"),
                     maintenance=bool(key.get("maintenance")),
+                    installation_type=key.get("installation_type"),
                     count=int(doc["count"]),
                 )
             )

@@ -29,6 +29,7 @@ class SiteBreakdownRow:
     vendor: str | None
     health: str | None
     maintenance: bool
+    installation_type: str | None
     count: int
 
 

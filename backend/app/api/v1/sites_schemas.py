@@ -15,10 +15,15 @@ class VendorCount(BaseModel):
     count: int
 
 
-class SiteStats(BaseModel):
-    site_id: str
-    name: str
-    total: int
+class Breakdown(BaseModel):
+    """The counts one slice of the fleet reports.
+
+    Shared by a whole site and by each installation-type slice within it,
+    so the UI renders both with one component instead of two that can
+    drift apart.
+    """
+
+    total: int = 0
 
     # A list, not a dict, so the UI renders vendors in a stable order
     # without sorting keys — the order is `Vendor`'s declaration order.
@@ -30,6 +35,17 @@ class SiteStats(BaseModel):
     by_health: dict[str, int] = Field(default_factory=dict)
 
     in_maintenance: int = 0
+
+
+class SiteStats(Breakdown):
+    site_id: str
+    name: str
+
+    # Keyed by `InstallationType` value, always containing every one.
+    # The fleet-wide UPI/hosted totals are summed from these client-side,
+    # exactly as the "across all sites" card sums the sites themselves —
+    # a derived number can then never disagree with the cards beside it.
+    by_installation_type: dict[str, Breakdown] = Field(default_factory=dict)
 
 
 class SiteStatsListResponse(BaseModel):

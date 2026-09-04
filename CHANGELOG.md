@@ -74,6 +74,15 @@ than that.
 
 ### New features
 
+- **The sites overview leads with three fleet-wide cards** — everything,
+  UPI, and Hosted cluster — above the per-site cards. Each links straight
+  into the pre-filtered server list
+  (`/servers?installation_type=UPI`). `GET /api/v1/sites` grew a
+  `by_installation_type` object on every site record, keyed by
+  `HOSTED_CLUSTER`/`UPI`/`UNCLASSIFIED` and reporting the same
+  total/health/vendor/maintenance counts a site does; no existing field
+  changed. Nothing to configure.
+
 - **Cisco Intersight collector** (`--manager-type INTERSIGHT`). The first
   collector whose cost does not scale with the fleet: every sub-resource
   is listed once for the whole estate and joined in memory, roughly 120

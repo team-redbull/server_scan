@@ -1,5 +1,10 @@
 import { apiFetch } from "@/api/client";
-import type { HealthSeverity, SiteCode, Vendor } from "@/types/server";
+import type {
+  HealthSeverity,
+  InstallationType,
+  SiteCode,
+  Vendor,
+} from "@/types/server";
 
 /**
  * `GET /api/v1/sites` — the fixed site list with per-site statistics.
@@ -22,14 +27,24 @@ export interface VendorCount {
   count: number;
 }
 
-export interface SiteStats {
-  site_id: SiteStatsId;
-  name: string;
+/** The counts one slice of the fleet reports — a whole site, or one
+ * installation type within it. Both render through the same card. */
+export interface Breakdown {
   total: number;
   by_vendor: VendorCount[];
   /** Always contains every `HealthSeverity` key, including zeroes. */
   by_health: Record<HealthSeverity, number>;
   in_maintenance: number;
+}
+
+export interface SiteStats extends Breakdown {
+  site_id: SiteStatsId;
+  name: string;
+  /** Always contains every `InstallationType` key, including empty ones.
+   * The fleet-wide UPI/hosted totals are summed from these rather than
+   * served as rows of their own, so they can never disagree with the
+   * per-site cards beside them. */
+  by_installation_type: Record<InstallationType, Breakdown>;
 }
 
 export interface SiteStatsListResponse {
