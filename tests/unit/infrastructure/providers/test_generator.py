@@ -231,7 +231,10 @@ def test_gpu_identifiers_are_the_ones_their_management_plane_reports() -> None:
     """
     catalog = gpu_catalog("")
     matched: dict[str, set[bool]] = {}
-    for s in generate_servers(seed=42, count=300):
+    # 500, not 300: UCS Central owns the smallest slice of the fleet, so a
+    # sample that comfortably covers the other three collectors can hold
+    # only its enriched GPUs and miss the uncataloged ones entirely.
+    for s in generate_servers(seed=42, count=500):
         collector = provider_type_for(s)
         for gpu in s.gpus or ():
             model = gpu["model"]
@@ -472,6 +475,7 @@ def test_an_ilo4_server_reports_identity_with_unread_hardware() -> None:
         assert s.storage_total_bytes is None
         assert s.gpus is None
         assert s.nic_macs is None
+        assert s.psus is None
 
     # And a Gen11 on the same collector is fully inventoried, so the
     # partial record is the iLO's ceiling and not OneView's.
@@ -493,3 +497,30 @@ def test_installation_types_are_a_visible_three_way_split() -> None:
     assert set(counts) == {"HOSTED_CLUSTER", "UPI", "UNCLASSIFIED"}
     assert all(count > 50 for count in counts.values())
     assert len(set(counts.values())) == 3
+
+
+def test_every_readable_server_reports_power_supplies() -> None:
+    """Since the Redfish mapping gained `psus_from_supplies`, all four
+    collectors populate `psus`. A fake fleet that reported none would put
+    `hardware.power.psus` in every seeded server's `unread_fields` and
+    make that marker read as noise rather than signal.
+
+    Health is the UP/DOWN vocabulary `power.failed_psu_count` counts,
+    never a `HealthSeverity` — a policy looking for "CRITICAL" here would
+    match nothing, which is the mirror of the OK/DOWN bug `facts.py`
+    records.
+    """
+    servers = list(generate_servers(seed=42, count=300))
+    readable = [s for s in servers if s.psus is not None]
+    assert readable
+
+    for s in readable:
+        assert s.psus
+        for psu in s.psus:
+            assert psu["health"] in {"UP", "DOWN", "DISABLED", "UNKNOWN"}
+            assert isinstance(psu["capacity_watts"], int)
+
+    # A failed supply exists somewhere in the fleet, so
+    # `power.failed_psu_count` is exercised by a local seed rather than
+    # only ever reading zero.
+    assert any(psu["health"] == "DOWN" for s in readable for psu in (s.psus or ()))

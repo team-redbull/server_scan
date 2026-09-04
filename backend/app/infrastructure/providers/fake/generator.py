@@ -635,6 +635,43 @@ def _gpu_identity(rng: random.Random, collector: ManagerType) -> tuple[str, str,
     return rng.choice(_UNCATALOGED_BMC_GPU_MODELS if uncataloged else _BMC_GPU_MODELS)
 
 
+def _build_psus(rng: random.Random) -> tuple[dict[str, object], ...]:
+    """
+    A server's fitted power supplies, keyed as every real collector emits
+    them.
+
+    Reported by all four collectors since the Redfish mapping gained
+    `psus_from_supplies`, so this is `()` for nobody and `None` only for
+    the iLO-4 servers whose subresource call fails — a fake fleet that
+    reported no PSUs at all would put every seeded server in
+    `unread_fields` and make that marker read as noise.
+
+    Health is UP/DOWN/DISABLED/UNKNOWN, never a `HealthSeverity`: it is
+    the vocabulary `power.failed_psu_count` counts, and a policy looking
+    for "CRITICAL" here would match nothing.
+
+    Args:
+        rng (random.Random): The seeded generator.
+
+    Returns:
+        tuple[dict[str, object], ...]: Two supplies, occasionally one of
+            them DOWN so `power.failed_psu_count` has something to read
+            locally.
+    """
+    capacity = rng.choice((800, 1200, 1600, 2400))
+    failed_bay = rng.choice((1, 2)) if rng.random() < 0.06 else None
+    return tuple(
+        {
+            "id": f"PSU{bay}",
+            "model": f"{capacity}W Platinum",
+            "serial": f"PSU{rng.randint(1_000_000, 9_999_999)}",
+            "health": "DOWN" if bay == failed_bay else "UP",
+            "capacity_watts": capacity,
+        }
+        for bay in (1, 2)
+    )
+
+
 def _build_gpus(rng: random.Random, collector: ManagerType) -> tuple[dict[str, object], ...] | None:
     """
     A server's GPUs, keyed exactly as `redfish.mapping.gpus_from_processors`
@@ -844,6 +881,7 @@ def generate_servers(
         drive_count = rng.randint(2, 8)
         storage_drives, storage_total_bytes = _build_storage_drives(rng, drive_count)
         gpus = _build_gpus(rng, collector)
+        psus = _build_psus(rng)
 
         # A Gen9's iLO 4 is the one partial record in this fleet: every
         # OneView subresource call against one fails, so its detailed
@@ -856,6 +894,7 @@ def generate_servers(
             storage_drives = None
             storage_total_bytes = None
             gpus = None
+            psus = None
 
         # Only Cisco has a fabric interconnect in front of it — both
         # Cisco collectors report one — while a standalone BMC has nothing
@@ -887,6 +926,7 @@ def generate_servers(
             storage_total_bytes=storage_total_bytes,
             storage_drives=storage_drives,
             gpus=gpus,
+            psus=psus,
             attachments=attachments,
             # No collector reports tags: UCS's are per-org labels the
             # provider does not read, Intersight's are not mapped, and a
