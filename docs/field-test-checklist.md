@@ -1,11 +1,24 @@
-# What to run against your Intersight, and what to bring back
+# What to run against your vendor managers, and what to bring back
 
-Written 2026-08-29, for the first real run of the Intersight collector.
-Everything here is read-only: no MongoDB write, no ingest, no `POST` to
-Intersight. Nothing you run can change anything in Intersight or in the
-inventory database.
+Written 2026-08-29 for the first real run of the Intersight collector,
+extended 2026-09-04 for OneView. Everything here is read-only: no MongoDB
+write, no ingest, no `POST` other than the login a probe needs to make
+and then deletes. Nothing you run can change anything in Intersight, in
+OneView, or in the inventory database.
+
+Two collectors are in this state. Both were built entirely from their
+vendor's published contract and neither has ever seen live hardware:
+
+| Collector | Probe | The one answer that matters most |
+|---|---|---|
+| Intersight | `uv run python -m tools.verify_intersight` | Is `TotalMemory` MiB? If not, every server's memory is 4.86% high, silently. |
+| OneView | `uv run python -m tools.verify_oneview` | Does `processorCount * processorCoreCount` equal the real core count? If not, every two-socket server's core count is halved, silently. |
+
+**Part 1 (Intersight) is below; part 2 (OneView) follows it.**
 
 ---
+
+# Part 1 — Intersight
 
 ## The short version
 
@@ -187,3 +200,155 @@ debug flag anywhere that would print it.
 If your site's rules do not allow hostnames or serials out, redact them
 and say so. The memory comparison and the counts are still worth having
 on their own.
+
+
+---
+
+# Part 2 — HPE OneView
+
+Added 2026-09-04, for the first real run of the OneView collector
+(`docs/adr/0022-oneview-only-hpe-collector.md`). Same contract as part 1:
+read-only, writes nothing, and the session it opens is deleted on the way
+out.
+
+## The short version
+
+```bash
+cd /path/to/server_scan
+
+export INVENTORY_ONEVIEW_IP=<your OneView appliance hostname>   # bare host, no https://
+export INVENTORY_ONEVIEW_USERNAME=<a read-only OneView account>
+export INVENTORY_ONEVIEW_PASSWORD='<its password>'
+
+uv run python -m tools.verify_oneview | tee oneview-verify.txt
+```
+
+Send back `oneview-verify.txt`. Safe to run repeatedly.
+
+If it passes and you want to see the records a real run would ingest —
+still writing nothing:
+
+```bash
+uv run python -m tools.run_collector --manager-type ONEVIEW \
+  --dry-run --limit 3 | tee oneview-dryrun.txt
+```
+
+**A read-only account is enough**, and is what to use: this collector
+never writes to OneView. A session is created at login and deleted at the
+end; an appliance allows 960 active sessions from one source IP, each
+living 24 idle hours, so a leaked one is not free.
+
+## Why there is no emulator for this
+
+Worth saying plainly, because "just test it against a lab appliance"
+sounds obvious. **There is no OneView equivalent of Cisco's UCS Platform
+Emulator.** HPE's 60-day OneView trial is a *real appliance*, not a
+hardware simulator, so with no HPE hardware attached
+`GET /rest/server-hardware` returns an empty collection: it would prove
+authentication, versioning, pagination and error handling, and **zero**
+field mappings — which is where every defect UCSPE found for Cisco
+actually lived. The Synergy Data Center Simulator is partner-only and is
+Synergy blades, not the DL rack servers this estate runs.
+
+## The four things I actually need from the output
+
+### a. The core-count check — the single most important line
+
+Printed as the `HEADLINE —` block right after the hardware fetch, and
+repeated on its own as the last `>>>` line of the run, because it is the
+one line worth reading if you read nothing else. HPE documents
+`processorCoreCount` as "Number of cores available **per processor**",
+while this platform's `cpu_cores` is whole-system, so the mapping
+computes `processorCount * processorCoreCount`. The probe checks that
+against the sum of each socket's own `TotalCores` from `/processors` on
+the sampled servers, and prints `CORE COUNT: CONFIRMED`, `WRONG` or
+`INCONCLUSIVE`.
+
+- Agreement confirms the mapping.
+- A disagreement means **every server's core count is wrong fleet-wide**,
+  and I change the mapping before this is ever scheduled.
+
+### b. Does paging get past the 256-profile ceiling
+
+Output section **2**. HPE documents `/rest/server-profiles` as capped at
+256 with "the list is truncated", and does *not* say whether
+`nextPageUri` continues past it. This matters more than it sounds: the
+server's **name comes from its profile**, so if the cap is per *query*
+rather than per request, an estate with more than 256 profiles cannot be
+fully enumerated and the collector needs to shard by filter.
+
+The client already detects a short read and logs
+`oneview.collection_truncated` at ERROR naming both counts — but
+detection is not a fix, and one run answers it.
+
+### c. Does an iLO-4 server report any hardware at all
+
+Output section **4**, printed as a populated-fields table split by iLO
+generation. Every *subresource* on an iLO 4 is documented to fail with
+`InsufficientFirmware` ("The minimum version to collect some types of
+inventory is iLO 5 v1.20") and the collector reports those as `None`
+rather than zero. What HPE does **not** document is whether the
+*top-level* fields — `memoryMb`, `processorCount`, `processorCoreCount`,
+`portMap` — also come back empty.
+
+If they do, iLO-4 machines get identity and nothing else, and the cost of
+collecting HPE from OneView alone is much higher than the design assumed.
+That is a decision-changing answer, so it is worth the one run.
+
+### d. Do HPE's GPU names match the catalog
+
+Output section **7**. OneView reports a GPU as a `Devices` entry with a
+model string and **no memory field anywhere**, so VRAM comes entirely
+from the built-in GPU catalog
+(`docs/adr/0021-built-in-gpu-catalog-with-model-matching.md`). HPE
+rebrands NVIDIA cards — `"HPE NVIDIA L40S 48GB PCIe Accelerator"` — and
+the matching rules for those were written against *realistic* spellings,
+not observed ones.
+
+The probe prints every GPU string the estate reports with a CATALOG
+HIT/MISS verdict. A MISS is not a bug; it is one line of
+`INVENTORY_GPU_MODELS`, or a row I add to the table if the card's VRAM is
+on a vendor datasheet.
+
+## The rest of what it prints
+
+Lower stakes, all worth having while you are in there: what `mpModel`
+really contains per generation (section 3), which `mpIpAddresses` entry
+is the reachable one and whether there is always one (section 5), what
+the appliance does when `X-Api-Version` is omitted (section 1), whether
+`serverName` holds anything without HPE AMS (section 6), the full mapped
+`ProviderServer` for a few sampled servers (section 8), whether
+`subResources` is an object or an array so the dead branch can be deleted
+(section 9), and whether `expand=all` already returns power supplies or
+each server costs a `/powerSupplies` call (section 10 — the difference
+between a ~15-request sweep and a ~2500-request one).
+
+## If the login is rejected
+
+- **Check the account first.** A read-only OneView user is enough; the
+  collector force-sets `loginMsgAck` on every login, so a pending login
+  banner is not the cause.
+- **`INVENTORY_ONEVIEW_IP` is a bare hostname** — no `https://`, no port,
+  no path.
+- **TLS verification is off by default** (`INVENTORY_ONEVIEW_VERIFY_TLS`),
+  because an appliance in an air-gapped estate ships a self-signed
+  certificate. If you have a real chain, turn it on.
+- **An API-version complaint** means the appliance's supported range does
+  not include what the collector asked for. The collector discovers the
+  version from `GET /rest/version` and clamps it to 8000 (OneView 10.20,
+  the newest reference these mappings were read against);
+  `INVENTORY_ONEVIEW_API_VERSION` pins it explicitly. Send me the
+  appliance's `minimumVersion`/`currentVersion` — the probe prints both.
+
+## What to send back, and what is in it
+
+`oneview-verify.txt`, plus `oneview-dryrun.txt` if you ran it.
+
+**Skim it before it leaves the secure environment**, same as part 1. It
+deliberately contains server names, models, serial numbers and
+management-processor addresses — those are the point. It contains **no**
+credential: the password is never printed, and there is no debug flag
+that would print it. If your site's rules do not allow hostnames or
+serials out, redact them and say so; the core-count check, the paging
+answer and the populated-fields table are still worth having on their
+own.

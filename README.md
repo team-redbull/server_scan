@@ -12,9 +12,10 @@ status, the standing project conventions, and exactly where to continue.
 
 ## Status
 
-Phase 1 is functionally complete except real authentication (deliberately
-deferred — see `CLAUDE.md`) and three of the four planned vendor
-collectors. Built so far, in order:
+Phase 1 is functionally complete except real authentication, which is
+deliberately deferred — see `CLAUDE.md`. All four vendor managers now
+have a collector, plus a fifth for machines no manager owns. Built so
+far, in order:
 
 1. Inventory model, MongoDB/Redis persistence, search/filter/sort/cursor
    pagination, the inventory UI.
@@ -34,6 +35,13 @@ collectors. Built so far, in order:
 10. The second collector: **standalone Redfish**, for machines no
     aggregator owns — a Cisco CIMC that Intersight cannot manage, an
     iDRAC, a current iLO. One BMC at a time, from an inventory file.
+11. **Cisco Intersight**, for the Cisco servers no UCS domain owns — the
+    one collector whose cost does not grow with the fleet.
+12. **Dell OpenManage**, which splits the job: OME says who exists and
+    what each machine is called, each iDRAC says what it is
+    (`docs/adr/0020-dell-identity-from-ome-hardware-from-redfish.md`).
+13. **HPE OneView**, the only source for every HPE server whatever its
+    iLO generation (`docs/adr/0022-oneview-only-hpe-collector.md`).
 
 `CHANGELOG.md` records what changed and what is new in each release.
 `docs/arc42.md` is the structured architecture overview — goals,
@@ -139,8 +147,8 @@ manager-collector.md` is the detailed writeup of how the first provider
 was built and validated, and `docs/adr/0014-ucs-central-multi-domain-
 collector.md` of how the Cisco collector drives it once per domain.
 
-Three collectors exist today: `UCS_CENTRAL`, `INTERSIGHT` and
-`REDFISH_STANDALONE`.
+Five collectors exist today: `UCS_CENTRAL`, `INTERSIGHT`, `OPENMANAGE`,
+`ONEVIEW` and `REDFISH_STANDALONE`.
 
 **`INTERSIGHT` is the only one that reaches this platform's 10,000-server
 target without qualification.** Every child object in Intersight's model
@@ -166,9 +174,37 @@ names; the servers themselves come from the domains. `docs/adr/0014`
 covers the design, its costs, and what is still unproven — including that
 a domain not registered with Central cannot be collected at all.
 
-`OPENMANAGE` and `ONEVIEW` have configuration slots but no provider —
-`tools/run_collector.py` raises a clear `NotImplementedError` for them
-rather than silently doing nothing.
+`OPENMANAGE` collects Dell, and is the one collector that reads from two
+places on purpose: two bulk calls to the OpenManage Enterprise appliance
+say which servers exist and what the operator named them, and each
+server's own iDRAC is then read over Redfish for the hardware, because
+only the BMC reports measured values. It therefore needs two logins —
+`INVENTORY_OME_USERNAME`/`_PASSWORD` for the appliance and
+`INVENTORY_OME_BMC_USERNAME`/`_PASSWORD` for a shared read-only iDRAC
+account — and egress to the whole BMC network. See
+`docs/adr/0020-dell-identity-from-ome-hardware-from-redfish.md`.
+
+`ONEVIEW` collects HPE, and deliberately does **not** copy that split.
+The estate runs iLO 4, 5 and 6 in the same racks, and iLO 4 predates
+useful Redfish coverage, so a split design would mean a per-generation
+branch and two different sets of field provenance for one vendor. Instead
+**OneView is the only source for every HPE server, whatever its iLO
+generation**: no Redfish pass, no BMC credentials, no branch. What
+OneView cannot report for an older machine is reported as `None` — "not
+read this run" — never as zero. Three bulk calls cover the whole
+appliance, because `GET /rest/server-hardware` returns the complete
+object per member and `expand=all` folds in each server's DIMMs, drives,
+GPUs and PCI devices. **It has never been run against a live appliance**,
+and there is no OneView equivalent of Cisco's UCS Platform Emulator, so
+run `uv run python -m tools.verify_oneview` against the real thing before
+scheduling it. See `docs/adr/0022-oneview-only-hpe-collector.md` and
+`docs/hpe-collectors.md`.
+
+`UCS_MANAGER` is now the only manager type with no entry point of its
+own, and that is deliberate rather than missing: UCS Manager is reached
+through `UCS_CENTRAL`, which discovers every domain's address at runtime
+and logs into each one. `tools/run_collector.py` says so in as many words
+rather than reporting an unimplemented feature.
 
 ### Running the collector by hand
 
@@ -228,6 +264,28 @@ silently mis-report every server's memory.
 and the one command, plus what to send back; and
 `docs/test-intersight-collector.md` is the full runbook.
 
+OneView is in exactly the same unvalidated state, and has the same shape
+of pre-flight:
+
+```bash
+export INVENTORY_ONEVIEW_IP=oneview.example.com   # bare host, never a URL
+export INVENTORY_ONEVIEW_USERNAME=inventory-svc
+export INVENTORY_ONEVIEW_PASSWORD=...
+
+# Logs in, answers the ten questions the docs could not, logs out.
+# Writes nothing — no MongoDB connection, no ingest:
+uv run python -m tools.verify_oneview
+
+uv run python -m tools.run_collector --manager-type ONEVIEW --dry-run
+uv run python -m tools.run_collector --manager-type ONEVIEW
+```
+
+Its headline check is whether `processorCount * processorCoreCount` equals
+the core count summed from `/processors` — HPE documents
+`processorCoreCount` as *per processor*, and reading it through
+unmultiplied would halve every two-socket server's core count silently.
+`docs/field-test-checklist.md` covers this run too.
+
 ## Local development
 
 Requires [uv](https://docs.astral.sh/uv/), Node 24+, and a container
@@ -273,14 +331,17 @@ uv run python -m tools.seed_inventory --count 1000 --seed 42
 `--count` defaults to 1000 and `--seed` to 42; the same pair always
 produces the same fleet, field for field.
 
-What you get mirrors the four collectors that exist. Cisco blades arrive
+What you get mirrors the collectors that exist. Cisco blades arrive
 as `source_provider=UCS_CENTRAL` with Central-rooted DNs, service-profile
 org paths and fabric attachments; Cisco rack units arrive as
 `INTERSIGHT` with `intersight/<moid>` ids and no org path; HPE ProLiants
 arrive as `ONEVIEW` with `/rest/server-hardware/<uuid>` ids; and
 everything else — Dell and `standalone` whiteboxes — arrives as
-`REDFISH_STANDALONE` with `redfish://` addresses. Every source filter in
-the UI therefore has real data behind it, and each collector's
+`REDFISH_STANDALONE` with `redfish://` addresses. (`OPENMANAGE` is
+deliberately not seeded — Dell is reached through OME plus each iDRAC,
+and the generator has no second-hop shape for that yet. The UI's Source
+filter has not caught up with `ONEVIEW` or `OPENMANAGE` either; it still
+offers three values.) Each collector's
 *absences* are reproduced too, because a fixture richer than the real
 thing hides the gaps worth seeing. Names span the estate's real shapes,
 including a deliberate minority carrying no site token, so "Unassigned"

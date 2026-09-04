@@ -451,6 +451,13 @@ metrics predate this collector (see ADR-0017's Intersight PSU section for
 the fuller history and the `power.failed_psu_count` comparison bug that
 fix caught and corrected — vendor-neutral, so it applies here unchanged).
 
+**Current state, 2026-09-04:** that gap is fully closed and this is no
+longer the only source. Intersight landed PSUs days before this, and
+`..redfish.mapping.psus_from_supplies` then covered Dell and every
+standalone BMC, with OneView covering HPE (ADR-0022). Every collector
+reports PSUs now; what stays specific to Cisco is the blade limitation
+below.
+
 `equipmentPsu` (confirmed against the installed `ucsmsdk==0.9.27` source,
 `mometa/equipment/EquipmentPsu.py`) declares five parent classes:
 `computeRackUnit`, `equipmentChassis`, `equipmentFex`,

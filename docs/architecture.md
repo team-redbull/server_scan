@@ -219,6 +219,30 @@ rule); the exact Cisco fabric acceptance scenario (one path down →
 WARNING, two paths down → CRITICAL) reproduced on real seeded servers,
 not just fixtures.
 
+Ingest also does two things on every server that are easy to miss because
+neither belongs to a collector:
+
+- **It records what could not be read.** For each field a provider
+  reported `None` for, `_carry_forward` keeps the stored value *and*
+  appends that field's dotted API path to `Server.unread_fields`
+  (`hardware.gpus`, `hardware.storage.drives`, `hardware.power.psus`,
+  `identity.nic_macs`, …), returned by `GET /api/v1/servers/{id}`. The
+  list is recomputed from scratch on every ingest and never merged — a
+  path whose value is no longer `None` would otherwise stay flagged
+  forever. It exists because carrying forward is not enough on a *first*
+  ingest: `Hardware` has no "unknown" state, so an iLO-4 server that
+  reported nothing stored `0` drives and rendered as a real, confident
+  zero. "Never successfully read" is deliberately not expressible here.
+- **It fills in GPU VRAM from the catalog.** No management plane this
+  platform collects from reports a GPU's memory size — confirmed against
+  both Cisco SDKs, Cisco's own metrics API, Redfish and OneView — so
+  `GpuCatalog.enrich` supplies it from a built-in table of 30 NVIDIA and
+  AMD datacenter cards, matched on a Cisco PID *or* a vendor model
+  string. A value a provider actually read is never overridden; a card
+  the table does not answer for keeps `memory_bytes: None` rather than a
+  guess. `INVENTORY_GPU_MODELS` overrides the table per identifier; see
+  `docs/adr/0021-built-in-gpu-catalog-with-model-matching.md`.
+
 ## What's implemented vs. planned
 
 **Slice 0**: configuration, error model, logging, request context,
@@ -464,9 +488,7 @@ integration that isn't `FakeProvider`. See
   `UCS_CENTRAL`); `tools.run_collector` says so in as many words rather
   than claiming a missing feature. Intersight reuses the same three
   settings with different meanings: it signs requests with an API key, so
-  `username` is the API Key ID and `password` the secret key. `ONEVIEW` is
-  the first collector to populate a server's power supplies — see
-  `docs/adr/0022-oneview-only-hpe-collector.md`.
+  `username` is the API Key ID and `password` the secret key.
 
 ### Standalone Redfish collector (`REDFISH_STANDALONE`)
 
@@ -529,6 +551,118 @@ session token.
 
 Full design, evidence and open questions: `docs/adr/0016`. Runbook:
 `docs/test-redfish-standalone-collector.md`.
+
+### Cisco Intersight (`INTERSIGHT`)
+
+The third collector, and the first whose cost does not scale with the
+fleet: every child managed object carries an inverse reference to its
+owner, so each sub-resource is listed once for the whole estate and
+joined in memory — on the order of 120 requests for 10,000 servers,
+against the Redfish collector's ~25 *per BMC*. The trade is memory: the
+join tables are held for the length of the run and grow with the fleet,
+which no other collector's do, and `$select` on every query is what keeps
+that affordable.
+
+It is not a login. Intersight has no username/password path for its REST
+API at all — every request is HTTP-Signature signed — so its credentials
+are `INVENTORY_INTERSIGHT_API_KEY_ID` and `_API_KEY_PEM`, with the PEM
+riding in the environment variable rather than a mounted file. Signing is
+hand-rolled on `httpx` + `cryptography` rather than pulling the official
+SDK, a 57.6 MB wheel of 10,112 generated modules for the eight we would
+touch; the RSA construction was verified byte-identical against it.
+
+It deliberately does not collect `ManagementMode == UCSM` servers: those
+are exactly the ones `UCS_CENTRAL` owns, and since ingest correlates on
+`(vendor, serial_normalized)`, collecting both would make one document's
+`source_provider` and every mapped field flip on whichever CronJob ran
+last. `docs/adr/0017-intersight-collector.md` has the design; its
+mapping is still largely unvalidated against live hardware.
+
+### Dell (`OPENMANAGE`) — identity from OME, hardware from each iDRAC
+
+The one collector that reads from two places on purpose. Two bulk REST
+calls against the single OpenManage Enterprise appliance enumerate every
+server profile and managed device, which is where the operator's name,
+the deployment template, the service tag and the iDRAC address come from;
+the hardware behind those addresses is then read from each server's own
+BMC over Redfish, reusing `app.infrastructure.providers.redfish` rather
+than a second mapping. The split is on provenance, not convenience: only
+OME knows the name that site parsing and classification need, and only
+the BMC reports measured values.
+
+It is therefore the one collector that needs **two** logins —
+`INVENTORY_OME_USERNAME`/`_PASSWORD` for the appliance and
+`INVENTORY_OME_BMC_USERNAME`/`_PASSWORD` for a shared read-only iDRAC
+account — and the run refuses to start without both, naming the
+variables. Full design: `docs/adr/0020-dell-identity-from-ome-hardware-
+from-redfish.md`; verified field facts: `docs/dell-collectors.md`.
+
+### HPE (`ONEVIEW`) — one source, at every iLO generation
+
+The fourth vendor collector, and the one whose shape is most likely to be
+guessed wrong. The estate runs iLO 4, 5 and 6 in the same racks, and iLO
+4 predates useful Redfish coverage. Copying the Dell split would put a
+per-generation branch in the collection path and give one vendor's
+servers two different sets of field provenance, so **the user's explicit
+decision was one collection standard for all HP hardware: OneView, for
+every server, whatever its iLO generation.** No Redfish pass, no
+`RedfishTarget`, no BMC credentials, no branch on `mpModel`. What OneView
+cannot report for an older machine is `None` — carried forward by ingest,
+and listed in `Server.unread_fields` — never zero.
+
+The cost is three bulk calls per appliance: `GET /rest/server-hardware`
+returns the complete object per member rather than a summary, and
+`expand=all` folds each server's DIMMs, drives, GPUs and PCI devices into
+the same response. The one exception is power supplies, which OneView
+will not expand reliably and which therefore cost one request per server
+(`INVENTORY_ONEVIEW_COLLECT_PSUS`, on by default).
+
+Four traps are worth knowing before touching the mapping, each with its
+HPE source in `docs/hpe-collectors.md`:
+
+- **The name comes from the server profile.** `server-hardware.name` is
+  the enclosure-and-bay location, and `serverName` is an OS hostname via
+  HPE's Agentless Management Service — both are decoys, the same trap
+  ADR-0009 records for UCS blades named after their chassis slot. Hardware
+  with no assigned profile is skipped and counted.
+- **`processorCoreCount` is per processor**, so `cpu_cores` is
+  `processorCount * processorCoreCount`. Passing it through unmultiplied
+  halves every two-socket server, silently.
+- **`memoryMb` is MiB, and HPE says so inline** — no assumption, unlike
+  Intersight's undocumented `TotalMemory`.
+- **`count=-1` means 64, not "all"**, on `/rest/server-profiles`, with a
+  256 ceiling and truncation HPE documents without saying whether paging
+  passes it. An explicit `count` is always sent and a short read is logged
+  at ERROR rather than hidden.
+
+**It has never run against a live appliance** and there is no OneView
+equivalent of UCSPE, so `uv run python -m tools.verify_oneview` — a
+read-only probe that writes nothing — is the outstanding action. See
+`docs/adr/0022-oneview-only-hpe-collector.md`.
+
+### Every collector now reports power supplies
+
+`ProviderServer.psus` was added on 2026-09-01 and was dead for a while:
+the health engine's `power.psu_count` and `power.failed_psu_count`
+metrics had nothing to read, so a server with a dead PSU reported HEALTHY
+on power exactly like one with two good ones. It is now populated by all
+five collectors — Intersight and UCS Manager/Central for rack units (a
+blade's supplies belong to its shared chassis, not to the blade), the
+shared Redfish mapping's `psus_from_supplies` for Dell and every
+standalone BMC, and OneView for HPE.
+
+Two rules are shared across every one of those mappings:
+
+- **An absent supply is dropped, never counted as failed.** A four-bay
+  chassis with two supplies fitted is not a server with two failed PSUs,
+  and counting it as one would permanently misreport
+  `power.failed_psu_count` for every partially populated chassis.
+- **A PSU's `health` is `UP`/`DOWN`/`DISABLED`/`UNKNOWN`, not a
+  `HealthSeverity`.** A policy written against `power.failed_psu_count`
+  is comparing against `"DOWN"`, not `"FAILED"`. Redfish's `Warning`
+  deliberately maps to `UNKNOWN` rather than `DOWN`: a degraded supply
+  still delivering power has not lost redundancy, and counting it would
+  raise CRITICAL on a healthy server.
 
 ### CI supply chain
 

@@ -457,12 +457,25 @@ do, a future Redfish pass would get GPUs for free on iLO 5+.
 
 ## Power supplies
 
-**The one per-server call, and the first time any provider in this repo
-has populated `ProviderServer.psus`.** That field was added on
-2026-09-01 and `IngestService` hardcoded `Power(psus=[])` for every
-provider, so `power.psu_count` and `power.failed_psu_count` have had
-nothing to read since they were written — a server with a dead PSU
-reported HEALTHY on power exactly like one with two good ones.
+**The one per-server call this collector makes, and the richest PSU
+data any collector here reports.**
+
+The history is worth keeping straight, because a first draft of this
+section got it wrong. `ProviderServer.psus` was added on 2026-09-01 and
+was genuinely dead for a while — `power.psu_count` and
+`power.failed_psu_count` had nothing to read, so a server with a dead PSU
+reported HEALTHY on power exactly like one with two good ones. That gap
+was closed before OneView shipped, not by it: Intersight and UCS
+Manager/Central populate `psus` for rack units (a blade's supplies belong
+to its shared chassis), and `..redfish.mapping.psus_from_supplies` covers
+Dell and every standalone BMC. **OneView is the fourth source, not the
+first.**
+
+What is still specific to OneView is the *quality* of the answer. Every
+other collector reduces a vendor rollup to UP/DOWN/DISABLED/UNKNOWN;
+HPE's `Oem.Hpe.PowerSupplyStatus.State` distinguishes `Failed` from
+`Degraded` from `ACPowerLost` from `OverTemperature`, and
+`PowerCapacityWatts` is documented in Watts rather than inferred.
 
 `GET /rest/server-hardware/{id}/powerSupplies`, HPE's
 `HpeServerPowerSupply` schema. What the mapper uses:

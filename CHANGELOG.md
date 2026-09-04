@@ -13,22 +13,7 @@ minor, anything else bumps patch
 That makes the version number automatic but says nothing about *why* a
 release matters. This file is that missing half, so:
 
-- **Keep `## Unreleased` current as you work.** Anything that changes
-  behaviour, configuration, or the operational contract gets a line when
-  it is committed — not reconstructed later from `git log`.
-- **Write for the person deploying it**, not the person who wrote it. Name
-  the environment variable, the endpoint, the exit code.
-- **Breaking changes lead**, and say what an operator has to do.
-- Pure internals — a refactor, a test, a doc typo — do not need a line.
-  If nobody outside the repo could notice it, leave it out.
-
-Releases below `## Unreleased` were reconstructed from the tag history,
-so they read as commit subjects. Entries from here on should read better
-than that.
-
----
-
-## Unreleased
+- **Keep `## Unreleased
 
 > **This heading is wrong and the entries under it are not.** Releases here
 > are unattended (ADR-0010 tags and publishes on every push to `main`), so
@@ -36,10 +21,17 @@ than that.
 > has no moment at which anyone performs it. The result is that entries pile
 > up under `## Unreleased` *after* they have shipped: the `SiteCode` break
 > below went out in **v7.0.0** on 2026-08-29, and the repository is on
-> **v8.2.0**. Fixing this properly means either splitting this section
+> **v10.1.0**. Fixing this properly means either splitting this section
 > across the tags that actually carried it, or having the release job
 > rewrite the heading when it tags. Until one of those happens, read this
 > section as "recent", not as "unreleased".
+>
+> **The version the current range will produce: v10.2.0.** Everything since
+> `v10.1.0` is `feat:`/`fix:`/`style:` with **no `feat!:` and no
+> `BREAKING CHANGE:` footer**, so the next automatic tag is a minor bump.
+> The `### Breaking` entries below are all older than that tag and are
+> listed here only because this section never got cut — an operator
+> upgrading from v10.1.0 has nothing breaking to act on.
 
 ### Breaking
 
@@ -74,6 +66,105 @@ than that.
 
 ### New features
 
+- **HPE servers are collected, through OneView.** Set
+  `INVENTORY_ONEVIEW_IP`/`_USERNAME`/`_PASSWORD` and run
+  `--manager-type ONEVIEW` (Helm: `collectors.oneview.enabled: true`,
+  which schedules a CronJob every 4 hours). **OneView is the only source
+  for every HPE server whatever its iLO generation** — there is no BMC
+  login, no Redfish pass and no per-generation branch, so an iLO 4
+  machine is collected by the same code path as a Gen11 and simply
+  reports less. Three bulk calls cover the whole appliance:
+  `GET /rest/server-hardware` returns the complete object per member, and
+  `expand=all` folds in each server's DIMMs, drives, GPUs and PCI
+  devices. A read-only OneView account is enough; the session is deleted
+  on the way out.
+  - **`INVENTORY_ONEVIEW_COLLECT_PSUS`** (default `true`) — power
+    supplies are the one thing OneView will not return in the bulk sweep,
+    so they cost one request per server: the difference between a
+    ~15-request run and a ~2500-request one.
+    **`INVENTORY_ONEVIEW_PSU_CONCURRENCY`** (default 8) bounds the
+    fan-out. Turning it off means every HPE server's `psus` reads as
+    *unread* and the stored value is carried forward, never erased.
+  - **`INVENTORY_ONEVIEW_API_VERSION`** pins the `X-Api-Version` OneView
+    requires on every call. Leave it unset — the default — and the
+    appliance is asked what it supports and clamped to the newest version
+    this collector was written against (8000 / OneView 10.20). Set a
+    number only to roll forward or back after an appliance upgrade moves
+    a field.
+  - **`INVENTORY_ONEVIEW_VERIFY_TLS`** (default off, like the Dell BMC
+    setting, because an appliance in an air-gapped estate ships a
+    self-signed certificate) and **`INVENTORY_ONEVIEW_PAGE_SIZE`**
+    (default 256, the documented ceiling on `/rest/server-profiles`,
+    where `count=-1` means *64* rather than "all").
+  - **One appliance per deployment.** HPE caps a OneView appliance at
+    2500 servers (1024 on a hypervisor other than ESXi). An estate that
+    outgrows one needs a second endpoint, which is deliberately not built
+    — the symptom is not a crash but an `oneview.collection_truncated`
+    ERROR, or a fleet that quietly stops growing.
+  - **`uv run python -m tools.verify_oneview`** — a read-only probe
+    answering, against a real appliance, what this collector could not
+    settle from documentation. Its headline check is whether
+    `processorCount * processorCoreCount` equals the real core count
+    summed from `/processors`; if that disagrees, every server's core
+    count is wrong fleet-wide. It also reports whether paging gets past
+    the 256-profile ceiling, whether an iLO-4 server reports any hardware
+    at all, what `mpModel` really contains, which management-processor
+    address is reachable, whether `expand=all` includes power supplies,
+    and whether HPE's GPU product names match the GPU catalog.
+    **Nothing here has ever run against live HPE hardware** — there is no
+    OneView equivalent of Cisco's UCS Platform Emulator — so run this
+    before scheduling the CronJob. See
+    `docs/adr/0022-oneview-only-hpe-collector.md`,
+    `docs/hpe-collectors.md`, and `docs/field-test-checklist.md` part 2.
+
+- **Dell servers are collected, through OpenManage plus each iDRAC.** Set
+  `INVENTORY_OME_IP`/`_USERNAME`/`_PASSWORD` **and**
+  `INVENTORY_OME_BMC_USERNAME`/`_PASSWORD` and run
+  `--manager-type OPENMANAGE` (Helm: `collectors.ome.enabled: true`, a
+  CronJob every 6 hours). This is the one collector that reads from two
+  places on purpose, and the one that needs two logins: two bulk calls to
+  the OME appliance say which servers exist and what the operator named
+  them, and each server's own iDRAC is then read over Redfish for the
+  hardware, because OME reports guessed-at values where the BMC reports
+  measured ones. A run without both logins is refused up front, naming
+  the variables, rather than failing per-BMC as "bad credentials".
+  **Its cost is per server (~25 requests each), not per appliance**, and
+  the collector pod needs egress to the whole BMC network.
+  `INVENTORY_OME_BMC_PORT` (443) and `INVENTORY_OME_BMC_VERIFY_TLS`
+  (off, because iDRACs ship a factory self-signed certificate) tune the
+  BMC half; everything else — timeouts, budgets, fleet concurrency, the
+  auth-failure guard — is the shared `INVENTORY_REDFISH_*` set. See
+  `docs/adr/0020-dell-identity-from-ome-hardware-from-redfish.md`.
+
+- **A Dell server now reports one NIC per physical port, each with a
+  location.** A partitioned Dell NIC reports every NPAR function as its
+  own interface with its own MAC, so a 4-port card with 4 partitions per
+  port arrived as 16 NICs — the server's logical plumbing, not what is
+  cabled. Only the first partition of each port is kept now, so that card
+  reads as four. `ProviderNic` and `NetworkInterface` gained a
+  **`location`** field, filled from the iDRAC FQDD, and each surviving
+  Dell NIC is renamed to it — four interfaces all called "System Ethernet
+  Interface" identified none of them. **`nic_macs` is deliberately left
+  whole**: it is the identity correlation key, and a server already
+  ingested carrying all sixteen MACs has to keep matching on any of them.
+
+- **Every collector now reports power supplies.** `ProviderServer.psus`
+  was added in an earlier release and nothing populated it, so the health
+  engine's `power.psu_count` and `power.failed_psu_count` metrics had
+  nothing to read — a server with a dead PSU reported HEALTHY on power
+  exactly like one with two good ones. All five collectors fill it now:
+  Intersight and UCS Manager/Central for rack units (a blade's supplies
+  belong to its shared chassis, not to the blade, so a blade reports
+  none), the shared Redfish mapping for **Dell and every standalone BMC**,
+  and OneView for HPE with the most precise data of the four. **An estate
+  with a long-dead PSU will see health states change on the first sweep
+  after upgrading — that is the feature working, not a regression.**
+  Two rules if you are writing a policy against these metrics: a PSU's
+  `health` is `UP`/`DOWN`/`DISABLED`/`UNKNOWN`, so the comparison is to
+  `"DOWN"` and not `"FAILED"`; and an *absent* supply is dropped rather
+  than counted failed, so a four-bay chassis with two supplies fitted is
+  not a server with two failed PSUs.
+
 - **A server now says which fields its last collection could not read.**
   `GET /api/v1/servers/{id}` carries a new `unread_fields` list of dotted
   paths into that same response — `hardware.storage.drives`,
@@ -89,69 +180,25 @@ than that.
   the moment a run reads it. No configuration, and no existing field
   changed type — `storage.total_bytes` is still an `int`.
 
-- **HPE servers are collected, through OneView.** Set
-  `INVENTORY_ONEVIEW_IP`/`_USERNAME`/`_PASSWORD` and run
-  `--manager-type ONEVIEW` (Helm: `collectors.oneview.enabled: true`,
-  which schedules a CronJob every 4 hours). OneView is the **only**
-  source for every HPE server whatever its iLO generation — there is no
-  BMC login, no Redfish pass and no per-generation branch, so an iLO 4
-  machine is collected by the same code path as a Gen11. Three bulk
-  calls cover the whole appliance: `GET /rest/server-hardware` returns
-  the complete object per member, and `expand=all` folds in every
-  server's DIMMs, drives and PCI devices.
-- **Power supplies are populated for the first time, on any vendor.**
-  `ProviderServer.psus` has existed since 2026-09-01 and no collector had
-  ever filled it, so the health engine's `power.psu_count` and
-  `power.failed_psu_count` had nothing to read. OneView reports a PSU's
-  rated Watts and an HPE state precise enough to separate `Failed` from
-  `Degraded` from `ACPowerLost`, and those map to real health rather than
-  a boolean. This is the one per-server call the collector makes — the
-  difference between ~15 requests and roughly one per server — so
-  **`INVENTORY_ONEVIEW_COLLECT_PSUS=false`** turns it off (with
-  `INVENTORY_ONEVIEW_PSU_CONCURRENCY`, default 8, bounding the fan-out).
-  Off means every server's `psus` reads as unread and the stored value is
-  carried forward, not erased.
-- **`INVENTORY_ONEVIEW_API_VERSION`** pins the `X-Api-Version` OneView
-  requires on every call. Leave it unset — the default — and the
-  appliance is asked what it supports and clamped to the newest version
-  this collector was written against (8000 / OneView 10.20). Set a number
-  only to roll forward or back after an appliance upgrade moves a field.
-- **`INVENTORY_ONEVIEW_VERIFY_TLS`** (default off, like the Dell BMC
-  setting) and **`INVENTORY_ONEVIEW_PAGE_SIZE`** (default 256, the
-  documented ceiling on `/rest/server-profiles`, where `count=-1` means
-  *64* rather than "all").
-- **`uv run python -m tools.verify_oneview`** — a read-only probe that
-  answers, against a real appliance, the questions this collector could
-  not settle from documentation. Its headline check is whether
-  `processorCount * processorCoreCount` equals the real core count
-  summed from `/processors`; if that disagrees, every server's core count
-  is wrong fleet-wide. It also reports whether paging gets past the
-  256-profile ceiling, whether an iLO-4 server reports any hardware at
-  all, what `mpModel` really contains, which management-processor address
-  is reachable, whether `expand=all` includes power supplies, and whether
-  HPE's GPU product names match the GPU catalog. **Nothing here has ever
-  run against live HPE hardware** — there is no OneView equivalent of
-  Cisco's UCS Platform Emulator — so run this before scheduling the
-  CronJob. See `docs/adr/0022-oneview-only-hpe-collector.md`.
-- **The GPU catalog now recognises HPE's rebranded product names.**
-  OneView reports a card as `"HPE NVIDIA L40S 48GB PCIe Accelerator"`
-  and reports no memory field anywhere, so the catalog is the only
-  source of VRAM for an HPE GPU. Matching now also ignores a leading
-  `HPE`/`HP`, a trailing marketing noun (`Accelerator`, `Kit`, …), a
-  trailing bus word (`PCIe`, `SXM4`), and a trailing capacity where it
-  agrees with the row's own VRAM — a capacity that *disagrees* still
-  matches nothing rather than reporting a wrong number.
-
 - **GPU VRAM is now filled in out of the box, on every vendor, with no
   configuration.** The platform ships a built-in table of 30 NVIDIA and
   AMD datacenter GPUs (V100 through H200 and B200, T4, the A- and
   L-series, AMD Instinct MI100 through MI355X), every capacity taken from
-  a vendor datasheet or a Cisco UCS spec sheet. Cards are matched by
-  Cisco PID *and* by the model string Dell's iDRAC and HPE's iLO report
-  (`NVIDIA A100-PCIE-40GB`, `NVIDIA H100 80GB HBM3`), so a non-Cisco GPU
-  gets a VRAM figure for the first time — matching ignores case,
-  whitespace, separators and a leading vendor word, and is exact
-  otherwise, so `A10` and `A100` never cross-match.
+  a vendor datasheet or a Cisco UCS spec sheet. No management plane this
+  platform collects from reports a GPU's memory size at all — confirmed
+  against both Cisco SDKs, Cisco's own metrics API, Redfish and OneView —
+  so this table is the only source there has ever been. Cards are matched
+  by Cisco PID *and* by the model string Dell's iDRAC and HPE's iLO
+  report (`NVIDIA A100-PCIE-40GB`, `NVIDIA H100 80GB HBM3`), so a
+  non-Cisco GPU gets a VRAM figure for the first time. Matching ignores
+  case, whitespace, separators, a leading vendor word, a leading
+  `HPE`/`HP`, a trailing marketing noun (`Accelerator`, `Kit`, …) and a
+  trailing bus word (`PCIe`, `SXM4`) — and is exact otherwise, so `A10`
+  and `A100` never cross-match. A trailing capacity is accepted only when
+  it agrees with the row's own VRAM; one that disagrees matches nothing
+  rather than reporting a wrong number. A card that shipped in two
+  capacities (`A100`, `V100`, `H100`, `P100`) has no bare-name row and
+  reports no VRAM rather than guessing.
   **`INVENTORY_GPU_MODELS` (Helm: `config.gpuModels`) changed meaning: it
   now overrides the built-in table instead of being the only source.** No
   action needed — an existing value keeps working and still wins for the
@@ -159,14 +206,15 @@ than that.
   applies too. Leaving it empty no longer means "enrich nothing". A
   vendor-reported memory value still always beats the catalog. See
   `docs/adr/0021-built-in-gpu-catalog-with-model-matching.md`.
+
 - **The sites overview leads with three fleet-wide cards** — everything,
   UPI, and Hosted cluster — above the per-site cards. Each links straight
-  into the pre-filtered server list
-  (`/servers?installation_type=UPI`). `GET /api/v1/sites` grew a
-  `by_installation_type` object on every site record, keyed by
-  `HOSTED_CLUSTER`/`UPI`/`UNCLASSIFIED` and reporting the same
-  total/health/vendor/maintenance counts a site does; no existing field
-  changed. Nothing to configure.
+  into the pre-filtered server list (`/servers?installation_type=UPI`).
+  `GET /api/v1/sites` grew a `by_installation_type` object on every site
+  record, keyed by `HOSTED_CLUSTER`/`UPI`/`UNCLASSIFIED` and reporting
+  the same total/health/vendor/maintenance counts a site does; no
+  existing field changed. `standalone` is now labelled properly in every
+  vendor breakdown. Nothing to configure.
 
 - **Cisco Intersight collector** (`--manager-type INTERSIGHT`). The first
   collector whose cost does not scale with the fleet: every sub-resource
@@ -180,31 +228,14 @@ than that.
   auth, name resolution and the `TotalMemory` unit (MiB, as assumed) —
   see `docs/adr/0017-intersight-collector.md`'s "Validation" section
   before scheduling it; a full `--dry-run` ingest is still outstanding.
+  It also reports `cpu_model` (read from `processor.Unit`, the same
+  fleet-wide-listable cost class as its other joins) and PSU identity and
+  health for rack/standalone servers.
 - **`tools/verify_intersight.py`** — a read-only pre-flight that proves
   the API key, reports what the tenant holds, and settles whether
-  `TotalMemory` is MiB by summing a real server's DIMMs. Run it first.
-- **The Intersight collector now reports `cpu_model`.** Read from
-  `processor.Unit`, the same fleet-wide-listable cost class as the
-  collector's other sub-resource joins — this was cut in the original
-  build on a since-corrected assumption; see ADR-0017's Decision 5.
-- **The Intersight collector now reports PSU identity and health**,
-  making the health engine's `power.psu_count`/`power.failed_psu_count`
-  metrics usable for the first time — the domain model and these metrics
-  already existed, but no collector, for any vendor, had ever populated
-  them. Only reported for rack/standalone servers: a blade's PSUs belong
-  to its shared chassis, not to the blade, so a blade server reports
-  none. Writing a health policy against `power.failed_psu_count`: it
-  compares a PSU's `health` to `"DOWN"`, not `"FAILED"` — see
-  `docs/cisco-collectors.md`, "Power supplies (PSUs)".
-- **UCS Manager/Central now report PSU identity and health too**, same
-  `power.psu_count`/`power.failed_psu_count` metrics as Intersight
-  above. Same rack-only limitation as Intersight — a blade's PSUs
-  belong to its shared chassis, not to the blade. `--dry-run` also
-  prints a `power=` field UCS Manager's `equipmentPsu` reports
-  separately from `oper_state`, collected but not yet folded into
-  `health` — see `docs/cisco-collectors.md`, "Power supplies (PSUs)",
-  for why.
-- **UCS Manager/Central now report GPU identity, and real temperature
+  `TotalMemory` is MiB by summing a real server's DIMMs. Run it first;
+  `docs/field-test-checklist.md` part 1 is the operator-facing version.
+- **UCS Manager/Central report GPU identity and real temperature
   telemetry** — from `graphicsCard`, not the also-existing
   `coprocessorCard`, which Cisco's own UI documentation never ties to
   GPU hardware. Works for blades and rack units alike, unlike PSUs.
@@ -215,22 +246,9 @@ than that.
   live hardware. See `docs/cisco-collectors.md`, "GPUs (coprocessor
   cards vs. graphics cards)". One more query per domain (13 now, was
   9 before this and the PSU addition above).
-- **A fleet-wide "Across all sites" card** on the sites overview, and
-  `standalone` now labelled properly in every vendor breakdown.
 - **BMC addresses display as plain hosts** in the UI and the collector
   dry run — no `redfish://…/v1/Systems/1`, no `:623`. The full URI is
   still stored for the Metal3 round-trip.
-- **`INVENTORY_GPU_MODELS` fills in the VRAM neither Cisco management
-  plane reports.** Both UCS Manager's `graphicsCard` and Intersight's
-  `graphics.Card` report a GPU's PID (e.g. `P1001-200`) but never its
-  memory size or power draw — confirmed against both SDKs' full field
-  sets and Cisco's own metrics API. Set it to a comma-separated
-  `PID:Friendly Name:VRAM_GB` list (Helm: `config.gpuModels`) and a
-  matching PID is reported under its friendly name with a real
-  `memory_bytes`; a PID this deployment hasn't listed is reported
-  exactly as the collector saw it, and a real value a future API
-  version reports is never overridden. Leaving it unset (the default)
-  enriches nothing, matching today's behavior exactly.
 
 ### Fixed
 
@@ -253,14 +271,10 @@ than that.
   finished. Now streams each domain's servers the moment that domain
   completes (`asyncio.as_completed`, matching the Redfish collector's
   existing pattern) — a domain that finished before a kill keeps its
-  data regardless of what else was still running. No action needed;
+  data regardless of what else was still running. The per-domain coverage
+  log (`ucs_central.domain_summary`) streams with it, rather than being
+  the one thing still batched to the end of the run. No action needed;
   this ships fixed.
-- **UCS Central's per-domain coverage log (`ucs_central.domain_summary`)
-  was still batched at the end of the run even after the fix above** —
-  the one thing it left un-streamed. Now logs each domain's coverage
-  line the moment that domain's own result is known (a skipped domain
-  right after planning, a collected domain as soon as it finishes),
-  same as its server data.
 - **The Intersight collector was silently missing every drive, and on
   some hardware every GPU and CPU model, because `storage.Controller`
   never joined to its server.** Confirmed live against a real tenant: 0
@@ -271,19 +285,13 @@ than that.
   got the same fix pre-emptively. No action needed — this ships fixed;
   the collector has never had a scheduled production run to have been
   under-reporting in.
-- **`--dry-run` no longer prints fabric-interconnect fields on a vNIC
-  attachment.** A vNIC structurally never carries a fabric relationship —
-  every `[VNIC ...]` line used to print `fabric None … FI
-  model/serial=—/—` regardless, which read as missing data. A
-  standalone server (no cable to a Fabric Interconnect it doesn't have)
-  now shows no FI-shaped line at all, as a direct consequence rather
-  than a special case. Applies to every provider's dry-run output, not
-  only Intersight's.
-- **Intersight was missing from the UI's Source filter**, so a whole
-  collector's servers could not be filtered for. `REDFISH_STANDALONE` was
-  likewise missing from the manager-type picker in both editors, so no
-  rule or policy could be scoped to it. A test now fails the build if the
-  frontend's copies of `ManagerType` drift from the backend again.
+- **Intersight and `REDFISH_STANDALONE` were missing from the UI**, so a
+  whole collector's servers could not be filtered for and no rule or
+  policy could be scoped to a standalone BMC. A test now fails the build
+  if the frontend's copies of `ManagerType` drift from the backend again.
+  (The inventory page's separate **Source** filter list is not covered by
+  that guard and still offers only three values — `OPENMANAGE` and
+  `ONEVIEW` servers cannot be filtered for by source yet.)
 - **Seeded classification rules are re-synced when their definition
   drifts**, keeping their id, match stats and `enabled` flag. Before this,
   a database seeded earlier kept stale site patterns forever.
@@ -292,14 +300,21 @@ than that.
 - The Intersight run budget did not cover the phase where the time is
   actually spent, and `bmc_address` preferred a less specific source than
   the one its MAC comes from.
-- Ingest built four of a server's fields into a dict and `**`-unpacked it
-  into the model, which suppressed argument checking for the entire call.
-  No stored data was ever wrong because of it, but the carry-forward set
-  — what a re-collection preserves rather than overwrites — was invisible
-  at the call site. It is now spelled out, along with the two collected
-  sub-resources (`network.interfaces`, `connectivity.attachments`) that
-  are *not* carried forward and cannot be until the provider protocol can
-  say "could not read" for them.
+- **`--dry-run` output corrections.** A vNIC attachment no longer prints
+  fabric-interconnect fields: a vNIC structurally never carries a fabric
+  relationship, so every `[VNIC ...]` line used to print `fabric None …
+  FI model/serial=—/—` regardless, which read as missing data. A
+  standalone server now shows no FI-shaped line at all. Redfish PSUs now
+  print the raw `Health`/`State` pair the mapping collected, rather than
+  only the reduced verdict. Both apply to every provider's dry run.
+- **The carry-forward set is now spelled out at the call site.** Ingest
+  used to build four of a server's fields into a dict and `**`-unpack it
+  into the model, which suppressed argument checking for the whole call.
+  No stored data was ever wrong because of it, but it is worth knowing
+  which fields a re-collection preserves — and that
+  `network.interfaces` and `connectivity.attachments` are **not**
+  carried forward and cannot be until the provider protocol can say
+  "could not read" for them.
 
 ### Contributor-facing — **mypy is gone; ty is the type checker**
 
@@ -341,7 +356,12 @@ false positives this surfaced, and the rollback triggers.
 - `docs/diagrams/runtime-architecture.html` — an interactive runtime
   diagram with repository evidence pinned to a commit.
 - `docs/field-test-checklist.md` — exactly what to run against a real
-  Intersight, and what to send back.
+  Intersight (part 1) and a real OneView (part 2), and what to send back.
+- `docs/hpe-collectors.md` and `docs/notes/oneview-api.md` — the verified
+  HPE implementation facts and the primary-source research behind them,
+  in the shape `docs/cisco-collectors.md` already had for Cisco.
+- `docs/dell-collectors.md` — the same for Dell, including the OME
+  heuristics ADR-0020 replaced with measured Redfish values.
 - Corrected a standing inaccuracy: there is no `AuthProvider`/RBAC
   scaffolding. Every endpoint is unauthenticated, writes included.
 - **`deploy/air-gapped-images.txt`** — every container image an

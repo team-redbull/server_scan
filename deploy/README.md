@@ -104,8 +104,10 @@ Central, read through that domain's own UCS Manager. `OPENMANAGE`,
 their own, all shipped disabled.
 
 `ONEVIEW` is one appliance like the rest, and it is the only collector
-that populates a server's power supplies — `collectors.oneview.collectPsus`
-buys that with one request per server.
+whose power-supply collection costs anything: every other one reads PSUs
+out of a response it already fetches, while OneView needs one request per
+server for them. `collectors.oneview.collectPsus: false` turns that off
+and gives up HPE power health; the rest of the sweep is three bulk calls.
 
 Note that Intersight's three fields mean something different: it signs
 requests with an API key rather than logging in, so `username` is the API

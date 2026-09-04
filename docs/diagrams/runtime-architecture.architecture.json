@@ -31,7 +31,7 @@
           "bmcs",
           "collectors"
         ],
-        "note": "Three read-only collectors, one CronJob per manager type."
+        "note": "Five read-only collectors, one CronJob per manager type."
       },
       {
         "id": "engines",
@@ -367,7 +367,7 @@
       "dot": "emerald",
       "title": "Collectors",
       "items": [
-        "One CronJob per manager type; OPENMANAGE and ONEVIEW unbuilt.",
+        "One CronJob per manager type; every type has a collector except UCS_MANAGER, reached through UCS_CENTRAL.",
         "Intersight ~120 requests per fleet; Redfish ~25 per BMC."
       ]
     },

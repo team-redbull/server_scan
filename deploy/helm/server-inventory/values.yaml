@@ -285,9 +285,10 @@ collectors:
     password: ""
 
     # Power supplies are the only thing OneView will not return in the
-    # bulk sweep, so they cost one request per server. On by default:
-    # nothing in this platform has ever populated a server's PSUs, and
-    # the health engine's power.* metrics have had nothing to read.
+    # bulk sweep, so they cost one request per server — every other
+    # collector reads PSUs out of a response it already fetches. On by
+    # default, because turning it off makes HPE the one vendor the health
+    # engine's power.psu_count / power.failed_psu_count cannot see.
     collectPsus: true
     psuConcurrency: 8
 

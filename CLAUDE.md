@@ -148,9 +148,11 @@ is a real mistake, not a style preference.
    a fact without its source becomes folklore nobody dares change.
 
    Applied so far to `app.infrastructure.providers.ucs_common`,
-   `.ucs_manager` and `.ucs_central`. The rest of the codebase still
-   reads in the older style; convert a file when you are already
-   changing it, not as a sweep of its own.
+   `.ucs_manager` and `.ucs_central`, and to everything written since —
+   `.intersight`, `.redfish`, `.openmanage`, `.oneview` and
+   `.fake` — plus `tools/verify_*.py`. The older parts of the
+   codebase still read in the previous style; convert a file when you are
+   already changing it, not as a sweep of its own.
 
 9. **Every release says what changed and what is new — keep
    `CHANGELOG.md`'s `## Unreleased` section current as you work.**
@@ -215,7 +217,24 @@ Also since: vendors are a closed enum and sites a closed set loaded
 from configuration, a server's site is parsed
 from its own name, vendor manager connections come from environment
 configuration rather than MongoDB documents plus mounted secrets, and the
-UI was rebuilt around a per-site overview as the landing page.
+UI was rebuilt around a per-site overview as the landing page — which now
+leads with three fleet-wide cards (across all sites, UPI, hosted cluster)
+above the per-site ones, summed from a `by_installation_type` object
+`GET /api/v1/sites` returns per site row.
+
+**Every planned vendor collector now exists.** Cisco Intersight
+(ADR-0017), Dell OpenManage (ADR-0020) and HPE OneView (ADR-0022) all
+shipped after UCS, alongside `REDFISH_STANDALONE` for machines no
+aggregator owns. Two of them — `INTERSIGHT` and `ONEVIEW` — have never
+had their field mappings run against live hardware, which is a different
+state from every collector before them and is the outstanding action on
+the repo. Three platform-wide changes landed with that work and are worth
+knowing before reading any collector: a **built-in GPU catalog**
+(ADR-0021) fills in VRAM no vendor API reports, **`Server.unread_fields`**
+records what a collection could not read, and **every collector now
+reports power supplies**, so the health engine's `power.*` metrics
+finally have something to read. All three are in "Key technical facts"
+below.
 
 The supply-chain pass after that (`docs/adr/0013`) SHA-pinned every CI
 action, replaced the release-tagging action before Node 20 removal breaks
@@ -269,12 +288,15 @@ vendor manager. MongoDB is the only thing connecting them. See
 validation sections record what a live UCS Platform Emulator proved,
 disproved and could not settle.
 
-**Three collectors exist: `UCS_CENTRAL` (the UCS-managed Cisco fleet),
-`INTERSIGHT` (Cisco servers no UCS domain owns) and `REDFISH_STANDALONE`
-(every machine no aggregator owns).** `OPENMANAGE` and `ONEVIEW` have
-configuration slots but no implementation — `tools/run_collector.py`'s
-`_PROVIDER_FACTORIES` raises a clear `NotImplementedError` for them, not
-a silent no-op.
+**Five collectors exist: `UCS_CENTRAL` (the UCS-managed Cisco fleet),
+`INTERSIGHT` (Cisco servers no UCS domain owns), `OPENMANAGE` (Dell),
+`ONEVIEW` (HPE) and `REDFISH_STANDALONE` (every machine no aggregator
+owns).** Every `ManagerType` now has an entry in
+`tools/run_collector.py`'s `_PROVIDER_FACTORIES` **except `UCS_MANAGER`,
+whose absence is deliberate rather than pending** — it is reached through
+`UCS_CENTRAL`, which discovers each domain's address at runtime, so there
+is nothing to point a CronJob at. The tool says exactly that rather than
+reporting an unimplemented feature.
 
 **`INTERSIGHT` is the first collector that actually reaches the 10,000
 target**, and the first with three properties nothing else here has —
@@ -327,25 +349,86 @@ back — three exported variables and `uv run python -m
 tools.verify_intersight`. The `TotalMemory` unit is the answer to look
 for.
 
+**`OPENMANAGE` (Dell) is the one collector that reads from two places on
+purpose**, and the split is on *provenance*: two bulk calls to the
+OpenManage Enterprise appliance say which servers exist and what the
+operator named them, then each server's own iDRAC is read over Redfish
+(reusing `..providers.redfish`, not a second mapping) for the measured
+hardware. It is therefore the only collector needing two logins —
+`INVENTORY_OME_USERNAME`/`_PASSWORD` plus
+`INVENTORY_OME_BMC_USERNAME`/`_PASSWORD` for a shared read-only iDRAC
+account — and it refuses to start without both, naming the variables.
+See `docs/adr/0020-dell-identity-from-ome-hardware-from-redfish.md` and
+`docs/dell-collectors.md`.
+
+**`ONEVIEW` (HPE) deliberately does *not* copy that split, and this is
+the thing a future session is most likely to get wrong.** The estate runs
+iLO 4, 5 and 6 in the same racks, and iLO 4 predates useful Redfish
+coverage. A Dell-shaped design would therefore mean a per-generation
+branch in the collection path and two different sets of field provenance
+for one vendor's servers in one inventory — "why does this server have
+thread counts and that one doesn't" becomes a question about which branch
+ran. **So the user decided, explicitly, on one collection standard for
+all HP hardware: OneView, for every server, whatever its iLO
+generation.** It is not up for re-litigation in code. Concretely: no
+Redfish pass, no `RedfishTarget`, no BMC credentials, no
+`INVENTORY_ONEVIEW_BMC_*`, and `mpModel` is read and *reported* but never
+branched on. What OneView cannot report is `None` — "not read this run" —
+never zero. Read `docs/adr/0022-oneview-only-hpe-collector.md` and
+`docs/hpe-collectors.md` before touching it.
+
+The cost is three bulk calls per appliance — `GET /rest/server-hardware`
+returns the *complete* object per member rather than a summary, and
+`expand=all` folds in each server's DIMMs, drives, GPUs and PCI devices.
+The one exception is power supplies, which cost a request per server
+(`INVENTORY_ONEVIEW_COLLECT_PSUS`, on by default,
+`INVENTORY_ONEVIEW_PSU_CONCURRENCY` bounding the fan-out).
+
+**Like Intersight, it has never been run against live hardware**, and
+unlike UCS there is nothing that could change that from this repo: HPE's
+60-day OneView trial is a *real appliance*, not a hardware simulator, so
+with no HPE hardware attached it enumerates nothing. `uv run python -m
+tools.verify_oneview` — read-only, writes nothing, logs out — is the
+outstanding action, and `docs/field-test-checklist.md` (part 2) says what
+to run and what to bring back. Its headline answer is whether
+`processorCount * processorCoreCount` is the real core count; the
+highest-consequence one is whether `/rest/server-profiles`' 256 cap is
+per request or per query, because the *name* comes from the profile.
+
 ### What's explicitly NOT done yet (in rough priority order the user has confirmed)
 
-0. **Staleness detection for the Redfish collector.** A CronJob pod is
+0. **Staleness detection**, for every collector rather than only Redfish
+   now that five CronJobs exist. A CronJob pod is
    never scraped by Prometheus, so no collector-side metric can report
    its own absence — the only thing that can answer "40 hosts have been
    failing for two weeks" is the API exposing gauges derived from
    MongoDB's `last_seen_at` (written on every ingest, currently read by
    nothing). Until that lands, staleness is the manual query in
    `docs/test-redfish-standalone-collector.md` §6.
-1. **Dell OpenManage / HPE OneView collectors.** Not started. (Cisco
-   Intersight is done — see above.) Before picking one: research each vendor's *current* API
-   docs directly (don't trust this file's or any older research's
-   specifics without reconfirming) — UCS Manager's build researched
-   Cisco's official XML API guide and cross-checked every attribute name
-   against the actually-installed `ucsmsdk` package source rather than
-   trusting documentation summaries alone; hold the same bar for the
-   next vendor. Testability without real hardware varies a lot by
-   vendor — that mattered enough to be the deciding factor for going
-   UCS-first; check it again before committing to a build order.
+1. **Live-hardware validation of the two unproven collectors.** Every
+   vendor collector is now *written* — Dell (ADR-0020) and HPE
+   (ADR-0022) both shipped, so "build the next vendor collector" is no
+   longer on this list. What is left is proof: `INTERSIGHT` and
+   `ONEVIEW` have never had their field mappings run against real
+   hardware, and UCS's own emulator run found five defects that were
+   invisible without it. `uv run python -m tools.verify_intersight` and
+   `uv run python -m tools.verify_oneview` are the two commands;
+   `docs/field-test-checklist.md` has both, with what to send back.
+   Record what each settles in its ADR.
+
+   **The research bar for any future vendor work is unchanged**, so it
+   is kept here rather than deleted with the item it belonged to:
+   research that vendor's *current* API docs directly, and don't trust
+   this file's or any older research's specifics without reconfirming
+   them. UCS Manager's build read Cisco's official XML API guide and
+   cross-checked every attribute name against the actually-installed
+   `ucsmsdk` package source rather than trusting documentation
+   summaries; OneView's read HPE's API Reference and the `hpeOneView`
+   SDK's source for the four behaviours a hand-rolled client learns the
+   hard way. Hold that bar. Testability without real hardware varies a
+   lot by vendor and was the deciding factor for going UCS-first — two
+   of the four vendors turned out to have no test target at all, which
+   is why this item exists.
 2. **Remaining deployment/CD gaps**, explicitly deferred by the user in
    favor of collectors: CI now builds and publishes both images to GHCR
    on every push to main (`.github/workflows/ci.yml`'s `publish` job,
@@ -361,9 +444,12 @@ for.
    documented as "the platform's problem" but nobody has actually stood
    either up; no alerting rules or dashboards on top of the Prometheus
    metrics that already exist.
-3. **Real authentication** — the release gate, explicitly last. Swaps
-   the current permissive `AuthProvider` for a real one; touches every
-   router.
+3. **Real authentication** — the release gate, explicitly last. There is
+   no permissive `AuthProvider` to swap out (convention 6 above says why
+   an earlier version of this file was wrong about that): what exists is
+   `app.dependencies.get_current_actor` returning a fixed
+   `unauthenticated` `Actor`, so building this means introducing the
+   concept, not replacing one. It touches every router.
 
 ## Key technical facts worth knowing before you change something
 
@@ -412,6 +498,74 @@ non-obvious enough to bite you.
   existed, a sub-resource that 404'd wrote zeros over good data — which
   took a server from CRITICAL to HEALTHY by reporting no drives, and
   logged an audit event saying the drive had recovered.
+- **`Server.unread_fields` says which fields that was**, and directly
+  extends the rule above. It is a list of dotted API paths into the
+  server's own response (`hardware.gpus`, `hardware.storage.drives`,
+  `hardware.power.psus`, `identity.nic_macs`, …) that the *most recent*
+  collection could not read, built by `IngestService._carry_forward`,
+  returned by `GET /api/v1/servers/{id}`. Two properties are load-bearing:
+  it is **recomputed from scratch every ingest and never merged** (a path
+  whose value is no longer `None` would otherwise stay flagged forever),
+  and **"never successfully read" is deliberately not expressible** — the
+  question it answers is about this run. It exists because carrying
+  forward is not enough on a *first* ingest: `Hardware` has no "unknown"
+  state, so an iLO-4 server that reported nothing stored `0` drives and
+  rendered as a confident, real zero.
+- **GPU VRAM comes from a built-in catalog, not from any vendor API.** No
+  management plane this platform collects from reports a GPU's memory
+  size — confirmed against both Cisco SDKs, Cisco's own metrics API,
+  Redfish and OneView — so `app.domain.value_objects.gpu_catalog` ships a
+  table of 30 NVIDIA and AMD datacenter cards
+  (`gpu_models.DEFAULT_GPU_MODELS`) and `IngestService` enriches from it.
+  **`INVENTORY_GPU_MODELS` overrides that table per identifier; it is no
+  longer the only source, and an empty value no longer means "enrich
+  nothing"** — that reversal is `docs/adr/0021-built-in-gpu-catalog-with-
+  model-matching.md`, which supersedes the "deliberately not a hardcoded
+  table" reasoning in `docs/cisco-collectors.md`. Three rules matter if
+  you touch it: a card is matched on a **Cisco PID *or* a normalized
+  model string** (`NVIDIA A100-PCIE-40GB`), because no Redfish or OneView
+  GPU reports a PID at all; **the comparison is equality on that
+  normalized key, never a substring or fuzzy match** (`A10` vs `A100` is
+  one character and 3x the VRAM); and a model that shipped in two
+  capacities (`A100`, `V100`, `H100`, `P100`) has **no bare-name row**, so
+  it matches nothing and keeps `memory_bytes: None` rather than guessing.
+  A value a provider actually read is never overridden. Only add a row
+  whose VRAM you can cite from a vendor datasheet or a Cisco spec sheet.
+- **Every collector reports power supplies now**, so the health engine's
+  `power.psu_count`/`power.failed_psu_count` metrics finally have
+  something to read (they had nothing until 2026-09; a server with a dead
+  PSU reported HEALTHY on power exactly like one with two good ones).
+  Intersight and UCS Manager/Central cover rack units only — a blade's
+  supplies belong to its shared chassis, not to the blade — while
+  `..redfish.mapping.psus_from_supplies` covers Dell and every standalone
+  BMC, and OneView covers HPE with the richest data of the four. Two rules
+  are shared by all of them: **an `Absent` supply is dropped, never
+  counted as failed** (a four-bay chassis with two fitted is not two
+  failed PSUs), and **a PSU's `health` is `UP`/`DOWN`/`DISABLED`/
+  `UNKNOWN`, never a `HealthSeverity`** — a policy against
+  `power.failed_psu_count` compares to `"DOWN"`, not `"FAILED"`. Redfish's
+  `Warning` maps to `UNKNOWN` rather than `DOWN` on purpose: a degraded
+  supply still delivering power has not lost redundancy.
+- **HPE's traps, all of which cost real research** — full detail in
+  `docs/hpe-collectors.md`, the decisions in ADR-0022:
+  - **The name comes from the server profile.** `server-hardware.name` is
+    the enclosure-and-bay location and `serverName` is an OS hostname via
+    HPE's Agentless Management Service — both decoys, the same trap
+    ADR-0009 records for UCS blades named after their chassis slot.
+    Hardware with no assigned profile is **skipped**, counted and logged.
+  - **`processorCoreCount` is per processor**, so `cpu_cores` is
+    `processorCount * processorCoreCount`. Unmultiplied, every two-socket
+    server is half its real core count, silently.
+  - **`memoryMb` is MiB**, and HPE says so inline — no assumption, unlike
+    Intersight's `TotalMemory`.
+  - **`count=-1` means 64, not "all"** on `/rest/server-profiles`, with a
+    256 ceiling and truncation HPE documents without saying whether
+    paging passes it. An explicit `count` is always sent, and a short read
+    logs `oneview.collection_truncated` at ERROR.
+  - **`InsufficientFirmware` is "could not read", not zero.** Every
+    subresource on an iLO-4 server fails that way; only
+    `collectionState == "Collected"` yields data, and everything else —
+    `CollectedStale` included — maps to `None`.
 - **A collector only ingests servers whose name matches
   `INVENTORY_COLLECTOR_NAME_PATTERN`** (`^ocp` in `.env.example` and
   `values.yaml`; empty = collect everything). A vendor manager holds the
@@ -542,29 +696,53 @@ quarterly, or before any release you care about:
 ## Where to continue right now
 
 The most recent user direction was: real vendor collectors first,
-deployment/CD gaps and auth deliberately parked. The natural next steps,
-in the order the user has been steering toward:
+deployment/CD gaps and auth deliberately parked. **Every planned vendor
+collector now exists**, so the phase that direction described is finished
+in code and unfinished in proof. The natural next steps:
 
-1. ~~Validate the UCS Manager collector against UCSPE~~ — **done**, and
-   it found five real defects (see `docs/adr/0009`'s validation
-   sections). What it could *not* settle is still open: the
-   `total_memory` MB assumption (UCSPE reports one synthetic value for
-   every model and contradicts itself elsewhere), a fully *associated*
-   service profile (the emulator's stopped at `config-failure` for want
-   of a boot policy, vNICs and a UUID pool), and the original scope cuts
-   — CPU model string, per-drive storage detail, fabric interconnect
-   identity. Real hardware settles those.
-2. ~~Build the Cisco Intersight collector~~ — **done** (ADR-0017), but
-   **unvalidated against live hardware**, which is a different state from
-   every collector before it. The highest-value next action on it is not
-   more code: it is running `tools/verify_intersight.py` against the real
-   appliance and recording what it settles.
-3. Build the next vendor collector — Dell OpenManage or HPE OneView. Ask
-   the user which one before assuming. Their earlier preference was
-   "easiest to actually test," which favored UCS's real emulator;
-   Intersight was then built with *no* test target at all, so that
-   criterion is no longer the only one in play. Re-evaluate the tradeoff
-   fresh rather than assuming the same research still holds.
-4. Once collectors are further along (or if the user redirects), the
-   deployment/CD and auth gaps above are the rest of what "production
-   and really run" means for this platform.
+1. **Run the two probes against real hardware.** This is the highest-value
+   action on the repo and it is not more code.
+   `uv run python -m tools.verify_intersight` against the on-prem
+   Intersight (the user has one reachable from the air-gapped
+   environment) and `uv run python -m tools.verify_oneview` against the
+   OneView appliance. Both are read-only.
+   `docs/field-test-checklist.md` is the operator-facing version of both
+   errands. Record what each settles in ADR-0017 / ADR-0022 rather than
+   only in a chat reply — a result nobody wrote down is a result the next
+   session re-derives.
+
+   For Intersight the answer to look for is the `TotalMemory` unit and a
+   full `--dry-run` ingest (auth, name resolution and the MiB assumption
+   were confirmed on 2026-09-01; the rest of ADR-0017's UNVERIFIED list
+   was not). For OneView it is the core-count check and whether paging
+   gets past the 256-profile ceiling.
+
+2. **Close the two gaps the collector work left in the UI and the
+   seeder.** `frontend/src/api/sites.ts`'s `SOURCE_PROVIDERS` still
+   offers only `UCS_CENTRAL`/`INTERSIGHT`/`REDFISH_STANDALONE`, so no
+   Dell or HPE server can be filtered for by source — the same class of
+   drift `tests/unit/test_frontend_manager_types.py` was written to catch
+   for `ManagerType`, in a list that guard does not cover. And the
+   fake-data generator's `COLLECTOR_TYPES` seeds four of the five
+   collectors: there is no `OPENMANAGE` shape, so Dell's OME-plus-iDRAC
+   path has no seeded data to look at. Both are small; neither is
+   invisible to an operator.
+
+3. **UCS's own leftovers, still open** and still only settleable on real
+   hardware: the `total_memory` MB assumption (UCSPE reports one
+   synthetic value for every model and contradicts itself elsewhere), a
+   fully *associated* service profile (the emulator's stopped at
+   `config-failure` for want of a boot policy, vNICs and a UUID pool),
+   and ADR-0009's original scope cuts — CPU model string, per-drive
+   storage detail, fabric interconnect identity. A UCS Central dry run on
+   the same trip as step 1 settles the memory question for UCS and
+   Intersight at once, which is why `docs/field-test-checklist.md`
+   already asks for it.
+
+4. **Then the deployment/CD and auth gaps above**, which are the rest of
+   what "production and really run" means for this platform — staleness
+   detection first, since it is item 0 of the not-done list and nothing
+   else answers "40 hosts have been failing for two weeks". Ask the user
+   before assuming this is the next phase; the ordering above is the
+   direction they have been steering toward, not a plan they have signed
+   off on.

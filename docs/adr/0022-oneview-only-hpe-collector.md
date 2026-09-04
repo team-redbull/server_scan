@@ -87,15 +87,23 @@ Per sweep, with `N` servers on the appliance:
 
 **PSUs are collected, on by default, and that is a deliberate exception
 to the cheapness above.** `ProviderServer.psus` was added on 2026-09-01
-and **no provider in this repo has ever populated it** — `IngestService`
-hardcoded `Power(psus=[])`, so the health engine's `power.psu_count` and
-`power.failed_psu_count` metrics have had nothing to read since they were
-written. A server with a dead PSU reported HEALTHY on power exactly like
-one with two good ones. OneView closes that, and closes it better than
-either Cisco collector could: `PowerCapacityWatts` is documented in
-Watts, and `Oem.Hpe.PowerSupplyStatus.State` distinguishes `Failed` from
-`Degraded` from `ACPowerLost` from `OverTemperature`, which maps to real
-health rather than a boolean.
+and was dead on arrival — the health engine's `power.psu_count` and
+`power.failed_psu_count` metrics had nothing to read, so a server with a
+dead PSU reported HEALTHY on power exactly like one with two good ones.
+
+*(Corrected 2026-09-04: an earlier draft of this paragraph claimed no
+provider had ever populated `psus` and that OneView was the first. That
+was already wrong when written. Intersight and UCS Manager/Central had
+populated it for rack units since before this branch, and the Redfish
+mapping's `psus_from_supplies` — which covers Dell and every standalone
+BMC — landed alongside this work. OneView is the fourth source.)*
+
+What OneView adds is a better answer rather than the only one:
+`PowerCapacityWatts` is documented in Watts, and
+`Oem.Hpe.PowerSupplyStatus.State` distinguishes `Failed` from `Degraded`
+from `ACPowerLost` from `OverTemperature`, which maps to real health
+rather than to the UP/DOWN/DISABLED/UNKNOWN reduction every other
+collector performs on a generic vendor rollup.
 
 `INVENTORY_ONEVIEW_COLLECT_PSUS=false` turns it off, and
 `INVENTORY_ONEVIEW_PSU_CONCURRENCY` (default 8) bounds the fan-out. Off
@@ -409,8 +417,10 @@ Ordered by how much damage a wrong guess does.
 ## Consequences
 
 - `--manager-type ONEVIEW` works; `tools/run_collector.py`'s
-  `_PROVIDER_FACTORIES` has an entry and `OPENMANAGE`'s "not implemented"
-  neighbours are down to none.
+  `_PROVIDER_FACTORIES` has an entry, and with it every `ManagerType` now
+  does except `UCS_MANAGER` — whose `NotImplementedError` is a *different*
+  message saying the collector exists and is reached through
+  `UCS_CENTRAL`, not that it is unbuilt.
 - A Helm CronJob ships disabled, on a 4-hour cadence — between Cisco's
   hourly and the BMC-touching collectors' 6-hourly, because this is three
   bulk calls per appliance rather than thousands of requests against
@@ -418,11 +428,11 @@ Ordered by how much damage a wrong guess does.
 - `INVENTORY_ONEVIEW_IP` is one endpoint like every other vendor's, so
   nothing about `EnvConnectionResolver`, the collector Secret or the
   `Manager` projection is special-cased for HPE.
-- This is the first collector to populate `ProviderServer.psus`, which
-  means the health engine's `power.*` metrics start producing verdicts
-  for HPE servers where they produced nothing for anyone before. An
-  estate with a long-dead PSU will see health states change on the first
-  sweep — that is the feature working, not a regression.
+- The health engine's `power.*` metrics start producing verdicts for HPE
+  servers. With the Redfish mapping's `psus_from_supplies` landing in the
+  same range, **every collector this platform has now reports PSUs**, so
+  an estate with a long-dead PSU anywhere will see health states change on
+  the first sweep — that is the feature working, not a regression.
 - The GPU catalog's matching rules changed for every vendor, not only
   HPE. The change only ever widens a match to another spelling of the
   same card, and the capacity check makes the one inexact rule

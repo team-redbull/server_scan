@@ -76,8 +76,10 @@ sense against them.
 
 ```
    Cisco UCS Central ─┐                                    ┌─ Operator (browser)
-   Cisco Intersight ──┼──▶  Server Inventory Platform  ────┤
-   Standalone BMCs ───┘         (this system)              └─ Prometheus (scrape)
+   Cisco Intersight ──┤                                    │
+   Dell OpenManage ───┼──▶  Server Inventory Platform  ────┤
+   HPE OneView ───────┤         (this system)              └─ Prometheus (scrape)
+   Standalone BMCs ───┘
    (Redfish)
 ```
 
@@ -85,6 +87,8 @@ sense against them.
 |---|---|---|
 | Cisco UCS Central + each domain's UCS Manager | in | Registered domains, service profiles, per-server inventory (XML API, `ucscsdk`/`ucsmsdk`) |
 | Cisco Intersight (on-prem appliance) | in | Fleet inventory over an OData REST API, HTTP-Signature signed |
+| Dell OpenManage Enterprise + each server's iDRAC | in | Names, deployment templates and iDRAC addresses from the appliance; measured hardware from each BMC over Redfish (ADR-0020) |
+| HPE OneView (one appliance) | in | Server profiles and complete per-server hardware over its REST API. The **only** HPE source — no iLO/Redfish pass at any generation (ADR-0022) |
 | Standalone BMCs | in | Per-server inventory over DMTF Redfish |
 | Operator | in/out | React admin UI over the REST API |
 | Prometheus | out | `/metrics` |
@@ -168,16 +172,29 @@ ServerInventoryProvider (Protocol)
 | `ucs_central` (+ `ucs_manager` as its engine) | Implemented, validated against a live UCS Central and a UCS Platform Emulator | Central lists domains; each domain's own UCS Manager supplies inventory |
 | `intersight` | Implemented; **field mapping never run against real data** (ADR-0017) | Fleet-wide OData list queries joined in memory |
 | `redfish` | Implemented, validated | One BMC at a time from an inventory file |
+| `openmanage` | Implemented (ADR-0020) | OME says who exists and what it is called; each iDRAC says what it is, over Redfish |
+| `oneview` | Implemented; **never run against a live appliance** (ADR-0022) | Three bulk calls per appliance, `expand=all`; the only HPE source at any iLO generation |
 | `fake` | Implemented | Deterministic dev/CI data through the same port |
-| `openmanage`, `oneview` | **Not implemented** — `_PROVIDER_FACTORIES` raises a clear `NotImplementedError` rather than silently collecting nothing | — |
 
-Two rules of this seam matter more than the rest:
+Every `ManagerType` now has an entry in `_PROVIDER_FACTORIES` except
+`UCS_MANAGER`, whose absence is deliberate rather than pending: it is
+reached through `UCS_CENTRAL`, which discovers each domain's address at
+runtime.
+
+Three rules of this seam matter more than the rest:
 
 1. **`None` means "could not read", and is not `0` or `()`.**
    `IngestService` carries the stored value forward for `None` and
    overwrites for a real value. Collapsing the two once wrote zeros over
    good data and reported a failed drive as recovered.
-2. **A provider never declares a server's site.** It is parsed from the
+2. **What could not be read is recorded, not just carried forward.**
+   `Server.unread_fields` lists the dotted paths (`hardware.gpus`,
+   `hardware.storage.drives`, `identity.nic_macs`, …) the most recent
+   collection returned `None` for, rebuilt from scratch on every ingest
+   and returned by `GET /api/v1/servers/{id}`. Without it a first ingest
+   of an iLO-4 server is indistinguishable from a server with genuinely
+   zero drives — `Hardware` has no "unknown" state of its own.
+3. **A provider never declares a server's site.** It is parsed from the
    server's own name, so a misconfigured manager cannot mislabel
    everything it collects.
 
@@ -187,6 +204,14 @@ React 19 + react-router 8, TanStack Query for server state, TanStack
 Table, Tailwind 4, Vite. Pages: sites overview (landing), inventory,
 server detail (overview/hardware/network/connectivity tabs),
 classification rules, health policies, and an audit history panel.
+
+The sites overview leads with three fleet-wide cards — everything, UPI,
+and Hosted cluster — above the per-site cards, each linking into the
+pre-filtered server list (`/servers?installation_type=UPI`). They are a
+sum over `GET /api/v1/sites`, which carries a `by_installation_type`
+object per site row (`HOSTED_CLUSTER`/`UPI`/`UNCLASSIFIED`, each with the
+same total/health/vendor/maintenance counts a site has) rather than a
+second endpoint.
 
 It holds **no** copy of the site list — it reads that from
 `GET /api/v1/sites`, which is what let ADR-0018 change the site model
@@ -252,8 +277,10 @@ OpenShift namespace
 │      env:     Mongo/Redis URIs from a Secret
 ├── CronJob  collector-ucs-central          (hourly, opt-in)
 ├── CronJob  collector-intersight           (hourly, opt-in)
+├── CronJob  collector-oneview              (4-hourly, opt-in)
+├── CronJob  collector-openmanage           (6-hourly, opt-in)
 ├── CronJob  collector-redfish-standalone   (6-hourly, opt-in, ships suspended)
-│      all three: envFrom the SAME api-config ConfigMap + the collector Secret
+│      all five: envFrom the SAME api-config ConfigMap + the collector Secret
 ├── Secret   <release>-collector-credentials  (rendered from values, or bring your own)
 ├── MongoDB  ─┐  platform-provided, not deployed by this chart
 └── Redis    ─┘
@@ -336,6 +363,10 @@ of it.
 | 0016 | Standalone Redfish collector |
 | 0017 | Intersight collector |
 | 0018 | Sites from configuration — supersedes part of 0011 |
+| 0019 | ty replaces mypy as the type checker |
+| 0020 | Dell: identity from OME, hardware from each iDRAC over Redfish |
+| 0021 | A built-in GPU catalog, matched by model string as well as Cisco PID |
+| 0022 | HPE is collected from OneView only, at every iLO generation |
 
 ---
 
@@ -380,6 +411,7 @@ go stale — treat its date as load-bearing.
 |---|---|
 | **No authentication at all** | Every endpoint is open to anyone who can reach the Route, including all write endpoints. Deliberate and confirmed, but it is the release gate and nothing should go to production without it. |
 | **The Intersight collector's field mapping is mostly still unverified against real data** | Built entirely from the published contract; the DevNet sandbox is offline until ~2027. `tools/verify_intersight.py` against the user's own on-prem tenant (2026-09-01, 19 servers) confirmed auth, name resolution and — the highest-risk item — that `TotalMemory` is MiB as assumed (`docs/adr/0017`'s "first real tenant run"). A full `--dry-run` ingest has not been run yet, and everything else under ADR-0017's UNVERIFIED list (CPU/storage/adapter fields, region handling, clock-skew behaviour) is still contract-only. |
+| **The OneView collector has never touched a live appliance** | Every HPE field mapping comes from HPE's API Reference alone, and there is no OneView equivalent of Cisco's UCS Platform Emulator to close that (the 60-day trial is a real appliance, so with no HPE hardware attached it enumerates nothing). The highest-consequence unknowns are whether `processorCount * processorCoreCount` is the real core count and whether `/rest/server-profiles`' 256 cap is per request or per query — the second would mean an estate over 256 profiles cannot be fully enumerated. `uv run python -m tools.verify_oneview` settles both, is read-only, and is the outstanding action (ADR-0022, "What only a live appliance can settle"). |
 | **No staleness detection** | A CronJob pod is never scraped, so no collector-side metric can report its own absence. Nothing today answers "40 hosts have been failing for two weeks". `last_seen_at` is written on every ingest and read by nothing. This is the top item on the not-done list. |
 
 ### Medium
@@ -400,11 +432,14 @@ go stale — treat its date as load-bearing.
 - A *syntactically valid* typo in `INVENTORY_SITES` (`tvl` for `tlv`)
   cannot be caught at startup — only by looking at the resulting
   inventory. `--dry-run` prints the resolved site per server for this.
-- `INTERSIGHT` and `ONEVIEW` have collectors that have **never run**
-  against live vendor hardware (ADR-0017, ADR-0022); `tools/verify_intersight.py`
-  and `tools/verify_oneview.py` are the outstanding actions on both.
 - Frontend copies of `ManagerType` are hand-maintained (now guarded by a
-  test after they silently drifted).
+  test after they silently drifted). The inventory page's **Source**
+  filter is a separate hand-maintained list that the guard does not
+  cover, and it still offers only `UCS_CENTRAL`/`INTERSIGHT`/
+  `REDFISH_STANDALONE` — `OPENMANAGE` and `ONEVIEW` servers cannot be
+  filtered for.
+- The fake-data generator seeds four of the five collectors; there is no
+  `OPENMANAGE` shape, so Dell's OME-plus-iDRAC path has no seeded data.
 - The repo is mid-migration to the docstring convention (CLAUDE.md
   convention 8); older files still carry the previous inline-comment
   style.
