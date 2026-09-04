@@ -92,13 +92,16 @@ async def test_source_provider_names_the_collector_that_found_each_server(
         with_count=False,
     )
     sources = {s.source_provider for s in page.items}
-    assert sources == {"UCS_CENTRAL", "INTERSIGHT", "REDFISH_STANDALONE"}
+    assert sources == {"UCS_CENTRAL", "INTERSIGHT", "ONEVIEW", "REDFISH_STANDALONE"}
     for server in page.items:
         if server.identity.vendor == Vendor.CISCO:
             # The two Cisco collectors partition the Cisco fleet rather
             # than both claiming it — the same split the real Intersight
             # collector enforces by excluding ManagementMode == UCSM.
             assert server.source_provider in {"UCS_CENTRAL", "INTERSIGHT"}
+        elif server.identity.vendor == Vendor.HP:
+            # OneView owns the ProLiant fleet; nothing else does.
+            assert server.source_provider == "ONEVIEW"
         else:
             assert server.source_provider == "REDFISH_STANDALONE"
 

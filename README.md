@@ -273,18 +273,48 @@ uv run python -m tools.seed_inventory --count 1000 --seed 42
 `--count` defaults to 1000 and `--seed` to 42; the same pair always
 produces the same fleet, field for field.
 
-What you get mirrors the three collectors that exist. Cisco blades
-arrive as `source_provider=UCS_CENTRAL` with Central-rooted DNs,
-service-profile org paths and fabric attachments; Cisco rack units arrive
-as `INTERSIGHT` with `intersight/<moid>` ids, no org path, and GPUs whose
-identity is real but whose telemetry is `None` — the same ceiling the
-real API has; and everything else — Dell, HPE, and `standalone`
-whiteboxes — arrives as `REDFISH_STANDALONE` with `redfish://` addresses
-and fully-populated GPUs. All three filters in the UI therefore have real
-data behind them, and each collector's *absences* are reproduced too,
-because a fixture richer than the real thing hides the gaps worth
-seeing. Names span the estate's real shapes, including a
-deliberate minority carrying no site token, so "Unassigned" is reachable.
+What you get mirrors the four collectors that exist. Cisco blades arrive
+as `source_provider=UCS_CENTRAL` with Central-rooted DNs, service-profile
+org paths and fabric attachments; Cisco rack units arrive as
+`INTERSIGHT` with `intersight/<moid>` ids and no org path; HPE ProLiants
+arrive as `ONEVIEW` with `/rest/server-hardware/<uuid>` ids; and
+everything else — Dell and `standalone` whiteboxes — arrives as
+`REDFISH_STANDALONE` with `redfish://` addresses. Every source filter in
+the UI therefore has real data behind it, and each collector's
+*absences* are reproduced too, because a fixture richer than the real
+thing hides the gaps worth seeing. Names span the estate's real shapes,
+including a deliberate minority carrying no site token, so "Unassigned"
+is reachable.
+
+**What to look at once it's seeded** (`--count 1000 --seed 42`):
+
+* **The sites overview's three fleet cards** read roughly 495 UPI, 349
+  hosted-cluster and 156 unclassified. All three are meant to be
+  non-empty and visibly different — an unclassified server is a real
+  state, not a seeding accident.
+* **GPU VRAM comes from the catalog, not from the fixture.** No vendor
+  API reports a GPU's memory (see
+  `docs/adr/0021-built-in-gpu-catalog-with-model-matching.md`), so no
+  fake server does either: every generated GPU carries
+  `memory_bytes=None` and whatever the UI shows was filled in at ingest
+  by `GpuCatalog`. Cisco-collected servers report a PID
+  (`UCSC-GPU-L40S`), Dell/HPE ones the vendor's model string
+  (`NVIDIA A100-PCIE-40GB`, `AMD Instinct MI300X`), and both match. A
+  minority deliberately carry a card the built-in table does not
+  answer for — a PID it has never been taught (`UCSC-GPU-A100-40`), a
+  genuinely ambiguous `NVIDIA A100` (the A100 shipped in 40GB *and*
+  80GB), an absent `NVIDIA RTX A6000` — and those show the raw
+  identifier with no VRAM. That is the state `INVENTORY_GPU_MODELS`
+  exists to close, and it has to be visible here rather than discovered
+  in production.
+* **HPE spans three ProLiant generations.** Gen11 and Gen10 inventory
+  fully; Gen9 carries an iLO 4, against which every OneView subresource
+  call fails, so those servers come back as identity-only records — the
+  provider reports `None` for drives, GPUs and NICs, never zero or an
+  empty list. (The stored document still shows `0`/`[]` on a *first*
+  ingest: `Hardware` has no "unknown" state, and the `None` contract's
+  job is to stop a later run overwriting good data — see
+  `docs/adr/0016-redfish-standalone-collector.md`.)
 
 **Re-seeding needs an empty database.** Servers correlate on
 `(vendor, serial)`, so seeding a different `--count`/`--seed` (or a fleet
