@@ -51,7 +51,7 @@ export function ServerDetailPage() {
       {data && (
         <>
           <h1 className="mt-4 text-2xl font-semibold">{data.name}</h1>
-          <p className="text-sm text-gray-500">{data.model}</p>
+          <p className="text-sm text-gray-500">{data.model ?? "—"}</p>
 
           <div className="mt-6 border-b border-gray-200 dark:border-gray-700">
             <nav className="-mb-px flex gap-4" aria-label="Server detail tabs">

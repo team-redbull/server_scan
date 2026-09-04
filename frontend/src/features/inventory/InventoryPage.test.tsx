@@ -15,9 +15,17 @@ function makeServer(overrides: Partial<ServerSummary> = {}): ServerSummary {
     site_id: "tlv",
     manager_id: "mgr_ome_tlv_01",
     source_provider: "UCS_CENTRAL",
-    classification: { installation_type: "HOSTED_CLUSTER" },
-    health: { overall: "HEALTHY" },
-    maintenance: { enabled: false },
+    classification: { installation_type: "HOSTED_CLUSTER", matched_rule_id: null },
+    health: {
+      overall: "HEALTHY",
+      cpu: "HEALTHY",
+      memory: "HEALTHY",
+      storage: "HEALTHY",
+      network: "HEALTHY",
+      connectivity: "HEALTHY",
+      power: "HEALTHY",
+    },
+    maintenance: { enabled: false, reason: null },
     connectivity: {
       facts: {
         fabric_paths_total: 2,

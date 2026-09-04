@@ -81,6 +81,10 @@ describe("a GPU field the provider could not read", () => {
         model: "NVIDIA A100 80GB",
         serial: null,
         memory_bytes: null,
+        health: null,
+        pci_address: null,
+        firmware_version: null,
+        memory_type: null,
         temperature_celsius: null,
         power_watts: null,
         ecc_mode_enabled: null,
@@ -98,3 +102,79 @@ describe("a GPU field the provider could not read", () => {
   });
 });
 
+describe("a drive, PSU or GPU the collector reported partially", () => {
+  /** Nothing on the wire distinguishes "unread" from "zero" at field
+   * level, so every one of these must degrade to the tab's dash rather
+   * than to a `0 B`, a blank cell, or an unstyled badge. */
+  it("dashes every unread drive field instead of stating a zero", () => {
+    const hardware = ilo4Hardware();
+    hardware.storage = {
+      total_bytes: 0,
+      drives: [
+        {
+          id: "d1",
+          model: null,
+          serial: null,
+          media_type: "UNKNOWN",
+          capacity_bytes: null,
+          health: null,
+        },
+      ],
+    };
+
+    render(<HardwareTab hardware={hardware} unreadFields={[]} />);
+
+    // Model, serial, capacity and health — four dashes, and no "0 B".
+    expect(screen.getAllByText("—")).toHaveLength(4);
+    expect(screen.queryByText("0 B")).not.toBeInTheDocument();
+  });
+
+  it("shows a PSU's own model, rating and state", () => {
+    // These read `psu.status`/`psu.watts`, which the API has never sent —
+    // every PSU rendered as the literal word "unknown".
+    const hardware = ilo4Hardware();
+    hardware.power = {
+      psus: [
+        { id: "PSU1", model: "800W Platinum", serial: "PSU123", health: "UP", capacity_watts: 800 },
+        { id: "PSU2", model: null, serial: null, health: null, capacity_watts: null },
+      ],
+    };
+
+    render(<HardwareTab hardware={hardware} unreadFields={[]} />);
+
+    expect(screen.getByText(/800W Platinum — 800W/)).toBeInTheDocument();
+    expect(screen.getByText(/PSU2/)).toBeInTheDocument();
+    expect(screen.queryByText("unknown")).not.toBeInTheDocument();
+  });
+
+  it("shows a Cisco health word rather than an unstyled severity badge", () => {
+    // `health` is UP/DOWN on Cisco and HEALTHY/CRITICAL on Redfish. The
+    // severity badge has no class for "UP", so it rendered the word with
+    // no colour at all.
+    const hardware = ilo4Hardware();
+    hardware.gpus = [
+      {
+        vendor: "NVIDIA",
+        model: "UCSX-GPU-T4-16",
+        serial: null,
+        memory_bytes: null,
+        health: "UP",
+        pci_address: null,
+        firmware_version: null,
+        memory_type: null,
+        ecc_mode_enabled: null,
+        correctable_error_count: null,
+        uncorrectable_error_count: null,
+        temperature_celsius: null,
+        power_watts: null,
+      },
+    ];
+
+    render(<HardwareTab hardware={hardware} unreadFields={[]} />);
+
+    // Rendered as the collector's own word, not through the severity
+    // badge, whose colour table has no "UP" key.
+    expect(screen.getByText(/UP/)).toBeInTheDocument();
+    expect(screen.queryByText("UP", { selector: "span.rounded-full" })).not.toBeInTheDocument();
+  });
+});

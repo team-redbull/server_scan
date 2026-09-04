@@ -1,7 +1,8 @@
 import type { ReactNode } from "react";
 
 import { HealthBadge } from "@/components/HealthBadge";
-import type { HardwareInfo } from "@/types/server";
+import { isHealthSeverity } from "@/components/severity";
+import type { ComponentHealth, HardwareInfo } from "@/types/server";
 
 const BYTE_UNITS = ["B", "KB", "MB", "GB", "TB", "PB"] as const;
 
@@ -94,12 +95,14 @@ export function HardwareTab({
                 <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
                   {storage.drives.map((drive) => (
                     <tr key={drive.id}>
-                      <td className="py-1 pr-4">{drive.model}</td>
-                      <td className="py-1 pr-4">{drive.serial}</td>
+                      <td className="py-1 pr-4">{drive.model ?? "—"}</td>
+                      <td className="py-1 pr-4">{drive.serial ?? "—"}</td>
                       <td className="py-1 pr-4">{drive.media_type}</td>
-                      <td className="py-1 pr-4">{formatBytes(drive.capacity_bytes)}</td>
                       <td className="py-1 pr-4">
-                        <HealthBadge severity={drive.health} />
+                        {drive.capacity_bytes != null ? formatBytes(drive.capacity_bytes) : "—"}
+                      </td>
+                      <td className="py-1 pr-4">
+                        <Health value={drive.health} />
                       </td>
                     </tr>
                   ))}
@@ -168,7 +171,7 @@ export function HardwareTab({
                         {gpu.power_watts != null ? `${gpu.power_watts.toFixed(0)}W` : "—"}
                       </td>
                       <td className="py-1 pr-4">
-                        {gpu.health ? <HealthBadge severity={gpu.health} /> : "—"}
+                        <Health value={gpu.health} />
                       </td>
                       <td className="py-1 pr-4">{gpu.firmware_version ?? "—"}</td>
                     </tr>
@@ -191,9 +194,10 @@ export function HardwareTab({
           {power && power.psus.length > 0 ? (
             <ul className="mt-2 list-disc pl-5 text-sm">
               {power.psus.map((psu, index) => (
-                <li key={psu.id ?? `psu-${index}`}>
-                  {psu.status ?? "unknown"}
-                  {psu.watts ? ` — ${psu.watts}W` : ""}
+                <li key={psu.id || `psu-${index}`}>
+                  {psu.model ?? psu.id ?? "—"}
+                  {psu.capacity_watts != null ? ` — ${psu.capacity_watts}W` : ""}{" "}
+                  <Health value={psu.health} />
                 </li>
               ))}
             </ul>
@@ -246,6 +250,19 @@ function Reported({
       {children}
     </Tag>
   );
+}
+
+/**
+ * One component's own reported condition. Badged when it is a severity
+ * this UI can style, shown as the collector's raw word when it is not
+ * (Cisco reports UP/DOWN here, not HEALTHY/CRITICAL), and dashed when the
+ * collector read nothing at all.
+ */
+function Health({ value }: { value: ComponentHealth }) {
+  if (value == null) {
+    return <>—</>;
+  }
+  return isHealthSeverity(value) ? <HealthBadge severity={value} /> : <>{value}</>;
 }
 
 function Stat({

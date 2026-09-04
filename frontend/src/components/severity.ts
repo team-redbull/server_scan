@@ -27,3 +27,16 @@ export const SEVERITY_GLYPH: Record<HealthSeverity, string> = {
   HEALTHY: "●", // filled circle
   UNKNOWN: "○", // hollow circle — no filled reading
 };
+
+/**
+ * Whether a free-form component health string is one this UI can style.
+ *
+ * A drive/GPU/PSU's `health` is normalised by its own collector, and the
+ * two vocabularies do not agree: Redfish and OneView emit `HealthSeverity`
+ * values, Cisco and the Redfish PSU path emit UP/DOWN/DISABLED/UNKNOWN.
+ * Passing the latter to `HealthBadge` indexes the severity table with a
+ * key it does not hold, which loses every colour class silently.
+ */
+export function isHealthSeverity(value: string): value is HealthSeverity {
+  return value in SEVERITY_GLYPH;
+}

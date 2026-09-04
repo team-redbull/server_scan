@@ -6,7 +6,7 @@ import type { HealthSeverity } from "@/types/server";
 
 const SEVERITIES: HealthSeverity[] = ["HEALTHY", "INFO", "WARNING", "CRITICAL", "UNKNOWN"];
 
-const NOT_IN_MAINTENANCE = { enabled: false };
+const NOT_IN_MAINTENANCE = { enabled: false, reason: null };
 
 describe("StateBadge", () => {
   it.each(SEVERITIES)("labels %s in words, not colour alone", (severity) => {
@@ -37,7 +37,7 @@ describe("StateBadge", () => {
     // A critical server someone is actively working on is a different
     // situation from a healthy one in maintenance; the table must not
     // render them the same.
-    render(<StateBadge severity="CRITICAL" maintenance={{ enabled: true }} />);
+    render(<StateBadge severity="CRITICAL" maintenance={{ enabled: true, reason: null }} />);
     expect(screen.getByText("Critical")).toBeInTheDocument();
     expect(screen.getByText("Maint")).toBeInTheDocument();
   });

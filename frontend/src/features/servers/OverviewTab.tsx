@@ -35,10 +35,10 @@ export function OverviewTab({
     <dl className="grid grid-cols-1 gap-x-8 gap-y-4 sm:grid-cols-2">
       <Field label="Name" value={server.name} />
       <Field label="Vendor" value={server.identity?.vendor ?? "unknown"} />
-      <Field label="Model" value={server.model} />
+      <Field label="Model" value={server.model ?? "—"} />
       <Field label="Serial" value={server.identity?.serial ?? "—"} />
-      <Field label="Site" value={server.site_id} />
-      <Field label="Manager" value={server.manager_id} />
+      <Field label="Site" value={server.site_id ?? "—"} />
+      <Field label="Manager" value={server.manager_id ?? "—"} />
       <Field label="Classification" value={<Badge>{server.classification.installation_type}</Badge>} />
       <Field label="Overall health" value={<HealthBadge severity={server.health.overall} />} />
       <Field

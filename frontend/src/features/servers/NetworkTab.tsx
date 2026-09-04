@@ -20,7 +20,7 @@ export function NetworkTab({ network }: { network: NetworkInfo | undefined }) {
              * ping or open, not the scheme, port and Redfish path the
              * collector reported. The full URI is still stored, for the
              * Metal3 `BareMetalHost` round-trip. */}
-            <Stat label="Address" value={bmc.host ?? bmc.address_raw} />
+            <Stat label="Address" value={bmc.host ?? bmc.address_raw ?? "—"} />
             {bmc.mac && <Stat label="MAC" value={bmc.mac} />}
           </dl>
         ) : (
@@ -48,7 +48,7 @@ export function NetworkTab({ network }: { network: NetworkInfo | undefined }) {
                 <tr key={`${iface.name}-${iface.mac}`}>
                   <td className="py-1 pr-4">{iface.name}</td>
                   <td className="py-1 pr-4">{iface.location ?? "—"}</td>
-                  <td className="py-1 pr-4">{iface.mac}</td>
+                  <td className="py-1 pr-4">{iface.mac ?? "—"}</td>
                   <td className="py-1 pr-4">
                     {iface.speed_mbps ? `${iface.speed_mbps} Mbps` : "—"}
                   </td>

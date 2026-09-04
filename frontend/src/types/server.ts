@@ -5,11 +5,17 @@
  * keep that subset honest instead of importing the backend's full internal
  * model.
  *
- * Slice 1 note: `classification` and `health` are mostly UNKNOWN/UNCLASSIFIED
- * placeholders until the classification/health engines land in a later
- * slice. Fields are typed as always-present (matching what the backend
- * contract says it returns today) but the *values* are expected to be
- * placeholder-ish for now — don't build UI that assumes rich data here.
+ * **The one rule that matters here**: FastAPI serialises Python `None` as
+ * JSON `null` and never omits the key (no `response_model_exclude_none`
+ * anywhere in `backend/app`), so a Pydantic field typed `X | None` is
+ * `X | null` on the wire — not `X | undefined`. Declaring one of those
+ * optional-only makes `x !== undefined` look like a sufficient guard, and
+ * `null.toFixed()` then unmounts the page (commit 1a896af). Every field
+ * below is therefore typed from its backend counterpart:
+ *
+ * - `X | null` — the model field is `X | None`. Always sent, may be null.
+ * - `X` — the model field has a non-null default. Always sent, never null.
+ * - `?:` — reserved for keys the API genuinely may not send at all.
  */
 
 /** The three vendors this platform ingests from. There is no "unknown":
@@ -22,10 +28,11 @@ export type Vendor = "dell" | "cisco" | "hp" | "standalone";
  * site token and is surfaced as "Unassigned".
  *
  * Deliberately not a union of the current codes: the closed set is the
- * backend's `SiteCode` enum, and `GET /api/v1/sites` is what tells the UI
- * which codes exist and what each is called. A union here would be a
- * second copy of that list, free to disagree with it — as it did when the
- * sites were renamed and the filter dropdown kept offering the old ones. */
+ * backend's `INVENTORY_SITES` catalog, and `GET /api/v1/sites` is what
+ * tells the UI which codes exist and what each is called. A union here
+ * would be a second copy of that list, free to disagree with it — as it
+ * did when the sites were renamed and the filter dropdown kept offering
+ * the old ones. */
 export type SiteCode = string;
 
 export type HealthSeverity =
@@ -41,22 +48,25 @@ export type InstallationType = "HOSTED_CLUSTER" | "UPI" | "UNCLASSIFIED";
 
 export interface Classification {
   installation_type: InstallationType;
-  matched_rule_id?: string | null;
+  matched_rule_id: string | null;
 }
 
+/** Every category is written on every evaluation (`Health` defaults each
+ * to `UNKNOWN`), so none of these is ever absent or null — `UNKNOWN` is
+ * the "no policy has said anything yet" value. */
 export interface HealthSummary {
   overall: HealthSeverity;
-  cpu?: HealthSeverity;
-  memory?: HealthSeverity;
-  storage?: HealthSeverity;
-  network?: HealthSeverity;
-  connectivity?: HealthSeverity;
-  power?: HealthSeverity;
+  cpu: HealthSeverity;
+  memory: HealthSeverity;
+  storage: HealthSeverity;
+  network: HealthSeverity;
+  connectivity: HealthSeverity;
+  power: HealthSeverity;
 }
 
 export interface MaintenanceState {
   enabled: boolean;
-  reason?: string | null;
+  reason: string | null;
 }
 
 export interface ConnectivityFacts {
@@ -75,9 +85,11 @@ export interface ServerSummary {
   id: string;
   name: string;
   vendor: Vendor;
-  model: string;
+  /** `Server.model` is `str | None` — a BMC that did not report a model
+   * leaves this null rather than empty. */
+  model: string | null;
   site_id: SiteCode | null;
-  manager_id: string;
+  manager_id: string | null;
   /** Which collector produced this record — `REDFISH_STANDALONE`
    * means the machine has no manager and is reached at its own BMC. */
   source_provider: string | null;
@@ -108,22 +120,24 @@ export interface ServerListResponse {
 
 export interface ServerIdentity {
   vendor: Vendor;
-  serial: string;
-  system_uuid?: string | null;
-  nic_macs?: string[];
+  serial: string | null;
+  system_uuid: string | null;
+  nic_macs: string[];
 }
 
 export interface CpuInfo {
   sockets: number;
   cores: number;
   threads: number;
-  model: string;
+  model: string | null;
 }
 
 export interface MemoryModule {
-  slot?: string;
-  size_bytes?: number;
-  speed_mts?: number;
+  slot: string | null;
+  size_bytes: number | null;
+  /** `MemoryModule.speed_mhz` on the backend. This was declared
+   * `speed_mts` here and matched no field the API has ever sent. */
+  speed_mhz: number | null;
 }
 
 export interface MemoryInfo {
@@ -131,13 +145,23 @@ export interface MemoryInfo {
   modules: MemoryModule[];
 }
 
+/** A drive/GPU/PSU's own reported condition, as `str | None` on the
+ * backend and deliberately not narrowed to `HealthSeverity` here: the
+ * vocabulary differs by collector. Redfish and OneView normalise onto
+ * `HealthSeverity` (`health_of`, `_PSU_STATE_HEALTH`), while Cisco and
+ * the Redfish PSU path normalise onto UP/DOWN/DISABLED/UNKNOWN
+ * (`ucs_common.normalize_oper_state`, `redfish.mapping._psu_health`).
+ * Render it through `isHealthSeverity` — a badge keyed on the severity
+ * table alone silently loses its styling for every Cisco value. */
+export type ComponentHealth = string | null;
+
 export interface StorageDrive {
   id: string;
-  model: string;
-  serial: string;
+  model: string | null;
+  serial: string | null;
   media_type: string;
-  capacity_bytes: number;
-  health: HealthSeverity;
+  capacity_bytes: number | null;
+  health: ComponentHealth;
 }
 
 export interface StorageInfo {
@@ -145,30 +169,28 @@ export interface StorageInfo {
   drives: StorageDrive[];
 }
 
-/** Every field a provider could not read comes back as JSON `null`, not
- * as an absent key — the API serialises Python `None`. Declaring these
- * optional-only made `x !== undefined` look like a sufficient guard, and
- * `null.toFixed()` then blanked the whole detail page. */
 export interface GpuInfo {
-  vendor?: string | null;
-  model?: string | null;
-  serial?: string | null;
-  memory_bytes?: number | null;
-  health?: HealthSeverity | null;
-  pci_address?: string | null;
-  firmware_version?: string | null;
-  memory_type?: string | null;
-  ecc_mode_enabled?: boolean | null;
-  correctable_error_count?: number | null;
-  uncorrectable_error_count?: number | null;
-  temperature_celsius?: number | null;
-  power_watts?: number | null;
+  vendor: string | null;
+  model: string | null;
+  serial: string | null;
+  memory_bytes: number | null;
+  health: ComponentHealth;
+  pci_address: string | null;
+  firmware_version: string | null;
+  memory_type: string | null;
+  ecc_mode_enabled: boolean | null;
+  correctable_error_count: number | null;
+  uncorrectable_error_count: number | null;
+  temperature_celsius: number | null;
+  power_watts: number | null;
 }
 
 export interface PsuInfo {
-  id?: string;
-  status?: string;
-  watts?: number;
+  id: string;
+  model: string | null;
+  serial: string | null;
+  health: ComponentHealth;
+  capacity_watts: number | null;
 }
 
 export interface PowerInfo {
@@ -176,33 +198,33 @@ export interface PowerInfo {
 }
 
 export interface HardwareInfo {
-  cpu?: CpuInfo;
-  memory?: MemoryInfo;
-  storage?: StorageInfo;
-  gpus?: GpuInfo[];
-  power?: PowerInfo;
+  cpu: CpuInfo;
+  memory: MemoryInfo;
+  storage: StorageInfo;
+  gpus: GpuInfo[];
+  power: PowerInfo;
 }
 
 export interface BmcInfo {
-  address_raw: string;
-  scheme: string;
-  host: string;
-  port: number;
-  mac?: string | null;
+  address_raw: string | null;
+  scheme: string | null;
+  host: string | null;
+  port: number | null;
+  mac: string | null;
 }
 
 export interface NetworkInterface {
   name: string;
-  mac: string;
-  speed_mbps?: number | null;
+  mac: string | null;
+  speed_mbps: number | null;
   link_state: LinkState;
   /** `controller/port/partition` on Dell (`1/1/1`), the BMC's own raw
-   *  identifier elsewhere. Absent when the BMC places the NIC by nothing. */
-  location?: string | null;
+   *  identifier elsewhere. Null when the BMC places the NIC by nothing. */
+  location: string | null;
 }
 
 export interface NetworkInfo {
-  bmc?: BmcInfo;
+  bmc: BmcInfo;
   interfaces: NetworkInterface[];
 }
 
@@ -215,19 +237,19 @@ export interface NetworkInfo {
  */
 export interface ConnectivityAttachment {
   type: string;
-  provider: string;
+  provider: string | null;
   fabric: string | null;
-  fabric_name?: string | null;
-  fabric_id?: string | null;
-  fabric_model?: string | null;
-  fabric_serial?: string | null;
-  server_interface?: string | null;
-  server_port?: string | null;
-  fabric_port?: string | null;
+  fabric_name: string | null;
+  fabric_id: string | null;
+  fabric_model: string | null;
+  fabric_serial: string | null;
+  server_interface: string | null;
+  server_port: string | null;
+  fabric_port: string | null;
   admin_state: AdminState;
   oper_state: LinkState;
-  speed_mbps?: number | null;
-  last_seen?: string | null;
+  speed_mbps: number | null;
+  last_seen: string | null;
 }
 
 export interface ConnectivityDetail {
@@ -239,25 +261,25 @@ export interface ConnectivityDetail {
 export interface ServerDetail {
   id: string;
   name: string;
-  model: string;
-  identity?: ServerIdentity;
-  hardware?: HardwareInfo;
-  network?: NetworkInfo;
-  connectivity?: ConnectivityDetail;
+  model: string | null;
+  identity: ServerIdentity;
+  hardware: HardwareInfo;
+  network: NetworkInfo;
+  connectivity: ConnectivityDetail;
   classification: Classification;
   health: HealthSummary;
   maintenance: MaintenanceState;
   site_id: SiteCode | null;
-  manager_id: string;
+  manager_id: string | null;
   source_provider: string | null;
   /** Dotted paths into this same response that the most recent collection
    * could not read (`hardware.storage.drives`). The stored value at such
    * a path is either carried over from an earlier run or the model's zero
    * — never a reading from this run, which is why the UI must not present
    * a `0`/`[]` there as fact. */
-  unread_fields?: string[];
-  tags?: string[];
+  unread_fields: string[];
+  tags: string[];
   last_seen_at: string | null;
   updated_at: string;
-  created_at?: string;
+  created_at: string;
 }
