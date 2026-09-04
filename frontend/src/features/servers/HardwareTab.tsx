@@ -150,26 +150,22 @@ export function HardwareTab({
                       <td className="py-1 pr-4">{gpu.model ?? "Unknown model"}</td>
                       <td className="py-1 pr-4">{gpu.serial ?? "—"}</td>
                       <td className="py-1 pr-4">
-                        {gpu.memory_bytes !== undefined ? formatBytes(gpu.memory_bytes) : "—"}
+                        {gpu.memory_bytes != null ? formatBytes(gpu.memory_bytes) : "—"}
                       </td>
                       <td className="py-1 pr-4">{gpu.memory_type ?? "—"}</td>
                       <td className="py-1 pr-4">
-                        {gpu.ecc_mode_enabled === undefined
-                          ? "—"
-                          : gpu.ecc_mode_enabled
-                            ? "On"
-                            : "Off"}
+                        {gpu.ecc_mode_enabled == null ? "—" : gpu.ecc_mode_enabled ? "On" : "Off"}
                       </td>
                       <td className="py-1 pr-4">
                         {gpu.correctable_error_count ?? "—"} / {gpu.uncorrectable_error_count ?? "—"}
                       </td>
                       <td className="py-1 pr-4">
-                        {gpu.temperature_celsius !== undefined
+                        {gpu.temperature_celsius != null
                           ? `${gpu.temperature_celsius.toFixed(0)}°C`
                           : "—"}
                       </td>
                       <td className="py-1 pr-4">
-                        {gpu.power_watts !== undefined ? `${gpu.power_watts.toFixed(0)}W` : "—"}
+                        {gpu.power_watts != null ? `${gpu.power_watts.toFixed(0)}W` : "—"}
                       </td>
                       <td className="py-1 pr-4">
                         {gpu.health ? <HealthBadge severity={gpu.health} /> : "—"}

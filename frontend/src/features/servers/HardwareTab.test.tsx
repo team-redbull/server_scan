@@ -66,3 +66,35 @@ describe("HardwareTab unread fields", () => {
     expect(screen.getByText("No GPUs.")).toBeInTheDocument();
   });
 });
+
+describe("a GPU field the provider could not read", () => {
+  /** The API serialises Python `None` as JSON `null`, never as an absent
+   * key. `x !== undefined` therefore passed for a null and
+   * `null.toFixed()` threw, unmounting the whole detail page — the E2E
+   * suite caught it as "the Hardware tab button does not exist".
+   */
+  it("renders a dash instead of crashing the tab", () => {
+    const hardware = ilo4Hardware();
+    hardware.gpus = [
+      {
+        vendor: "NVIDIA",
+        model: "NVIDIA A100 80GB",
+        serial: null,
+        memory_bytes: null,
+        temperature_celsius: null,
+        power_watts: null,
+        ecc_mode_enabled: null,
+        correctable_error_count: null,
+        uncorrectable_error_count: null,
+      },
+    ];
+
+    render(<HardwareTab hardware={hardware} unreadFields={[]} />);
+
+    expect(screen.getByText("NVIDIA A100 80GB")).toBeInTheDocument();
+    // Every unreadable figure degrades to the same dash rather than to
+    // "NaN", "0" or a thrown TypeError.
+    expect(screen.getAllByText("—").length).toBeGreaterThanOrEqual(6);
+  });
+});
+

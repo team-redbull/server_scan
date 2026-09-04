@@ -145,20 +145,24 @@ export interface StorageInfo {
   drives: StorageDrive[];
 }
 
+/** Every field a provider could not read comes back as JSON `null`, not
+ * as an absent key — the API serialises Python `None`. Declaring these
+ * optional-only made `x !== undefined` look like a sufficient guard, and
+ * `null.toFixed()` then blanked the whole detail page. */
 export interface GpuInfo {
-  vendor?: string;
-  model?: string;
-  serial?: string;
-  memory_bytes?: number;
-  health?: HealthSeverity;
-  pci_address?: string;
-  firmware_version?: string;
-  memory_type?: string;
-  ecc_mode_enabled?: boolean;
-  correctable_error_count?: number;
-  uncorrectable_error_count?: number;
-  temperature_celsius?: number;
-  power_watts?: number;
+  vendor?: string | null;
+  model?: string | null;
+  serial?: string | null;
+  memory_bytes?: number | null;
+  health?: HealthSeverity | null;
+  pci_address?: string | null;
+  firmware_version?: string | null;
+  memory_type?: string | null;
+  ecc_mode_enabled?: boolean | null;
+  correctable_error_count?: number | null;
+  uncorrectable_error_count?: number | null;
+  temperature_celsius?: number | null;
+  power_watts?: number | null;
 }
 
 export interface PsuInfo {
