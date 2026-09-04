@@ -313,3 +313,81 @@ class TestEnrich:
         gpu = {"model": "NVIDIA", "memory_bytes": None}
 
         assert catalog.enrich(gpu) == gpu
+
+
+class TestRebrandedSkuStrings:
+    """HPE OneView reports a GPU as HPE's own *product name*, not the
+    chip's model string, and reports no memory field anywhere — so the
+    catalog is the only source of VRAM for every HPE card. See
+    docs/hpe-collectors.md, "GPUs".
+    """
+
+    @pytest.mark.parametrize(
+        ("reported", "expected_name", "expected_gb"),
+        [
+            # The leading vendor word is HPE's, not the chip vendor's,
+            # and the trailing noun is marketing.
+            ("HPE NVIDIA A100 40GB PCIe Accelerator", "NVIDIA A100 40GB", 40),
+            ("HPE NVIDIA A100 80GB SXM4 Accelerator", "NVIDIA A100 80GB", 80),
+            ("HPE NVIDIA H100 80GB PCIe Accelerator", "NVIDIA H100 80GB", 80),
+            ("HPE NVIDIA H100 NVL 94GB PCIe Accelerator", "NVIDIA H100 NVL 94GB", 94),
+            # A capacity appended to a model the table keys on alone.
+            ("HPE NVIDIA L40S 48GB PCIe Accelerator", "NVIDIA L40S 48GB", 48),
+            ("HPE NVIDIA A30 24GB PCIe Accelerator", "NVIDIA A30 24GB", 24),
+            ("HPE NVIDIA A2 16GB PCIe Accelerator Kit", "NVIDIA A2 16GB", 16),
+            # `T4` + `16GB` must not be read as `T` + `416GB`, which is
+            # why the match works on words rather than the joined key.
+            ("HPE NVIDIA Tesla T4 16GB Computational Accelerator", "NVIDIA T4 16GB", 16),
+        ],
+    )
+    def test_hpe_product_names_match_the_card_they_name(
+        self, reported: str, expected_name: str, expected_gb: int
+    ) -> None:
+        catalog = GpuCatalog.from_spec("")
+
+        enriched = catalog.enrich({"model": reported, "memory_bytes": None})
+
+        assert enriched["model"] == expected_name
+        assert enriched["memory_bytes"] == expected_gb * 1024**3
+
+    def test_a_capacity_that_disagrees_with_the_table_matches_nothing(self) -> None:
+        """The safety property of the `<model> <N>GB` fallback: it is
+        accepted only when N GB is that row's own VRAM.
+
+        HPE sells the A16 as a 64GB card; this table models it as the
+        four 16GB GPUs it carries. Matching on the model alone would
+        report 16GB for a string that says 64, so it matches nothing and
+        an operator adds the row they want with INVENTORY_GPU_MODELS.
+        """
+        catalog = GpuCatalog.from_spec("")
+
+        for wrong in ("HPE NVIDIA A16 64GB PCIe Accelerator", "NVIDIA A10 25GB"):
+            assert catalog.enrich({"model": wrong, "memory_bytes": None})["memory_bytes"] is None
+
+    def test_a_network_adapter_is_not_mistaken_for_a_gpu(self) -> None:
+        """OneView's `Devices` subresource carries NICs and storage
+        controllers in the same shape as GPUs; only `DeviceType` tells
+        them apart, and a stray one must never enrich to a card.
+        """
+        catalog = GpuCatalog.from_spec("")
+        adapter = {"model": "HPE Eth 10Gb 2p 521T Adptr", "memory_bytes": None}
+
+        assert catalog.enrich(adapter) == adapter
+
+    def test_a_string_of_nothing_but_vendor_and_noise_words_matches_nothing(self) -> None:
+        """`_normalize` drops leading vendor words and trailing marketing
+        nouns, so a string made only of those normalizes to `""`.
+
+        That empty key must never find a row. Two things keep it from
+        doing so, and both are load-bearing: `_for_identifier` returns
+        early when the word list is empty, and `_definition` drops empty
+        keys so no row can be keyed on `""` in the first place. Without
+        either, every unrecognizable device name would enrich to whatever
+        row normalized to nothing.
+        """
+        catalog = GpuCatalog.from_spec("")
+
+        assert not [d for d in catalog.definitions if "" in d.keys]
+        for noise in ("NVIDIA GPU", "HPE Graphics Card", "AMD", "GPU", "Accelerator", ""):
+            gpu = {"model": noise, "memory_bytes": None}
+            assert catalog.enrich(gpu) == gpu

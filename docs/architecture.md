@@ -459,11 +459,14 @@ integration that isn't `FakeProvider`. See
   servers named after their chassis slot rather than their service
   profile — which silently defeated both site parsing and
   classification.
-- `OPENMANAGE`/`INTERSIGHT`/`ONEVIEW` have configuration slots but no
-  collector — `tools.run_collector` raises a clear `NotImplementedError`
-  for them rather than silently doing nothing. Intersight reuses the same
-  three settings with different meanings: it signs requests with an API
-  key, so `username` is the API Key ID and `password` the secret key.
+- Every `ManagerType` now has a collector except `UCS_MANAGER`, which
+  deliberately has no entry point of its own (it is reached through
+  `UCS_CENTRAL`); `tools.run_collector` says so in as many words rather
+  than claiming a missing feature. Intersight reuses the same three
+  settings with different meanings: it signs requests with an API key, so
+  `username` is the API Key ID and `password` the secret key. `ONEVIEW` is
+  the first collector to populate a server's power supplies — see
+  `docs/adr/0022-oneview-only-hpe-collector.md`.
 
 ### Standalone Redfish collector (`REDFISH_STANDALONE`)
 

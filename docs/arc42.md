@@ -400,7 +400,9 @@ go stale — treat its date as load-bearing.
 - A *syntactically valid* typo in `INVENTORY_SITES` (`tvl` for `tlv`)
   cannot be caught at startup — only by looking at the resulting
   inventory. `--dry-run` prints the resolved site per server for this.
-- `OPENMANAGE` and `ONEVIEW` have configuration slots and no collector.
+- `INTERSIGHT` and `ONEVIEW` have collectors that have **never run**
+  against live vendor hardware (ADR-0017, ADR-0022); `tools/verify_intersight.py`
+  and `tools/verify_oneview.py` are the outstanding actions on both.
 - Frontend copies of `ManagerType` are hand-maintained (now guarded by a
   test after they silently drifted).
 - The repo is mid-migration to the docstring convention (CLAUDE.md

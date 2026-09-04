@@ -1,0 +1,91 @@
+{{- /*
+The HPE collector: one CronJob against the one OneView appliance.
+
+OneView is the only source for every HPE server, whatever its iLO
+generation — no BMC login, no Redfish pass, no per-generation branch — so
+this pod needs egress to the appliance and nothing else. Three bulk REST
+calls (server profiles, profile templates, and one `expand=all` sweep of
+server hardware) name every server, resolve its template, and carry its
+drive and PCI inventory inline.
+
+The one per-server call is `/powerSupplies`, gated by `collectPsus`: it
+is the difference between roughly 15 requests and roughly one per server,
+and it is what finally populates the health engine's power metrics.
+
+NEVER VALIDATED AGAINST LIVE HPE HARDWARE. Run
+`python3 -m tools.verify_oneview` against the real appliance before
+scheduling this. See docs/adr/0022-oneview-only-hpe-collector.md and
+docs/hpe-collectors.md.
+*/ -}}
+{{- if .Values.collectors.oneview.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ .Release.Name }}-collector-oneview
+  labels:
+    app.kubernetes.io/name: {{ .Release.Name }}-collector-oneview
+    app.kubernetes.io/component: collector
+    app.kubernetes.io/part-of: server-inventory
+spec:
+  schedule: {{ .Values.collectors.oneview.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 5
+  jobTemplate:
+    spec:
+      backoffLimit: {{ .Values.collectors.oneview.backoffLimit }}
+      activeDeadlineSeconds: {{ .Values.collectors.oneview.activeDeadlineSeconds }}
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: collector
+              image: "{{ .Values.backend.image.repository }}:{{ .Values.backend.image.tag }}"
+              imagePullPolicy: {{ .Values.backend.image.pullPolicy }}
+              command: ["python3", "-m", "tools.run_collector", "--manager-type", "ONEVIEW"]
+              env:
+                - name: INVENTORY_ENVIRONMENT
+                  value: production
+                # Which servers this collector may ingest at all, matched
+                # against the server's name — which for HPE lives only on
+                # the server profile. Collector-scoped, so it lives here
+                # rather than in the API ConfigMap this also mounts.
+                - name: INVENTORY_COLLECTOR_NAME_PATTERN
+                  value: {{ .Values.collectors.namePattern | quote }}
+                - name: INVENTORY_ONEVIEW_COLLECT_PSUS
+                  value: {{ .Values.collectors.oneview.collectPsus | quote }}
+                - name: INVENTORY_ONEVIEW_PSU_CONCURRENCY
+                  value: {{ .Values.collectors.oneview.psuConcurrency | quote }}
+                - name: INVENTORY_ONEVIEW_API_VERSION
+                  value: {{ .Values.collectors.oneview.apiVersion | quote }}
+                - name: INVENTORY_ONEVIEW_PAGE_SIZE
+                  value: {{ .Values.collectors.oneview.pageSize | quote }}
+                - name: INVENTORY_ONEVIEW_VERIFY_TLS
+                  value: {{ .Values.collectors.oneview.verifyTls | quote }}
+                - name: INVENTORY_MONGO_URI
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.db.secretName }}
+                      key: mongo-uri
+                - name: INVENTORY_REDIS_URI
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.db.secretName }}
+                      key: redis-uri
+              envFrom:
+                - configMapRef:
+                    name: {{ .Release.Name }}-api-config
+                # Endpoint + login for every vendor, as INVENTORY_* env
+                # vars. `envFrom` a Secret rather than inline `env` so the
+                # passwords aren't readable in the pod spec.
+                - secretRef:
+                    name: {{ .Values.collectors.existingSecret | default (printf "%s-collector-credentials" .Release.Name) }}
+              resources:
+                {{- toYaml .Values.collectors.oneview.resources | nindent 16 }}
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: ["ALL"]
+                readOnlyRootFilesystem: true
+                runAsNonRoot: true
+{{- end }}

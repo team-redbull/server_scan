@@ -74,6 +74,74 @@ than that.
 
 ### New features
 
+- **A server now says which fields its last collection could not read.**
+  `GET /api/v1/servers/{id}` carries a new `unread_fields` list of dotted
+  paths into that same response — `hardware.storage.drives`,
+  `hardware.gpus`, `identity.nic_macs` and so on. A collector that cannot
+  read a subresource has always had its previous value carried forward
+  (or the model's zero, for a server nobody has read yet), which kept the
+  data correct but left the API unable to say the value was not confirmed.
+  An HPE Gen9 whose iLO 4 refuses OneView's subresource calls no longer
+  reports "0 drives, 0 bytes" as fact: the Hardware tab shows **"Not
+  reported"** where the stored value is the zero, and dims a
+  carried-forward value with a tooltip rather than hiding it. The list is
+  recomputed from scratch on every ingest, so a field stops being flagged
+  the moment a run reads it. No configuration, and no existing field
+  changed type — `storage.total_bytes` is still an `int`.
+
+- **HPE servers are collected, through OneView.** Set
+  `INVENTORY_ONEVIEW_IP`/`_USERNAME`/`_PASSWORD` and run
+  `--manager-type ONEVIEW` (Helm: `collectors.oneview.enabled: true`,
+  which schedules a CronJob every 4 hours). OneView is the **only**
+  source for every HPE server whatever its iLO generation — there is no
+  BMC login, no Redfish pass and no per-generation branch, so an iLO 4
+  machine is collected by the same code path as a Gen11. Three bulk
+  calls cover the whole appliance: `GET /rest/server-hardware` returns
+  the complete object per member, and `expand=all` folds in every
+  server's DIMMs, drives and PCI devices.
+- **Power supplies are populated for the first time, on any vendor.**
+  `ProviderServer.psus` has existed since 2026-09-01 and no collector had
+  ever filled it, so the health engine's `power.psu_count` and
+  `power.failed_psu_count` had nothing to read. OneView reports a PSU's
+  rated Watts and an HPE state precise enough to separate `Failed` from
+  `Degraded` from `ACPowerLost`, and those map to real health rather than
+  a boolean. This is the one per-server call the collector makes — the
+  difference between ~15 requests and roughly one per server — so
+  **`INVENTORY_ONEVIEW_COLLECT_PSUS=false`** turns it off (with
+  `INVENTORY_ONEVIEW_PSU_CONCURRENCY`, default 8, bounding the fan-out).
+  Off means every server's `psus` reads as unread and the stored value is
+  carried forward, not erased.
+- **`INVENTORY_ONEVIEW_API_VERSION`** pins the `X-Api-Version` OneView
+  requires on every call. Leave it unset — the default — and the
+  appliance is asked what it supports and clamped to the newest version
+  this collector was written against (8000 / OneView 10.20). Set a number
+  only to roll forward or back after an appliance upgrade moves a field.
+- **`INVENTORY_ONEVIEW_VERIFY_TLS`** (default off, like the Dell BMC
+  setting) and **`INVENTORY_ONEVIEW_PAGE_SIZE`** (default 256, the
+  documented ceiling on `/rest/server-profiles`, where `count=-1` means
+  *64* rather than "all").
+- **`uv run python -m tools.verify_oneview`** — a read-only probe that
+  answers, against a real appliance, the questions this collector could
+  not settle from documentation. Its headline check is whether
+  `processorCount * processorCoreCount` equals the real core count
+  summed from `/processors`; if that disagrees, every server's core count
+  is wrong fleet-wide. It also reports whether paging gets past the
+  256-profile ceiling, whether an iLO-4 server reports any hardware at
+  all, what `mpModel` really contains, which management-processor address
+  is reachable, whether `expand=all` includes power supplies, and whether
+  HPE's GPU product names match the GPU catalog. **Nothing here has ever
+  run against live HPE hardware** — there is no OneView equivalent of
+  Cisco's UCS Platform Emulator — so run this before scheduling the
+  CronJob. See `docs/adr/0022-oneview-only-hpe-collector.md`.
+- **The GPU catalog now recognises HPE's rebranded product names.**
+  OneView reports a card as `"HPE NVIDIA L40S 48GB PCIe Accelerator"`
+  and reports no memory field anywhere, so the catalog is the only
+  source of VRAM for an HPE GPU. Matching now also ignores a leading
+  `HPE`/`HP`, a trailing marketing noun (`Accelerator`, `Kit`, …), a
+  trailing bus word (`PCIe`, `SXM4`), and a trailing capacity where it
+  agrees with the row's own VRAM — a capacity that *disagrees* still
+  matches nothing rather than reporting a wrong number.
+
 - **GPU VRAM is now filled in out of the box, on every vendor, with no
   configuration.** The platform ships a built-in table of 30 NVIDIA and
   AMD datacenter GPUs (V100 through H200 and B200, T4, the A- and

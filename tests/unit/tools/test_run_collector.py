@@ -99,24 +99,21 @@ class FakeCredentialResolver:
 
 
 class TestBuildProvider:
-    @pytest.mark.parametrize(
-        "manager_type",
-        [ManagerType.ONEVIEW],
-    )
-    async def test_unimplemented_vendors_fail_loudly(self, manager_type: ManagerType) -> None:
-        """A missing collector must be an explicit error, never a silent
-        no-op that looks like a manager with zero servers.
-
-        OPENMANAGE is not parametrized here any more — it has a real
-        collector (`_openmanage_provider`) since the Dell OpenManage
-        collector landed; see `test_builds_a_provider_for_openmanage`.
+    async def test_builds_a_provider_for_oneview(self) -> None:
+        """The HPE entry point: one appliance, one login, and no BMC
+        login at all — OneView is the only source for every HPE server
+        whatever its iLO generation. See
+        docs/adr/0022-oneview-only-hpe-collector.md.
         """
-        with pytest.raises(NotImplementedError, match="No collector implemented"):
-            await _build_provider(
-                _manager(type=manager_type),
-                credential_resolver=FakeCredentialResolver(),
-                timeout_seconds=5.0,
-            )
+        resolver = FakeCredentialResolver()
+        provider = await _build_provider(
+            _manager(type=ManagerType.ONEVIEW, endpoint="ov-1.example.net"),
+            credential_resolver=resolver,
+            timeout_seconds=5.0,
+            settings=_settings(),
+        )
+        assert provider.provider_type == ManagerType.ONEVIEW.value
+        assert resolver.resolved == [ManagerType.ONEVIEW]
 
     async def test_builds_a_provider_for_openmanage(self) -> None:
         """The Dell entry point: one OME appliance covers the whole Dell
@@ -351,9 +348,14 @@ class TestRunOneManager:
         )
         assert result is None
 
-    async def test_an_unimplemented_vendor_is_reported_as_a_failure(self) -> None:
+    async def test_a_manager_type_with_no_entry_point_is_reported_as_a_failure(self) -> None:
+        """Every `ManagerType` now has a collector except `UCS_MANAGER`,
+        which deliberately has no entry point of its own. Pointing the
+        tool at it must fail loudly rather than look like a manager with
+        zero servers.
+        """
         result = await _run_one_manager(
-            _manager(type=ManagerType.ONEVIEW),
+            _manager(type=ManagerType.UCS_MANAGER),
             ingest_service=FakeIngestService(),  # type: ignore[arg-type]
             credential_resolver=FakeCredentialResolver(),  # type: ignore[arg-type]
             timeout_seconds=5.0,

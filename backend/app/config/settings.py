@@ -168,9 +168,51 @@ class Settings(BaseSettings):
     ucs_central_username: str = ""
     ucs_central_password: str = ""
 
+    # One appliance, exactly like every other vendor here. HPE caps an
+    # appliance at 2500 servers (1024 off ESXi), which this estate is
+    # well inside; a larger one would need a second endpoint, and
+    # docs/hpe-collectors.md records that rather than the code
+    # anticipating it.
     oneview_ip: str = ""
     oneview_username: str = ""
     oneview_password: str = ""
+
+    # `X-Api-Version`, which OneView requires on every call. 0 discovers
+    # it from each appliance's unauthenticated `GET /rest/version` and
+    # clamps it to the newest version this mapping was written against
+    # (`..providers.oneview.client.MAX_TESTED_API_VERSION`). Set a number
+    # only to pin or roll back after an appliance upgrade moves a field.
+    oneview_api_version: int = 0
+
+    # Off for the same reason `ome_bmc_verify_tls` is: an appliance in an
+    # air-gapped estate ships a self-signed certificate. Turn it on where
+    # a trusted chain exists — that is the scalable answer.
+    oneview_verify_tls: bool = False
+
+    # Explicit `count` on every collection GET. 256 is the documented
+    # hard ceiling on /rest/server-profiles, and `count=-1` there means
+    # *64*, not "all" — which is the single most likely way to ship a
+    # collector that silently sees a fraction of the estate.
+    oneview_page_size: int = 256
+
+    # Power supplies are the one thing OneView will not hand over in the
+    # bulk `expand=all` sweep, so collecting them costs one call per
+    # server — the difference between a ~15-request run and a ~2500-one.
+    # On by default anyway: no provider has ever populated
+    # `ProviderServer.psus`, while the health engine has carried
+    # `power.psu_count`/`power.failed_psu_count` the whole time, and
+    # OneView reports a PSU's state precisely enough to feed them
+    # (`Failed`/`Degraded`/`ACPowerLost`). Turn it off for an appliance
+    # that struggles with the fan-out; every server's `psus` then reads
+    # as unread and ingest carries the stored value forward.
+    oneview_collect_psus: bool = True
+
+    # How many of those per-server calls run at once. HPE documents no
+    # rate limit for OneView at all, and one appliance is a single point
+    # of failure for up to 2500 servers, so this stays conservative —
+    # ADR-0016's "embedded management hardware degrades when polled"
+    # warning applies to the appliance too.
+    oneview_psu_concurrency: int = 8
 
     ome_ip: str = ""
     ome_username: str = ""

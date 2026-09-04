@@ -60,6 +60,7 @@ from app.infrastructure.mongodb.manager_repository import MongoManagerRepository
 from app.infrastructure.mongodb.server_repository import MongoServerRepository
 from app.infrastructure.mongodb.site_repository import MongoSiteRepository
 from app.infrastructure.providers.intersight.provider import IntersightProvider
+from app.infrastructure.providers.oneview.provider import OneViewProvider
 from app.infrastructure.providers.openmanage.provider import OpenManageProvider
 from app.infrastructure.providers.redfish.provider import RedfishStandaloneProvider
 from app.infrastructure.providers.redfish.targets import (
@@ -195,10 +196,10 @@ def _ucs_central_provider(
     )
 
 
-# One entry per manager type this tool can be pointed at. A missing entry
-# is a real gap (Intersight, OneView), not an oversight: `_build_provider`
-# raises a clear "not implemented yet" for any `manager.type` without one,
-# rather than silently skipping that manager.
+# One entry per manager type this tool can be pointed at. Every type now
+# has one except UCS_MANAGER, whose absence is deliberate and explained
+# below; a future type without one gets a clear "not implemented yet"
+# from `_build_provider` rather than being silently skipped.
 #
 # Cisco has exactly one entry point, and it is UCS_CENTRAL:
 #
@@ -298,6 +299,38 @@ def _intersight_provider(
     )
 
 
+def _oneview_provider(
+    *,
+    manager: Manager,
+    credentials: ManagerConnection,
+    timeout_seconds: float,
+    settings: Settings,
+) -> ServerInventoryProvider:
+    """The HPE collector — OneView for every server, whatever its iLO.
+
+    One endpoint and one login, like every other vendor here. There is
+    no BMC login and no Redfish pass: a deliberate decision for a mixed
+    iLO 4/5/6 fleet, recorded in
+    docs/adr/0022-oneview-only-hpe-collector.md.
+    """
+    return OneViewProvider(
+        manager=manager,
+        credentials=credentials,
+        timeout_seconds=timeout_seconds,
+        # Applied to the *profile* name, which is the only place a HPE
+        # server's operator-assigned name exists. Still only an
+        # efficiency gate; `_NameFilteredProvider` remains authoritative
+        # — but it does decide which servers cost a `/powerSupplies`
+        # call, which is the one per-server cost this collector has.
+        name_pattern=settings.collector_name_pattern,
+        page_size=settings.oneview_page_size,
+        collect_psus=settings.oneview_collect_psus,
+        psu_concurrency=settings.oneview_psu_concurrency,
+        api_version=settings.oneview_api_version,
+        verify_tls=settings.oneview_verify_tls,
+    )
+
+
 def _optional_login(settings: Settings, manager_type: ManagerType) -> tuple[str, str] | None:
     """A type's fleet-wide login, or None when it has none configured.
 
@@ -337,6 +370,11 @@ _PROVIDER_FACTORIES: dict[ManagerType, Callable[..., ServerInventoryProvider]] =
     # `INVENTORY_COLLECTOR_NAME_PATTERN` exists to filter. See
     # docs/adr/0017-intersight-collector.md.
     ManagerType.INTERSIGHT: _intersight_provider,
+    # ONEVIEW is ordinary: one endpoint, one login, and the name
+    # pattern applies, so it is in neither `_ENDPOINTLESS_TYPES` nor
+    # `_UNFILTERED_TYPES`. See
+    # docs/adr/0022-oneview-only-hpe-collector.md.
+    ManagerType.ONEVIEW: _oneview_provider,
 }
 
 

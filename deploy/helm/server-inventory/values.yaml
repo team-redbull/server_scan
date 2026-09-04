@@ -261,11 +261,63 @@ collectors:
   # CIMC over Redfish is a different protocol to a different endpoint that
   # knows nothing about domains or service profiles.
 
-  # HPE OneView. No collector yet.
+  # HPE — OneView, and only OneView.
+  #
+  # One collection standard for every HP server whatever its iLO
+  # generation: no BMC login, no Redfish pass, no per-generation branch.
+  # That is a deliberate decision for a mixed iLO 4/5/6 estate; what it
+  # costs on Gen10/Gen11 is in
+  # docs/adr/0022-oneview-only-hpe-collector.md.
+  #
+  # One appliance, one endpoint, like every other vendor. HPE caps an
+  # appliance at 2500 servers (1024 off ESXi) — documented in
+  # docs/hpe-collectors.md, not coded around.
+  #
+  # NEVER VALIDATED AGAINST LIVE HPE HARDWARE. There is no OneView
+  # equivalent of Cisco's UCS Platform Emulator, so every field mapping
+  # comes from HPE's API Reference alone. Run
+  # `python3 -m tools.verify_oneview` against the real appliance before
+  # enabling this.
   oneview:
+    enabled: false
     ip: ""
     username: ""
     password: ""
+
+    # Power supplies are the only thing OneView will not return in the
+    # bulk sweep, so they cost one request per server. On by default:
+    # nothing in this platform has ever populated a server's PSUs, and
+    # the health engine's power.* metrics have had nothing to read.
+    collectPsus: true
+    psuConcurrency: 8
+
+    # `X-Api-Version`. 0 discovers it per appliance and clamps it to the
+    # newest version this collector was written against (8000 / OneView
+    # 10.20). Set a number only to pin or roll back.
+    apiVersion: 0
+
+    # Explicit `count` on every collection GET. 256 is the documented
+    # ceiling on /rest/server-profiles, where `count=-1` means *64*.
+    pageSize: 256
+
+    # Appliances ship a self-signed certificate in an air-gapped estate.
+    verifyTls: false
+
+    # Every 4 hours. Between Cisco's hourly cadence and the BMC-touching
+    # collectors' 6-hourly one: this is three bulk calls per appliance,
+    # not thousands of requests against embedded hardware.
+    schedule: "0 */4 * * *"
+    backoffLimit: 1
+    activeDeadlineSeconds: 3600
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        # The `expand=all` sweep inlines each server's drive and PCI
+        # inventory, and a page of 25 of those is the largest single
+        # response this collector handles.
+        memory: 1Gi
 
   # Dell — OME discovers, Redfish collects.
   #

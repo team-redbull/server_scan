@@ -98,11 +98,14 @@ shape; `templates/collector-credentials-secret.yaml` is the full list.
 `env` values to anyone who can read workloads in the namespace, while a
 `secretRef` shows only the reference.
 
-`UCS_CENTRAL` is the only manager type with a CronJob, and it covers the
-whole Cisco fleet — every domain registered with Central, read through
-that domain's own UCS Manager. `OPENMANAGE`, `INTERSIGHT` and `ONEVIEW`
-have configuration slots but no provider — add the CronJob template
-together with that vendor's `ServerInventoryProvider`.
+`UCS_CENTRAL` covers the whole Cisco fleet — every domain registered with
+Central, read through that domain's own UCS Manager. `OPENMANAGE`,
+`INTERSIGHT`, `ONEVIEW` and `REDFISH_STANDALONE` each have a CronJob of
+their own, all shipped disabled.
+
+`ONEVIEW` is one appliance like the rest, and it is the only collector
+that populates a server's power supplies — `collectors.oneview.collectPsus`
+buys that with one request per server.
 
 Note that Intersight's three fields mean something different: it signs
 requests with an API key rather than logging in, so `username` is the API

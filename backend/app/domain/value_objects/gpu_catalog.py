@@ -40,19 +40,41 @@ from app.domain.value_objects.gpu_models import DEFAULT_GPU_MODELS
 
 _SEPARATORS = re.compile(r"[^A-Za-z0-9]+")
 
-_VENDOR_PREFIXES = frozenset({"NVIDIA", "AMD", "INTEL", "TESLA", "QUADRO"})
+_VENDOR_PREFIXES = frozenset({"HPE", "HP", "NVIDIA", "AMD", "INTEL", "TESLA", "QUADRO"})
+
+# Marketing nouns that trail a rebranded SKU string and carry no
+# identity. HPE reports a GPU as its own product name — the shape
+# "HPE NVIDIA A100 40GB PCIe Accelerator" — where Cisco reports a bare
+# PID and a BMC reports the chip's own model. Dropped from the end only,
+# and the result is still compared for equality, so this can never widen
+# a match beyond a spelling of the same card.
+_TRAILING_NOISE = frozenset(
+    {
+        "ACCELERATOR",
+        "ACCELERATORS",
+        "COMPUTATIONAL",
+        "GRAPHICS",
+        "MODULE",
+        "ADAPTER",
+        "ADPTR",
+        "CARD",
+        "KIT",
+        "GPU",
+    }
+)
 
 
 def _normalize(identifier: str) -> str:
     """
     Reduce a PID or model string to the key both sides of a match share.
 
-    Uppercases, drops leading vendor and brand words, and removes every
-    separator, so the spellings vendors actually use for one card
-    (`A100-PCIE-40GB`, `A100 PCIe 40GB`, `NVIDIA A100 PCIe 40GB`)
-    collapse to a single key. Deliberately nothing more: the result is
-    compared for equality, never as a substring, so `A10` can never match
-    `A100`.
+    Uppercases, drops leading vendor and brand words and trailing
+    marketing nouns, and removes every separator, so the spellings
+    vendors actually use for one card (`A100-PCIE-40GB`,
+    `A100 PCIe 40GB`, `NVIDIA A100 PCIe 40GB`,
+    `HPE NVIDIA A100 40GB PCIe Accelerator`) collapse to a single key.
+    Deliberately nothing more: the result is compared for equality, never
+    as a substring, so `A10` can never match `A100`.
 
     Args:
         identifier (str): A Cisco PID or a vendor-reported model string.
@@ -61,10 +83,45 @@ def _normalize(identifier: str) -> str:
         str: The normalized key, or `""` for a string that is nothing but
             vendor words and punctuation — which matches nothing.
     """
+    return "".join(_words(identifier))
+
+
+def _words(identifier: str) -> list[str]:
+    """
+    Split an identifier into its meaningful words.
+
+    Uppercases, splits on every separator, then drops leading vendor and
+    brand words and trailing marketing nouns. Kept separate from
+    `_normalize` because `GpuCatalog._for_identifier` needs the words
+    themselves: `"T4 16GB"` and `"T416GB"` join to the same string, and
+    only the word list can tell `T4` + `16GB` from `T` + `416GB`.
+
+    Args:
+        identifier (str): A Cisco PID or a vendor-reported model string.
+
+    Returns:
+        list[str]: The remaining words, in order.
+    """
     words = [word for word in _SEPARATORS.split(identifier.upper()) if word]
     while words and words[0] in _VENDOR_PREFIXES:
         words.pop(0)
-    return "".join(words)
+    while words and words[-1] in _TRAILING_NOISE:
+        words.pop()
+    return words
+
+
+# Bus/form-factor words that trail a rebranded SKU string. Dropped only
+# as a *lookup* fallback, never from a table key: `"H100 PCIe"` is a real
+# table key and must keep matching that exact spelling, while HPE's
+# `"H100 80GB PCIe"` has to fall back to the table's `"H100 80GB"`.
+_FORM_FACTOR_WORDS = frozenset({"PCIE", "SXM", "SXM2", "SXM4", "SXM5", "OAM"})
+
+# A trailing capacity word, e.g. the `48GB` of `L40S 48GB PCIe`. HPE
+# names a card by its model *and* its capacity where the table is keyed
+# on the model alone; matching the two is only safe when the capacity
+# agrees, which `_for_identifier` checks against the row's own VRAM
+# rather than assuming.
+_CAPACITY_WORD = re.compile(r"(\d+)GB")
 
 
 class GpuCatalogConfigurationError(ValueError):
@@ -269,6 +326,15 @@ class GpuCatalog:
         """
         Look up one PID or model string.
 
+        Tried in order: the normalized string itself; the same string
+        with a trailing bus/form-factor word removed; and finally a
+        `<model><N>GB` spelling against a row keyed on the bare model,
+        which is accepted only when N GB equals that row's known VRAM.
+        The three exist because a vendor's own product name is not the
+        chip's model string — HPE reports
+        `"HPE NVIDIA L40S 48GB PCIe Accelerator"` where a BMC reports
+        `"NVIDIA L40S"`. See docs/hpe-collectors.md, "GPUs".
+
         Args:
             identifier (str): The PID or model as a provider reported it.
 
@@ -277,11 +343,33 @@ class GpuCatalog:
                 Configured entries come first, so one always wins over
                 the built-in row it overrides.
         """
-        key = _normalize(identifier)
-        if not key:
+        words = _words(identifier)
+        if not words:
             return None
+        candidates = ["".join(words)]
+        if words[-1] in _FORM_FACTOR_WORDS:
+            words = words[:-1]
+            candidates.append("".join(words))
+        for candidate in candidates:
+            for definition in self.definitions:
+                if candidate in definition.keys:
+                    return definition
+
+        # Last resort, and the only inexact one: a `<model> <N>GB`
+        # spelling against a row keyed on the bare model. Accepted only
+        # when N GB is that row's own VRAM, so a mismatched capacity
+        # (HPE's 64GB A16 card, which this table models as four 16GB
+        # GPUs) correctly finds nothing instead of reporting a wrong
+        # number.
+        capacity = _CAPACITY_WORD.fullmatch(words[-1]) if words else None
+        if capacity is None:
+            return None
+        base = "".join(words[:-1])
+        if not base:
+            return None
+        wanted = int(capacity.group(1)) * 1024**3
         for definition in self.definitions:
-            if key in definition.keys:
+            if base in definition.keys and definition.memory_bytes == wanted:
                 return definition
         return None
 
