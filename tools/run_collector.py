@@ -778,8 +778,7 @@ async def _dry_run_one_manager(
             speed = f"  {nic.speed_mbps}mbps" if nic.speed_mbps else ""
             location = f"  [{nic.location}]" if nic.location else ""
             print(
-                f"        nic {nic.name}{location}  mac={nic.mac or '—'}"
-                f"  {nic.link_state}{speed}"
+                f"        nic {nic.name}{location}  mac={nic.mac or '—'}  {nic.link_state}{speed}"
             )
         for drive in ps.storage_drives or ():
             capacity_bytes = drive.get("capacity_bytes")

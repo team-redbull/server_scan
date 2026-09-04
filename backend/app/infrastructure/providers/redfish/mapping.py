@@ -599,7 +599,9 @@ def _psu_health(supply: dict[str, Any]) -> str:
     return _PSU_STATE.get(state, "UNKNOWN")
 
 
-def psus_from_supplies(supplies: list[dict[str, Any]] | None) -> tuple[dict[str, object], ...] | None:
+def psus_from_supplies(
+    supplies: list[dict[str, Any]] | None,
+) -> tuple[dict[str, object], ...] | None:
     """
     Map a chassis's power supplies onto the platform's PSU shape.
 
@@ -632,9 +634,7 @@ def psus_from_supplies(supplies: list[dict[str, Any]] | None) -> tuple[dict[str,
         status = status if isinstance(status, dict) else {}
         psus.append(
             {
-                "id": str(
-                    supply.get("MemberId") or supply.get("Id") or supply.get("Name") or ""
-                )
+                "id": str(supply.get("MemberId") or supply.get("Id") or supply.get("Name") or "")
                 or None,
                 "model": supply.get("Model") or None,
                 "serial": supply.get("SerialNumber") or None,
@@ -642,9 +642,7 @@ def psus_from_supplies(supplies: list[dict[str, Any]] | None) -> tuple[dict[str,
                 "capacity_watts": _as_int(
                     supply.get("PowerCapacityWatts") or supply.get("CapacityWatts")
                 ),
-                "redfish_status": (
-                    f"{status.get('Health') or '—'}/{status.get('State') or '—'}"
-                ),
+                "redfish_status": (f"{status.get('Health') or '—'}/{status.get('State') or '—'}"),
             }
         )
     return tuple(psus)
