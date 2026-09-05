@@ -23,6 +23,16 @@ test.describe("Rules & Policies", () => {
     await expect(page.locator("table").nth(1).locator("tbody tr")).not.toHaveCount(0);
   });
 
+  test("shows each rule's regex, which is what makes the page useful", async ({ page }) => {
+    await page.goto("/rules");
+    await expect(page.getByRole("heading", { name: "Classification rules" })).toBeVisible();
+
+    // The seeded system rules match on a hostname pattern; without the
+    // pattern on screen the page cannot say why a server was classified.
+    const firstRow = page.locator("table").first().locator("tbody tr").first();
+    await expect(firstRow.locator("code")).toContainText("name ~");
+  });
+
   test("offers nothing to click that would change the configuration", async ({ page }) => {
     await page.goto("/rules");
     await expect(page.getByRole("heading", { name: "Health policies" })).toBeVisible();

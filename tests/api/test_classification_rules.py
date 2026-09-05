@@ -1,10 +1,16 @@
 """API tests for `/api/v1/classification-rules`, against a real running
-app (lifespan included) and the live dev Mongo stack. Test data (both
-rules and servers used for `preview`) is inserted directly via the Mongo
-repositories — never through the fake generator — to keep these tests
-focused on the HTTP/validation contract, not ingestion. Same
-`httpx.AsyncClient` + `ASGITransport` + lifespan pattern as
-`tests/api/test_servers.py`.
+app (lifespan included) and the live dev Mongo stack.
+
+**Read-only endpoints only, and that is the contract under test.** Rules
+ship with the platform and are seeded at startup; the create, update,
+delete and preview endpoints were removed, because a rule added in one
+estate and not another makes two installations classify the same server
+differently. The last test here is the guard that they stay removed.
+
+Test data is inserted directly via the Mongo repositories — never through
+the fake generator — to keep these focused on the HTTP contract rather
+than ingestion. Same `httpx.AsyncClient` + `ASGITransport` + lifespan
+pattern as `tests/api/test_servers.py`.
 """
 
 from __future__ import annotations
@@ -107,291 +113,104 @@ async def app_context() -> AsyncIterator[
             await mongo.db[name].delete_many({})
 
 
-# --- CRUD ---
+# --- Reads ---
 
 
-async def test_create_rule_returns_201_with_server_assigned_fields(
+async def test_list_returns_every_rule(
     app_context: tuple[AsyncClient, MongoClassificationRuleRepository, MongoServerRepository],
 ) -> None:
-    client, _rule_repo, _server_repo = app_context
-    payload = {
-        "name": "create-test-rule",
-        "installation_type": "HOSTED_CLUSTER",
-        "field": "name",
-        "pattern": "^ocp-.*",
-        "source": "GLOBAL_CUSTOM",
-        "priority": 200,
-    }
+    """The Rules page's only query."""
+    client, rule_repo, _ = app_context
+    await rule_repo.upsert(_make_rule("alpha"))
+    await rule_repo.upsert(_make_rule("beta", enabled=False))
 
-    resp = await client.post("/api/v1/classification-rules", json=payload)
+    resp = await client.get("/api/v1/classification-rules")
 
-    assert resp.status_code == 201
-    body = resp.json()
-    assert body["name"] == "create-test-rule"
-    assert body["system"] is False
-    assert body["revision"] == 1
-    assert body["id"].startswith("crul_")
-    assert body["stats"] == {
-        "match_count": 0,
-        "last_matched_at": None,
-        "timeout_count": 0,
-        "quarantined": False,
-    }
+    assert resp.status_code == 200
+    assert {item["name"] for item in resp.json()["items"]} == {"alpha", "beta"}
 
 
-async def test_get_rule_returns_created_rule(
+async def test_list_exposes_the_pattern_and_the_field_it_matches(
     app_context: tuple[AsyncClient, MongoClassificationRuleRepository, MongoServerRepository],
 ) -> None:
-    client, rule_repo, _server_repo = app_context
-    rule = _make_rule("get-test-rule")
-    await rule_repo.upsert(rule)
+    """Without these a listed rule is a name and a verdict with nothing
+    connecting them, which tells an operator nothing about why a server
+    was classified the way it was.
+    """
+    client, rule_repo, _ = app_context
+    await rule_repo.upsert(_make_rule("alpha", pattern=r"^ocp4-hypershift-"))
+
+    item = (await client.get("/api/v1/classification-rules")).json()["items"][0]
+
+    assert item["field"] == "name"
+    assert item["pattern"] == r"^ocp4-hypershift-"
+    assert item["flags"]["ignore_case"] is True
+
+
+async def test_list_filters_by_enabled(
+    app_context: tuple[AsyncClient, MongoClassificationRuleRepository, MongoServerRepository],
+) -> None:
+    client, rule_repo, _ = app_context
+    await rule_repo.upsert(_make_rule("on"))
+    await rule_repo.upsert(_make_rule("off", enabled=False))
+
+    enabled = (await client.get("/api/v1/classification-rules?enabled=true")).json()
+    disabled = (await client.get("/api/v1/classification-rules?enabled=false")).json()
+
+    assert [i["name"] for i in enabled["items"]] == ["on"]
+    assert [i["name"] for i in disabled["items"]] == ["off"]
+
+
+async def test_get_returns_one_rule(
+    app_context: tuple[AsyncClient, MongoClassificationRuleRepository, MongoServerRepository],
+) -> None:
+    client, rule_repo, _ = app_context
+    rule = await rule_repo.upsert(_make_rule("alpha"))
 
     resp = await client.get(f"/api/v1/classification-rules/{rule.id}")
 
     assert resp.status_code == 200
-    assert resp.json()["name"] == "get-test-rule"
+    assert resp.json()["name"] == "alpha"
 
 
-async def test_get_rule_404_for_missing(
+async def test_get_404_for_missing(
     app_context: tuple[AsyncClient, MongoClassificationRuleRepository, MongoServerRepository],
 ) -> None:
-    client, _rule_repo, _server_repo = app_context
+    client, _, _ = app_context
 
-    resp = await client.get("/api/v1/classification-rules/crul_does_not_exist")
-
-    assert resp.status_code == 404
-    assert resp.json()["code"] == "NOT_FOUND"
+    assert (await client.get("/api/v1/classification-rules/nope")).status_code == 404
 
 
-async def test_list_rules_filters_by_enabled(
+# --- The write surface is gone, and stays gone ---
+
+
+async def test_no_endpoint_can_change_a_rule(
     app_context: tuple[AsyncClient, MongoClassificationRuleRepository, MongoServerRepository],
 ) -> None:
-    client, rule_repo, _server_repo = app_context
-    await rule_repo.upsert(_make_rule("enabled-one", enabled=True))
-    await rule_repo.upsert(_make_rule("disabled-one", enabled=False))
+    """The point of removing them. Leaving these reachable would mean the
+    UI's read-only Rules page was a convention rather than a guarantee —
+    one `curl` and two deployments classify differently again.
 
-    resp = await client.get("/api/v1/classification-rules", params={"enabled": "true"})
+    405, not 404: the paths still exist for `GET`, so FastAPI reports the
+    method as unsupported. That distinction is worth asserting, because a
+    404 here would instead mean the read endpoints had gone too.
+    """
+    client, rule_repo, _ = app_context
+    rule = await rule_repo.upsert(_make_rule("alpha"))
+    body = {"name": "new", "installation_type": "UPI", "field": "name", "pattern": "^x"}
 
-    assert resp.status_code == 200
-    names = {item["name"] for item in resp.json()["items"]}
-    assert names == {"enabled-one"}
-
-
-async def test_update_rule_bumps_revision_and_changes_field(
-    app_context: tuple[AsyncClient, MongoClassificationRuleRepository, MongoServerRepository],
-) -> None:
-    client, rule_repo, _server_repo = app_context
-    rule = _make_rule("update-test-rule")
-    await rule_repo.upsert(rule)
-
-    resp = await client.patch(
-        f"/api/v1/classification-rules/{rule.id}", json={"pattern": r"^ocp-updated-.*"}
-    )
-
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["pattern"] == r"^ocp-updated-.*"
-    assert body["revision"] == 2
-
-
-async def test_delete_rule_returns_204_then_404_on_get(
-    app_context: tuple[AsyncClient, MongoClassificationRuleRepository, MongoServerRepository],
-) -> None:
-    client, rule_repo, _server_repo = app_context
-    rule = _make_rule("delete-test-rule")
-    await rule_repo.upsert(rule)
-
-    delete_resp = await client.delete(f"/api/v1/classification-rules/{rule.id}")
-    assert delete_resp.status_code == 204
-
-    get_resp = await client.get(f"/api/v1/classification-rules/{rule.id}")
-    assert get_resp.status_code == 404
-
-
-async def test_create_duplicate_name_returns_409(
-    app_context: tuple[AsyncClient, MongoClassificationRuleRepository, MongoServerRepository],
-) -> None:
-    client, rule_repo, _server_repo = app_context
-    await rule_repo.upsert(_make_rule("dup-name-rule"))
-
-    payload = {
-        "name": "dup-name-rule",
-        "installation_type": "HOSTED_CLUSTER",
-        "field": "name",
-        "pattern": "^ocp-.*",
-        "source": "GLOBAL_CUSTOM",
-        "priority": 200,
-    }
-    resp = await client.post("/api/v1/classification-rules", json=payload)
-
-    assert resp.status_code == 409
-    assert resp.json()["code"] == "CONFLICT"
-
-
-# --- Validation errors ---
-
-
-async def test_create_priority_out_of_band_returns_422(
-    app_context: tuple[AsyncClient, MongoClassificationRuleRepository, MongoServerRepository],
-) -> None:
-    client, _rule_repo, _server_repo = app_context
-    payload = {
-        "name": "bad-priority-rule",
-        "installation_type": "HOSTED_CLUSTER",
-        "field": "name",
-        "pattern": "^ocp-.*",
-        "source": "GLOBAL_CUSTOM",
-        "priority": 999,  # GLOBAL_CUSTOM band is 200-299
+    responses = {
+        "create": await client.post("/api/v1/classification-rules", json=body),
+        "update": await client.patch(
+            f"/api/v1/classification-rules/{rule.id}", json={"enabled": False}
+        ),
+        "delete": await client.delete(f"/api/v1/classification-rules/{rule.id}"),
+        "preview": await client.post("/api/v1/classification-rules/preview", json=body),
     }
 
-    resp = await client.post("/api/v1/classification-rules", json=payload)
+    for action, resp in responses.items():
+        assert resp.status_code == 405, f"{action} answered {resp.status_code}, not 405"
 
-    assert resp.status_code == 422
-    assert resp.json()["code"] == "RULE_SCOPE_INVALID"
-
-
-async def test_create_scope_source_mismatch_returns_422(
-    app_context: tuple[AsyncClient, MongoClassificationRuleRepository, MongoServerRepository],
-) -> None:
-    client, _rule_repo, _server_repo = app_context
-    payload = {
-        "name": "bad-scope-rule",
-        "installation_type": "HOSTED_CLUSTER",
-        "field": "name",
-        "pattern": "^ocp-.*",
-        "source": "SITE_CUSTOM",  # requires scope.site_id
-        "priority": 500,
-    }
-
-    resp = await client.post("/api/v1/classification-rules", json=payload)
-
-    assert resp.status_code == 422
-    assert resp.json()["code"] == "RULE_SCOPE_INVALID"
-
-
-async def test_create_unsafe_regex_returns_422(
-    app_context: tuple[AsyncClient, MongoClassificationRuleRepository, MongoServerRepository],
-) -> None:
-    client, _rule_repo, _server_repo = app_context
-    payload = {
-        "name": "bad-pattern-rule",
-        "installation_type": "HOSTED_CLUSTER",
-        "field": "name",
-        "pattern": "(unclosed",
-        "source": "GLOBAL_CUSTOM",
-        "priority": 200,
-    }
-
-    resp = await client.post("/api/v1/classification-rules", json=payload)
-
-    assert resp.status_code == 422
-    assert resp.json()["code"] == "REGEX_UNSAFE"
-
-
-# --- System rule protections ---
-
-
-async def test_delete_system_rule_returns_422(
-    app_context: tuple[AsyncClient, MongoClassificationRuleRepository, MongoServerRepository],
-) -> None:
-    client, rule_repo, _server_repo = app_context
-    system_rule = _make_rule("a-system-rule", source="SYSTEM_DEFAULT", priority=100, system=True)
-    await rule_repo.upsert(system_rule)
-
-    resp = await client.delete(f"/api/v1/classification-rules/{system_rule.id}")
-
-    assert resp.status_code == 422
-    assert resp.json()["code"] == "VALIDATION_ERROR"
-
-
-async def test_update_system_rule_non_enabled_field_returns_422(
-    app_context: tuple[AsyncClient, MongoClassificationRuleRepository, MongoServerRepository],
-) -> None:
-    client, rule_repo, _server_repo = app_context
-    system_rule = _make_rule(
-        "another-system-rule", source="SYSTEM_DEFAULT", priority=100, system=True
-    )
-    await rule_repo.upsert(system_rule)
-
-    resp = await client.patch(
-        f"/api/v1/classification-rules/{system_rule.id}", json={"pattern": r"^changed-.*"}
-    )
-
-    assert resp.status_code == 422
-    assert resp.json()["code"] == "VALIDATION_ERROR"
-
-
-async def test_update_system_rule_enabled_field_succeeds(
-    app_context: tuple[AsyncClient, MongoClassificationRuleRepository, MongoServerRepository],
-) -> None:
-    client, rule_repo, _server_repo = app_context
-    system_rule = _make_rule(
-        "toggle-system-rule", source="SYSTEM_DEFAULT", priority=100, system=True, enabled=True
-    )
-    await rule_repo.upsert(system_rule)
-
-    resp = await client.patch(
-        f"/api/v1/classification-rules/{system_rule.id}", json={"enabled": False}
-    )
-
-    assert resp.status_code == 200
-    assert resp.json()["enabled"] is False
-
-
-# --- Preview ---
-
-
-async def test_preview_matches_expected_servers_by_pattern(
-    app_context: tuple[AsyncClient, MongoClassificationRuleRepository, MongoServerRepository],
-) -> None:
-    client, _rule_repo, server_repo = app_context
-    await server_repo.upsert(_make_server("ocp-dell-worker-001", vendor=Vendor.DELL, index=1))
-    await server_repo.upsert(_make_server("ocp-dell-worker-002", vendor=Vendor.DELL, index=2))
-    await server_repo.upsert(_make_server("upi-dell-master-001", vendor=Vendor.DELL, index=3))
-    await server_repo.upsert(_make_server("random-server-0004", vendor=Vendor.DELL, index=4))
-    await server_repo.upsert(_make_server("ocp-cisco-worker-001", vendor=Vendor.CISCO, index=5))
-
-    resp = await client.post(
-        "/api/v1/classification-rules/preview",
-        json={"field": "name", "pattern": "^ocp-dell-.*"},
-    )
-
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["matched_count"] == 2
-    assert body["truncated"] is False
-    assert body["mode"] == "sampled"
-    matched_names = {item["name"] for item in body["sample"]}
-    assert matched_names == {"ocp-dell-worker-001", "ocp-dell-worker-002"}
-
-
-async def test_preview_narrows_by_vendor_scope(
-    app_context: tuple[AsyncClient, MongoClassificationRuleRepository, MongoServerRepository],
-) -> None:
-    client, _rule_repo, server_repo = app_context
-    await server_repo.upsert(_make_server("ocp-a-worker-001", vendor=Vendor.DELL, index=1))
-    await server_repo.upsert(_make_server("ocp-b-worker-001", vendor=Vendor.CISCO, index=2))
-
-    resp = await client.post(
-        "/api/v1/classification-rules/preview",
-        json={"field": "name", "pattern": "^ocp-.*", "scope": {"vendor": "dell"}},
-    )
-
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["matched_count"] == 1
-    assert body["sample"][0]["name"] == "ocp-a-worker-001"
-
-
-async def test_preview_unsafe_pattern_returns_422(
-    app_context: tuple[AsyncClient, MongoClassificationRuleRepository, MongoServerRepository],
-) -> None:
-    client, _rule_repo, _server_repo = app_context
-
-    resp = await client.post(
-        "/api/v1/classification-rules/preview",
-        json={"field": "name", "pattern": "(unclosed"},
-    )
-
-    assert resp.status_code == 422
-    assert resp.json()["code"] == "REGEX_UNSAFE"
+    # And nothing was changed by trying.
+    assert (await rule_repo.get_by_id(rule.id)) is not None
+    assert (await rule_repo.get_by_id(rule.id)).enabled is True

@@ -4,6 +4,8 @@ import { HealthBadge } from "@/components/HealthBadge";
 import { useClassificationRulesQuery } from "@/features/classification/hooks";
 import { useHealthPoliciesQuery } from "@/features/health/hooks";
 import type { ClassificationRuleResponse } from "@/types/classification";
+import type { Condition } from "@/types/health";
+import { isAllOf, isAnyOf, isLeaf, isNot } from "@/types/health";
 import type { HealthPolicyResponse } from "@/types/health";
 
 /** The scope a rule or policy is narrowed to, as one readable string.
@@ -22,6 +24,34 @@ function scopeSummary(scope: {
   return parts.length > 0 ? parts.join(", ") : "(unscoped)";
 }
 
+/** A health policy's condition as one line of readable text.
+ *
+ * Recursive because the model is: a node is a metric leaf, or `all_of` /
+ * `any_of` / `not` over more nodes. Rendered rather than dropped because
+ * a policy without its condition is a name and a severity with nothing
+ * connecting them — the same way a rule without its pattern says nothing
+ * about why a server was classified. */
+function conditionSummary(condition: Condition): string {
+  if (isAllOf(condition)) {
+    return condition.all_of.map(conditionSummary).join(" AND ");
+  }
+  if (isAnyOf(condition)) {
+    return `(${condition.any_of.map(conditionSummary).join(" OR ")})`;
+  }
+  if (isNot(condition)) {
+    return `NOT ${conditionSummary(condition.not)}`;
+  }
+  if (isLeaf(condition)) {
+    const parts = [condition.metric, condition.operator];
+    if (condition.value != null) parts.push(JSON.stringify(condition.value));
+    // COUNT_* operators count elements equal to this; without it they
+    // count the list's own length, so its absence is meaningful.
+    if (condition.equals != null) parts.push(`of ${JSON.stringify(condition.equals)}`);
+    return parts.join(" ");
+  }
+  return "—";
+}
+
 function errorText(error: unknown, fallback: string): string {
   if (error instanceof ApiError) return error.problem.detail;
   if (error instanceof Error) return error.message;
@@ -29,8 +59,13 @@ function errorText(error: unknown, fallback: string): string {
 }
 
 export function RulesPage() {
-  const rulesQuery = useClassificationRulesQuery();
-  const policiesQuery = useHealthPoliciesQuery();
+  // Enabled only. A disabled rule is not part of what this deployment
+  // does, so listing it and then labelling it "disabled" asks the reader
+  // to filter in their head — and makes the status column the widest
+  // uninformative thing on the page, since every visible row says the
+  // same word.
+  const rulesQuery = useClassificationRulesQuery({ enabled: true });
+  const policiesQuery = useHealthPoliciesQuery({ enabled: true });
 
   const rules = rulesQuery.data?.items ?? [];
   const policies = policiesQuery.data?.items ?? [];
@@ -45,11 +80,12 @@ export function RulesPage() {
        * which stops being true the moment one site's operator adds a rule
        * the others do not have. */}
       <p className="mt-1 max-w-3xl text-sm text-gray-500">
-        What this platform ships with, and every deployment gets the same
-        set. They are defined in code and seeded at startup, not created
-        here — a rule that exists in one estate and not another makes two
-        installations that look identical classify the same server
-        differently.
+        The rules and policies this deployment runs, and every deployment
+        gets the same set. They are defined in code and seeded at startup,
+        not created here — a rule that exists in one estate and not
+        another makes two installations that look identical classify the
+        same server differently. Anything disabled is not listed, because
+        it is not something this deployment does.
       </p>
 
       <section className="mt-8">
@@ -71,7 +107,7 @@ export function RulesPage() {
             <table className="min-w-full divide-y divide-gray-200 text-sm dark:divide-gray-700">
               <thead className="bg-gray-50 dark:bg-gray-800/50">
                 <tr>
-                  {["Name", "Type", "Source", "Priority", "Scope", "Status"].map((h) => (
+                  {["Name", "Type", "Matches", "Priority", "Scope"].map((h) => (
                     <th
                       key={h}
                       scope="col"
@@ -89,21 +125,24 @@ export function RulesPage() {
                     <td className="px-3 py-2">
                       <Badge>{rule.installation_type}</Badge>
                     </td>
-                    <td className="px-3 py-2">{rule.source}</td>
-                    <td className="px-3 py-2">{rule.priority}</td>
-                    <td className="px-3 py-2 text-gray-500">{scopeSummary(rule.scope)}</td>
                     <td className="px-3 py-2">
-                      {rule.enabled ? (
-                        <Badge>enabled</Badge>
-                      ) : (
-                        <Badge tone="warning">disabled</Badge>
+                      {/* The regex and the field it runs against. Without
+                       * these the page cannot answer the only question it
+                       * is opened to answer: why is this server UPI? */}
+                      <code className="font-mono text-xs">
+                        {rule.field} ~ {rule.pattern}
+                      </code>
+                      {rule.flags.ignore_case && (
+                        <span className="ml-2 text-xs text-gray-500">(case-insensitive)</span>
                       )}
                     </td>
+                    <td className="px-3 py-2">{rule.priority}</td>
+                    <td className="px-3 py-2 text-gray-500">{scopeSummary(rule.scope)}</td>
                   </tr>
                 ))}
                 {rules.length === 0 && (
                   <tr>
-                    <td colSpan={6} className="px-3 py-6 text-center text-gray-500">
+                    <td colSpan={5} className="px-3 py-6 text-center text-gray-500">
                       No classification rules are configured.
                     </td>
                   </tr>
@@ -134,7 +173,7 @@ export function RulesPage() {
             <table className="min-w-full divide-y divide-gray-200 text-sm dark:divide-gray-700">
               <thead className="bg-gray-50 dark:bg-gray-800/50">
                 <tr>
-                  {["Name", "Category", "Severity", "policy_key", "Mode", "Scope", "Status"].map(
+                  {["Name", "Category", "Severity", "Condition", "policy_key", "Scope"].map(
                     (h) => (
                       <th
                         key={h}
@@ -155,23 +194,20 @@ export function RulesPage() {
                     <td className="px-3 py-2">
                       <HealthBadge severity={policy.severity} />
                     </td>
+                    <td className="px-3 py-2">
+                      <code className="font-mono text-xs">
+                        {conditionSummary(policy.condition)}
+                      </code>
+                    </td>
                     <td className="px-3 py-2 font-mono text-xs text-gray-500">
                       {policy.policy_key}
                     </td>
-                    <td className="px-3 py-2">{policy.mode}</td>
                     <td className="px-3 py-2 text-gray-500">{scopeSummary(policy.scope)}</td>
-                    <td className="px-3 py-2">
-                      {policy.enabled ? (
-                        <Badge>enabled</Badge>
-                      ) : (
-                        <Badge tone="warning">disabled</Badge>
-                      )}
-                    </td>
                   </tr>
                 ))}
                 {policies.length === 0 && (
                   <tr>
-                    <td colSpan={7} className="px-3 py-6 text-center text-gray-500">
+                    <td colSpan={6} className="px-3 py-6 text-center text-gray-500">
                       No health policies are configured.
                     </td>
                   </tr>

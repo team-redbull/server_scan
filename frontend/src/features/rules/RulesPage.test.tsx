@@ -14,16 +14,22 @@ const RULES_RESPONSE = {
       priority: 100,
       enabled: true,
       system: true,
+      field: "name",
+      pattern: "^ocp4-hypershift-",
+      flags: { ignore_case: true, multiline: false, dotall: false },
       scope: { vendor: null, manager_type: null, site_id: "tlv" },
     },
     {
       id: "rule_2",
-      name: "retired convention",
+      name: "upi hostname",
       installation_type: "UPI",
       source: "SYSTEM_DEFAULT",
       priority: 50,
-      enabled: false,
+      enabled: true,
       system: true,
+      field: "name",
+      pattern: "^ocp4-(prod|dev)-",
+      flags: { ignore_case: true, multiline: false, dotall: false },
       scope: { vendor: null, manager_type: null, site_id: null },
     },
   ],
@@ -40,6 +46,15 @@ const POLICIES_RESPONSE = {
       mode: "THRESHOLD",
       enabled: true,
       system: true,
+      condition: {
+        metric: "storage.failed_drive_count",
+        operator: "GTE",
+        value: 1,
+        all_of: null,
+        any_of: null,
+        not: null,
+        equals: null,
+      },
       scope: { vendor: "dell", manager_type: null, site_id: null },
     },
   ],
@@ -108,13 +123,35 @@ describe("RulesPage", () => {
     expect(screen.queryByText(/new policy/i)).not.toBeInTheDocument();
   });
 
-  it("still shows a disabled rule rather than hiding it", async () => {
-    // Disabled is part of the shipped configuration, not a local edit, so
-    // hiding it would misrepresent what this deployment runs.
+  it("asks the API for enabled entries only, and shows no status column", async () => {
+    // Everything listed is enabled, so a status column would repeat the
+    // same word on every row and say nothing.
+    renderRulesPage();
+    await screen.findByText("hypershift hostname");
+
+    for (const call of fetchMock.mock.calls as [string][]) {
+      const url = new URL(call[0], "http://localhost");
+      expect(url.searchParams.get("enabled")).toBe("true");
+    }
+    expect(screen.queryByText("enabled")).not.toBeInTheDocument();
+    expect(screen.queryByText("disabled")).not.toBeInTheDocument();
+  });
+
+  it("shows each rule's field and regex", async () => {
+    // Without the pattern the page cannot answer the question it exists
+    // to answer: why was this server classified UPI?
     renderRulesPage();
 
-    expect(await screen.findByText("retired convention")).toBeInTheDocument();
-    expect(screen.getByText("disabled")).toBeInTheDocument();
+    expect(await screen.findByText(/\^ocp4-hypershift-/)).toBeInTheDocument();
+    expect(screen.getByText(/\^ocp4-\(prod\|dev\)-/)).toBeInTheDocument();
+  });
+
+  it("renders a health policy's condition as readable text", async () => {
+    renderRulesPage();
+
+    expect(
+      await screen.findByText("storage.failed_drive_count GTE 1"),
+    ).toBeInTheDocument();
   });
 
   it("renders an unscoped rule as unscoped rather than blank", async () => {
