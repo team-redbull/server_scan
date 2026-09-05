@@ -1,12 +1,5 @@
 import { apiFetch } from "@/api/client";
-import type {
-  ClassificationPreviewRequest,
-  ClassificationPreviewResponse,
-  ClassificationRuleCreate,
-  ClassificationRuleListResponse,
-  ClassificationRuleResponse,
-  ClassificationRuleUpdate,
-} from "@/types/classification";
+import type { ClassificationRuleListResponse } from "@/types/classification";
 
 const BASE = "/api/v1/classification-rules";
 
@@ -14,6 +7,13 @@ export interface ClassificationRuleListParams {
   enabled?: boolean;
 }
 
+/** List the classification rules this deployment runs.
+ *
+ * Read-only on purpose. The rules ship with the platform and are seeded
+ * at startup, so this client has no create/update/delete counterpart to
+ * reach for — the backend still exposes them, but nothing in the UI
+ * should be the thing that makes two installations classify differently.
+ */
 export function listClassificationRules(
   params: ClassificationRuleListParams = {},
 ): Promise<ClassificationRuleListResponse> {
@@ -23,40 +23,4 @@ export function listClassificationRules(
   }
   const qs = query.toString();
   return apiFetch<ClassificationRuleListResponse>(qs ? `${BASE}?${qs}` : BASE);
-}
-
-export function getClassificationRule(id: string): Promise<ClassificationRuleResponse> {
-  return apiFetch<ClassificationRuleResponse>(`${BASE}/${encodeURIComponent(id)}`);
-}
-
-export function createClassificationRule(
-  body: ClassificationRuleCreate,
-): Promise<ClassificationRuleResponse> {
-  return apiFetch<ClassificationRuleResponse>(BASE, {
-    method: "POST",
-    body: JSON.stringify(body),
-  });
-}
-
-export function updateClassificationRule(
-  id: string,
-  body: ClassificationRuleUpdate,
-): Promise<ClassificationRuleResponse> {
-  return apiFetch<ClassificationRuleResponse>(`${BASE}/${encodeURIComponent(id)}`, {
-    method: "PATCH",
-    body: JSON.stringify(body),
-  });
-}
-
-export function deleteClassificationRule(id: string): Promise<void> {
-  return apiFetch<void>(`${BASE}/${encodeURIComponent(id)}`, { method: "DELETE" });
-}
-
-export function previewClassificationRule(
-  body: ClassificationPreviewRequest,
-): Promise<ClassificationPreviewResponse> {
-  return apiFetch<ClassificationPreviewResponse>(`${BASE}/preview`, {
-    method: "POST",
-    body: JSON.stringify(body),
-  });
 }

@@ -1,11 +1,8 @@
 import { createBrowserRouter } from "react-router";
 
 import { AppLayout } from "@/components/AppLayout";
-import { ClassificationRulesPage } from "@/features/classification/ClassificationRulesPage";
-import { RuleEditorPage } from "@/features/classification/RuleEditorPage";
-import { HealthPoliciesPage } from "@/features/health/HealthPoliciesPage";
-import { PolicyEditorPage } from "@/features/health/PolicyEditorPage";
 import { InventoryPage } from "@/features/inventory/InventoryPage";
+import { RulesPage } from "@/features/rules/RulesPage";
 import { ServerDetailPage } from "@/features/servers/ServerDetailPage";
 import { SitesOverviewPage } from "@/features/sites/SitesOverviewPage";
 import { StatusPage } from "@/routes/StatusPage";
@@ -30,28 +27,14 @@ export const router = createBrowserRouter([
         element: <ServerDetailPage />,
       },
       {
-        path: "/classification-rules",
-        element: <ClassificationRulesPage />,
-      },
-      {
-        path: "/classification-rules/new",
-        element: <RuleEditorPage />,
-      },
-      {
-        path: "/classification-rules/:id/edit",
-        element: <RuleEditorPage />,
-      },
-      {
-        path: "/health-policies",
-        element: <HealthPoliciesPage />,
-      },
-      {
-        path: "/health-policies/new",
-        element: <PolicyEditorPage />,
-      },
-      {
-        path: "/health-policies/:id/edit",
-        element: <PolicyEditorPage />,
+        // One page, read-only, replacing the two list pages and their four
+        // editor routes. Classification and health are read together far
+        // more often than either is read alone — a server's installation
+        // type decides which policies even apply to it — and neither is
+        // editable here on purpose: they ship with the platform so that
+        // two installations classify and score identically.
+        path: "/rules",
+        element: <RulesPage />,
       },
       {
         // Slice 0's backend-readiness placeholder, kept as a debug page now

@@ -83,34 +83,6 @@ export interface RuleStats {
   quarantined: boolean;
 }
 
-export interface ClassificationRuleCreate {
-  name: string;
-  description?: string;
-  enabled?: boolean;
-  installation_type: InstallationType;
-  scope?: RuleScope;
-  field: string;
-  pattern: string;
-  flags?: RuleFlags;
-  source: RuleSource;
-  priority: number;
-  order?: number;
-}
-
-export interface ClassificationRuleUpdate {
-  name?: string;
-  description?: string;
-  enabled?: boolean;
-  installation_type?: InstallationType;
-  scope?: RuleScope;
-  field?: string;
-  pattern?: string;
-  flags?: RuleFlags;
-  source?: RuleSource;
-  priority?: number;
-  order?: number;
-}
-
 export interface ClassificationRuleResponse {
   id: string;
   name: string;
@@ -137,22 +109,8 @@ export interface ClassificationRuleListResponse {
   items: ClassificationRuleResponse[];
 }
 
-export interface ClassificationPreviewRequest {
-  installation_type?: InstallationType | null;
-  scope?: RuleScope;
-  field: string;
-  pattern: string;
-  flags?: RuleFlags;
-}
-
 export interface ClassificationPreviewSample {
   id: string;
   name: string;
 }
 
-export interface ClassificationPreviewResponse {
-  matched_count: number;
-  truncated: boolean;
-  sample: ClassificationPreviewSample[];
-  mode: string;
-}

@@ -153,40 +153,6 @@ export const POLICY_CATEGORIES = [
 ] as const;
 export type PolicyCategory = (typeof POLICY_CATEGORIES)[number];
 
-export interface HealthPolicyCreate {
-  name: string;
-  description?: string;
-  enabled?: boolean;
-  policy_key?: string | null;
-  mode?: PolicyMode;
-  category: string;
-  severity: HealthSeverity;
-  condition: Condition;
-  evidence?: EvidenceField[];
-  message_template: string;
-  scope?: PolicyScope;
-  source: RuleSource;
-  priority: number;
-  order?: number;
-}
-
-export interface HealthPolicyUpdate {
-  name?: string;
-  description?: string;
-  enabled?: boolean;
-  policy_key?: string | null;
-  mode?: PolicyMode;
-  category?: string;
-  severity?: HealthSeverity;
-  condition?: Condition;
-  evidence?: EvidenceField[];
-  message_template?: string;
-  scope?: PolicyScope;
-  source?: RuleSource;
-  priority?: number;
-  order?: number;
-}
-
 export interface HealthPolicyResponse {
   id: string;
   name: string;
@@ -216,35 +182,9 @@ export interface HealthPolicyListResponse {
   items: HealthPolicyResponse[];
 }
 
-export interface HealthPolicyPreviewRequest {
-  policy_id?: string | null;
-  name: string;
-  description?: string;
-  enabled?: boolean;
-  policy_key?: string | null;
-  mode?: PolicyMode;
-  category: string;
-  severity: HealthSeverity;
-  condition: Condition;
-  evidence?: EvidenceField[];
-  message_template: string;
-  scope?: PolicyScope;
-  source: RuleSource;
-  priority: number;
-  order?: number;
-  sample_size?: number;
-  max_scan?: number;
-}
-
 export interface HealthPolicyPreviewSample {
   id: string;
   name: string;
   would_be_severity: HealthSeverity;
 }
 
-export interface HealthPolicyPreviewResponse {
-  matched_count: number;
-  truncated: boolean;
-  sample: HealthPolicyPreviewSample[];
-  mode: string;
-}

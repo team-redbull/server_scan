@@ -194,7 +194,9 @@ is a real mistake, not a style preference.
 Phase 1 slices 0–7 are done (see `docs/architecture.md`'s "What's
 implemented vs. planned" section for the full per-slice writeup):
 inventory + search/pagination + UI, classification engine, health policy
-engine, maintenance + audit trail, classification/health admin UIs, a
+engine, maintenance + audit trail, classification/health UIs (since made
+read-only and merged into one page — rules and policies ship with the
+platform, so every deployment classifies and scores identically), a
 10k/50k performance pass, and Playwright E2E coverage.
 
 Beyond the numbered slices, the **first real vendor collector — Cisco UCS
@@ -638,11 +640,17 @@ non-obvious enough to bite you.
   `pyproject.toml` dependency change:
   `uv export --format requirements-txt --no-dev --no-emit-project -o requirements.txt`
   and the `pylock.toml` equivalent (see `docs/air-gap.md`).
-- Frontend E2E (`frontend/e2e/`, Playwright): a real Chromium quirk means
-  `getByLabel` collides across sibling `<select>` fields on the
-  classification-rule/health-policy editor pages — use the `labeledField`
-  helper in `frontend/e2e/helpers.ts`, not `getByLabel`, for anything
-  wrapping a `<select>` (`docs/adr/0008`).
+- Frontend E2E (`frontend/e2e/`, Playwright): **if you ever add a page
+  with sibling `<select>` fields, do not reach for `getByLabel`.** A real
+  Chromium quirk makes a `<label>`'s computed name include every nested
+  `<option>`'s text, so "Source" resolves to
+  `"SourceSITE_CUSTOMMANAGER_CUSTOMVENDOR_CUSTOM…"` and collides with the
+  Vendor field. `docs/adr/0008` has the confirmed behaviour and the XPath
+  workaround. The `labeledField` helper that implemented it is gone,
+  along with `frontend/e2e/helpers.ts` — the only pages needing it were
+  the classification-rule and health-policy editors, which were removed
+  when those became read-only. Nothing in the suite has a `<select>` any
+  more; the fact is kept here because the next form page will hit it.
 
 ## Verifying your work
 

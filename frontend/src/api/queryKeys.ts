@@ -24,17 +24,11 @@ export const queryKeys = {
     lists: () => [...queryKeys.classificationRules.all, "list"] as const,
     list: (params: ClassificationRuleListParams) =>
       [...queryKeys.classificationRules.lists(), params] as const,
-    details: () => [...queryKeys.classificationRules.all, "detail"] as const,
-    detail: (id: string) => [...queryKeys.classificationRules.details(), id] as const,
-    preview: () => [...queryKeys.classificationRules.all, "preview"] as const,
   },
   healthPolicies: {
     all: ["healthPolicies"] as const,
     lists: () => [...queryKeys.healthPolicies.all, "list"] as const,
     list: (params: HealthPolicyListParams) => [...queryKeys.healthPolicies.lists(), params] as const,
-    details: () => [...queryKeys.healthPolicies.all, "detail"] as const,
-    detail: (id: string) => [...queryKeys.healthPolicies.details(), id] as const,
-    preview: () => [...queryKeys.healthPolicies.all, "preview"] as const,
   },
   healthMetrics: {
     all: ["healthMetrics"] as const,

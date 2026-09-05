@@ -3,15 +3,14 @@ import { Link, useLocation } from "react-router";
 const LINKS = [
   { to: "/", label: "Sites" },
   { to: "/servers", label: "Servers" },
-  { to: "/classification-rules", label: "Classification Rules" },
-  { to: "/health-policies", label: "Health Policies" },
+  { to: "/rules", label: "Rules & Policies" },
 ];
 
 /** Minimal top-level nav for an internal admin tool — a horizontal bar,
  * no responsive hamburger menu needed. `pathname === to` (rather than
- * `startsWith`) so `/classification-rules` doesn't also light up while on
- * `/`, but a nested route like `/classification-rules/new` still doesn't
- * light up its parent — good enough for a three-link nav. */
+ * `startsWith`) so `/rules` doesn't also light up while on `/`, at the
+ * cost of a nested route not lighting up its parent — good enough for a
+ * three-link nav. */
 export function AppNav() {
   const location = useLocation();
 

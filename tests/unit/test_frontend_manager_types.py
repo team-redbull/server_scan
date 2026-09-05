@@ -88,28 +88,27 @@ def test_the_source_filter_offers_nothing_unimplemented() -> None:
     )
 
 
-@pytest.mark.parametrize(
-    "relative",
-    [
-        "frontend/src/types/classification.ts",
-        "frontend/src/features/classification/RuleEditorPage.tsx",
-        "frontend/src/features/health/PolicyEditorPage.tsx",
-    ],
-)
-def test_scope_pickers_carry_every_manager_type(relative: str) -> None:
-    """Scoping a rule or policy is about *configuration*, not about what
-    has been collected yet, so these list every `ManagerType` — including
-    the ones with no collector, which an operator may legitimately want a
-    policy ready for.
+def test_the_manager_type_union_carries_every_member() -> None:
+    """`RuleScope.manager_type` and `PolicyScope.manager_type` are typed by
+    this union, so a missing member mistypes a scope the API really
+    returns and the Rules page really renders.
 
-    `REDFISH_STANDALONE` was missing from all three of these, which meant
-    no rule or policy could be scoped to the standalone Redfish collector
-    at all.
+    This used to cover two editor pages as well, each of which built a
+    `<select>` of every `ManagerType` for scoping a rule or policy. Those
+    pages are gone: rules and policies are no longer editable in the UI,
+    because a rule that exists in one estate and not another makes two
+    installations classify the same server differently. There are no scope
+    pickers left to keep in step — only this union, which is still read.
+
+    `REDFISH_STANDALONE` was once missing from all three, which meant no
+    rule or policy could be scoped to the standalone Redfish collector at
+    all. That is the class of drift this still catches.
     """
+    relative = "frontend/src/types/classification.ts"
     text = _source(relative)
     missing = [member.value for member in ManagerType if f'"{member.value}"' not in text]
 
     assert not missing, (
         f"{relative} is missing manager type(s) {missing}. Add them there, or narrow this "
-        "guard deliberately if a type is meant to be unselectable."
+        "guard deliberately if a type is meant to be unrepresentable."
     )
