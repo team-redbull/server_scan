@@ -210,8 +210,8 @@ class OpenManageProvider:
 
         Two bulk calls regardless of fleet size. A profile whose name does
         not match is dropped here, before it costs a BMC session; a profile
-        with no iDRAC address is dropped and recorded, since there is
-        nothing to collect it from.
+        with no target device is undeployed — no server exists behind it —
+        and is counted, not reported as a fault.
 
         Returns:
             dict[str, OmeIdentity]: Matched identities, keyed by iDRAC IP.
@@ -235,6 +235,7 @@ class OpenManageProvider:
         )
 
         identities: dict[str, OmeIdentity] = {}
+        unassigned = 0
         for profile in profiles:
             if not self._matches(profile):
                 continue
@@ -242,11 +243,20 @@ class OpenManageProvider:
             identity = identity_from_profile(profile=profile, device=device_by_ip.get(idrac_ip, {}))
             host = identity.idrac_ip
             if not host:
-                message = f"{identity.name!r}: OME reports no iDRAC address; nothing to collect"
-                self._collection_errors.append(message)
-                logger.warning("ome.profile_without_address", profile=identity.name)
+                unassigned += 1
                 continue
             identities[host] = identity
+
+        if unassigned:
+            logger.info(
+                "ome.profile_without_address",
+                endpoint=self._endpoint,
+                profiles=unassigned,
+                hint=(
+                    "Profiles with no target device are undeployed templates "
+                    "with no server behind them and were not collected."
+                ),
+            )
         return identities
 
     def _matches(self, profile: dict[str, Any]) -> bool:

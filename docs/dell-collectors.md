@@ -30,7 +30,9 @@ collector uses four endpoints, all validated in the production scanner:
   comes back in the **`X-Auth-Token` response header** (not the body), and
   every subsequent request must carry it. The body's `Id` is the session
   handle used to `DELETE /SessionService/Sessions('<id>')` on logout.
-- `GET /ProfileService/Profiles` — one entry per deployed server profile.
+- `GET /ProfileService/Profiles` — one entry per server profile. An
+  undeployed profile has no `TargetName`; it names no server and is
+  counted and skipped, not reported as an unreachable host.
   `ProfileName` is the server's operator-facing name (and the platform's
   site/classification source); `TargetName` is the server's iDRAC IP.
 - `GET /DeviceService/Devices` — one entry per managed device. `DeviceName`

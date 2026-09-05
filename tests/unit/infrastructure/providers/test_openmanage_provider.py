@@ -246,9 +246,9 @@ class TestDiscovery:
         [server async for server in provider.list_servers()]
         assert [t.host for t in recorded["redfish"].targets] == ["10.0.0.1"]
 
-    async def test_a_profile_with_no_address_is_reported_not_dropped_silently(self) -> None:
-        """There is nothing to collect it from, but a run that quietly
-        skipped servers would report a complete success over a partial fleet.
+    async def test_an_undeployed_profile_is_skipped_without_failing_the_run(self) -> None:
+        """A profile with no target device has no server behind it. Counting
+        it as unreachable would exit 3 on every run of a healthy estate.
         """
         provider, recorded = _provider(
             profiles=[_profile("ocp4-nyc-prod-worker-03", "")],
@@ -257,7 +257,7 @@ class TestDiscovery:
         )
         assert [server async for server in provider.list_servers()] == []
         assert recorded == {} or recorded["redfish"].targets == []
-        assert any("no iDRAC address" in error for error in provider.collection_errors)
+        assert provider.collection_errors == ()
 
     async def test_the_profile_name_reaches_the_target(self) -> None:
         """`RedfishTarget.name` becomes `override_name`, which is what keeps
