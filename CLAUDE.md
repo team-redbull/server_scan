@@ -667,9 +667,11 @@ against simulated hardware and answers real XML API calls — see
 and validate against UCSPE (or real hardware) before trusting this in
 production.
 
-**If the suite looks stuck, the dev stack is simply not running.** Run
-`podman ps`, then `scripts/dev-up.sh up`. That is the whole diagnosis —
-do not go looking for a regression, and do not cycle `down`/`up`.
+**If the suite looks stuck, run `podman ps` before anything else.** The
+stack is either not started or has been reaped after a timed-out command
+(see below); `scripts/dev-up.sh up` fixes both. Do not go looking for a
+regression, and do not cycle `down`/`up` — there is nothing stale to
+clear.
 
 This paragraph used to say something else, and a session that acts on the
 old version wastes its time, so the correction is worth reading once.
@@ -678,23 +680,52 @@ old version wastes its time, so the correction is worth reading once.
 shell commands for want of `systemd` linger, so a stack reported as
 started may be gone by the next command.
 
-*What was measured, 2026-09-05:* it did not reproduce. A pod started in
-one shell call was still `Up` in a separate later one, with all three
-`conmon` processes alive — `conmon` holds a container and needs no
-`systemd` to do it. The `linger` framing cannot have been right here
-either: this environment has no `systemd` at all (PID 1 is
-`init(Ubuntu)`, `loginctl` answers "System has not been booted with
-systemd as init system", and Podman falls back to `--cgroup-manager
-cgroupfs`), so there is no linger to be missing. **Keep one detail from
-the original, because it is the only mechanism that still fits the
-symptom:** Podman's runroot here is `/mnt/wslg/runtime-dir/containers`,
-inside WSLg's runtime directory. If WSLg restarts, that directory can be
-recreated underneath Podman, which would lose track of running
-containers and look exactly like reaping. Unproven, but it is the thing
-to check if containers ever really do vanish.
+*What was measured, 2026-09-05:* **the containers really do vanish, but
+not between ordinary commands, and not for the stated reason.** This
+paragraph was itself corrected the same day — the first measurement was
+too short and concluded "did not reproduce", which is why the observation
+is written out in full below rather than summarised.
 
-*What the symptom actually was:* not a hang and nothing to do with
-containers vanishing. `tests/integration/conftest.py`'s fixtures are
+The `linger` framing cannot have been right here whatever else is true:
+this environment has no `systemd` at all. PID 1 is `init(Ubuntu)`,
+`loginctl` answers "System has not been booted with systemd as init
+system", and Podman falls back to `--cgroup-manager cgroupfs`. There is
+no linger to be missing, and `conmon` — which is what actually holds a
+container open — needs none.
+
+What was observed across one long session, in order:
+
+| Event | Stack afterwards |
+|---|---|
+| Pod started, `podman ps` in a *separate* later shell call | **Up**, all three `conmon` alive |
+| Several test runs completing normally (~38s each) | **Up** |
+| `docker compose` stack, several commands | **Up** |
+| A `pytest` run that exceeded the tool timeout and was moved to the background | **gone** |
+| Restart, run again normally | **Up** |
+| A second `pytest` run that exceeded the tool timeout | **gone** |
+
+Two disappearances, both immediately after a command was killed or
+detached for exceeding its timeout; no disappearance after any command
+that ran to completion, including long ones. That correlation is the
+useful part and is what a future session should act on.
+
+**The likeliest mechanism, and it is a hypothesis, not a measurement:** a
+timed-out command's process group is cleaned up, and rootless `conmon`
+processes started earlier from the same session go with it. The competing
+explanation from the original paragraph — Podman's runroot lives under
+`/mnt/wslg/runtime-dir/containers`, which WSL can recreate underneath it
+— is still possible and still unproven, but it does not explain why the
+two failures both landed on a timed-out command and none landed anywhere
+else.
+
+**What to do about it:** nothing preventative. Run `podman ps` before
+concluding anything about a failing integration run, and after any
+command that timed out. Bringing the stack back up is cheap; diagnosing
+this is not.
+
+*What the originally reported symptom was:* a separate problem, and not
+the vanishing above — a suite that appeared to hang when the stack had
+simply never been started. `tests/integration/conftest.py`'s fixtures are
 function-scoped, so with the stack down every one of the ~60 Mongo-backed
 tests paid `mongo_server_selection_timeout_ms` (5s) over again to
 rediscover the same dead server — one file of 7 skips took 35s, the
@@ -705,7 +736,9 @@ minutes reads as hung.
 unreachable service for the rest of the session and pay the timeout once.
 With the stack down `tests/integration` reports `60 skipped in 5.22s`;
 with it up, `64 passed in 1.83s`. **A slow integration run is therefore
-no longer a symptom of anything — if you see one, it is new.**
+no longer a symptom of the timeout, and a *stuck* one is not a hang in
+the tests — check `podman ps` first.** The two are now easy to tell
+apart: a missing stack yields 60 fast skips, not a wait.
 
 Real CI (GitHub Actions) has neither problem; it gets fresh, real service
 containers per run.
