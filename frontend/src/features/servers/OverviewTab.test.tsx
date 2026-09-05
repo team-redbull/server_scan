@@ -42,6 +42,7 @@ function makeServer(overrides: Partial<ServerDetail> = {}): ServerDetail {
     },
     maintenance: { enabled: false, reason: null },
     unread_fields: [],
+    nic_os_names: {},
     tags: [],
     created_at: "2026-08-13T10:00:00Z",
     site_id: "tlv",

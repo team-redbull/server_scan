@@ -18,6 +18,7 @@ data:
          since every Cisco collector needs the same catalog and none of
          it is sensitive. */}}
   INVENTORY_GPU_MODELS: {{ .Values.config.gpuModels | quote }}
+  INVENTORY_NIC_OS_NAMES: {{ .Values.config.nicOsNames | quote }}
   INVENTORY_LOG_LEVEL: {{ .Values.config.logLevel | quote }}
   INVENTORY_METRICS_ENABLED: {{ .Values.config.metricsEnabled | quote }}
   INVENTORY_DEFAULT_PAGE_SIZE: {{ .Values.config.defaultPageSize | quote }}

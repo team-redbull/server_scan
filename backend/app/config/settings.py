@@ -121,6 +121,19 @@ class Settings(BaseSettings):
     # comment used to record was reversed.
     gpu_models: str = ""
 
+    # A network interface's OS-level name (`ens8f0np0`) against the
+    # hardware name a BMC reports (`NIC.Slot.8-1-1`). Neither is derivable
+    # from the other and no management API reports the first, so this is
+    # stated knowledge, learned by booting a host and reading `ip link`:
+    #
+    #     INVENTORY_NIC_OS_NAMES="Slot.8=ens8f0np0,ens8f1np1;Integrated.1=eno12399np0,eno12409np1"
+    #
+    # Keyed on the FQDD kind and ordered by port, so one entry covers
+    # every server with that card in that slot regardless of hostname.
+    # Empty is a real state: the UI shows the hardware name alone rather
+    # than inventing one. See `app.domain.value_objects.nic_names`.
+    nic_os_names: str = ""
+
     # --- Regex / classification safety ---
     regex_max_pattern_length: int = 200
     regex_match_timeout_seconds: float = 0.25

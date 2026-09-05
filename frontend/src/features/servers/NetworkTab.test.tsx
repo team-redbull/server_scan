@@ -41,3 +41,64 @@ describe("NetworkTab unread fields", () => {
     expect(screen.getByText("aa:bb:cc:dd:ee:ff")).toBeInTheDocument();
   });
 });
+
+describe("NetworkTab OS names", () => {
+  /** A Dell with its onboard LOM and a card in slot 8, as a Redfish
+   * collector reports it. */
+  function dellNetwork(): NetworkInfo {
+    return {
+      bmc: { address_raw: null, scheme: null, host: "10.0.0.5", port: null, mac: null },
+      interfaces: [
+        {
+          name: "NIC.Integrated.1-1-1",
+          mac: "aa:00:00:00:00:01",
+          speed_mbps: 25000,
+          link_state: "UP",
+          location: "1/1/1",
+        },
+        {
+          name: "NIC.Slot.8-1-1",
+          mac: "aa:00:00:00:00:03",
+          speed_mbps: 25000,
+          link_state: "UP",
+          location: "8/1/1",
+        },
+      ],
+    };
+  }
+
+  it("reads an FQDD's location in words, distinguishing onboard from a slot", () => {
+    render(<NetworkTab network={dellNetwork()} />);
+
+    // The distinction the OS name hangs off: `eno...` versus `ens8...`.
+    expect(screen.getByText("Onboard · port 1")).toBeInTheDocument();
+    expect(screen.getByText("Slot 8 · port 1")).toBeInTheDocument();
+  });
+
+  it("numbers each MAC by discovery order, which is what tooling selects on", () => {
+    render(<NetworkTab network={dellNetwork()} />);
+
+    expect(screen.getByText("MAC #1")).toBeInTheDocument();
+    expect(screen.getByText("MAC #2")).toBeInTheDocument();
+  });
+
+  it("labels a configured OS name as derived, never as something collected", () => {
+    render(
+      <NetworkTab
+        network={dellNetwork()}
+        osNames={{ "NIC.Slot.8-1-1": "ens8f0np0" }}
+      />,
+    );
+
+    expect(screen.getByText("ens8f0np0")).toBeInTheDocument();
+    expect(screen.getByText(/OS name \(derived\)/)).toBeInTheDocument();
+  });
+
+  it("shows nothing at all for an interface with no configured name", () => {
+    // A guess here produces a boot configuration that silently does not
+    // come up, so absence has to stay visible as absence.
+    render(<NetworkTab network={dellNetwork()} osNames={{}} />);
+
+    expect(screen.queryByText(/OS name \(derived\)/)).not.toBeInTheDocument();
+  });
+});

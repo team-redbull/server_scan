@@ -57,6 +57,15 @@ config:
   # as `sites` above applies to `--set` on the command line. See
   # docs/adr/0021-built-in-gpu-catalog-with-model-matching.md.
   gpuModels: ""
+  # A network interface's OS-level name (`ens8f0np0`) against the hardware
+  # name a BMC reports (`NIC.Slot.8-1-1`), keyed on the FQDD kind and
+  # ordered by port. No management API reports an OS-level name — it does
+  # not exist until the host boots — so this is stated knowledge, learned
+  # once by running `ip link` on a host. Empty is a real state: the UI
+  # shows the hardware name alone rather than inventing one. Example:
+  # "Integrated.1=eno12399np0,eno12409np1;Slot.8=ens8f0np0,ens8f1np1".
+  # Same comma-splitting gotcha as `sites` above applies to `--set`.
+  nicOsNames: ""
   logLevel: INFO
   metricsEnabled: "true"
   defaultPageSize: "50"

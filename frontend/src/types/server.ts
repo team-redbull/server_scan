@@ -278,6 +278,14 @@ export interface ServerDetail {
    * — never a reading from this run, which is why the UI must not present
    * a `0`/`[]` there as fact. */
   unread_fields: string[];
+  /** A hardware interface name (`NIC.Slot.8-1-1`) against the name the
+   * host's OS gives it (`ens8f0np0`), for the interfaces a mapping is
+   * configured for. Derived from `INVENTORY_NIC_OS_NAMES`, never
+   * collected: no management API reports an OS-level name, because it
+   * does not exist until the host boots. Empty when nothing is
+   * configured, which the UI must show as absence rather than filling in
+   * a plausible-looking guess. */
+  nic_os_names: Record<string, string>;
   tags: string[];
   last_seen_at: string | null;
   updated_at: string;

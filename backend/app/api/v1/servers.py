@@ -49,6 +49,7 @@ from app.domain.services.classification import ClassifiableServer
 from app.domain.services.health.metrics import build_default_registry
 from app.domain.services.regex_engine import RegexModuleEngine
 from app.domain.services.search import build_filter_query, resolve_sort_field
+from app.domain.value_objects.nic_names import nic_name_catalog
 from app.errors import NotFoundError, PageSizeTooLargeError, ValidationAppError
 from app.infrastructure.mongodb.audit_event_repository import MongoAuditEventRepository
 from app.infrastructure.mongodb.classification_rule_repository import (
@@ -246,6 +247,7 @@ async def get_server(
     server_id: str,
     repo: Annotated[MongoServerRepository, Depends(_server_repo)],
     cache: Annotated[CacheClient, Depends(_cache_client)],
+    settings: Annotated[Settings, Depends(get_settings)],
 ) -> ServerDetail:
     pointer_key = _revision_pointer_key(server_id)
     cached_revision = await cache.get(pointer_key)
@@ -258,7 +260,7 @@ async def get_server(
     if server is None:
         raise NotFoundError(f"No server with id {server_id!r}.", details={"server_id": server_id})
 
-    detail = ServerDetail.from_server(server)
+    detail = ServerDetail.from_server(server, nic_name_catalog(settings.nic_os_names))
     detail_key = server_key(server_id, server.revision)
     await cache.set(pointer_key, server.revision, ttl_seconds=SERVER_DETAIL_TTL_SECONDS)
     await cache.set(
@@ -287,6 +289,7 @@ async def reclassify_server(
     audit: Annotated[AuditService, Depends(_audit_service)],
     actor: Annotated[Actor, Depends(get_current_actor)],
     request_id: Annotated[str | None, Depends(get_request_id)],
+    settings: Annotated[Settings, Depends(get_settings)],
 ) -> ServerDetail:
     """Re-runs the classification engine against this server's current
     identity fields and the *current* ruleset, and persists the result —
@@ -329,7 +332,7 @@ async def reclassify_server(
                 "matched_rule_id": server.classification.matched_rule_id,
             },
         )
-    return ServerDetail.from_server(server)
+    return ServerDetail.from_server(server, nic_name_catalog(settings.nic_os_names))
 
 
 @router.post("/servers/{server_id}/health/recalculate", response_model=ServerDetail)
@@ -341,6 +344,7 @@ async def recalculate_server_health(
     audit: Annotated[AuditService, Depends(_audit_service)],
     actor: Annotated[Actor, Depends(get_current_actor)],
     request_id: Annotated[str | None, Depends(get_request_id)],
+    settings: Annotated[Settings, Depends(get_settings)],
 ) -> ServerDetail:
     """Re-runs the health policy engine against this server's current
     facts and the *current* policy set, and persists the result. Same
@@ -372,7 +376,7 @@ async def recalculate_server_health(
                 "policy_ids": [e.policy_id for e in state.evaluations if e.active],
             },
         )
-    return ServerDetail.from_server(server)
+    return ServerDetail.from_server(server, nic_name_catalog(settings.nic_os_names))
 
 
 @router.put("/servers/{server_id}/maintenance", response_model=ServerDetail)
@@ -383,6 +387,7 @@ async def enable_maintenance(
     cache: Annotated[CacheClient, Depends(_cache_client)],
     actor: Annotated[Actor, Depends(get_current_actor)],
     request_id: Annotated[str | None, Depends(get_request_id)],
+    settings: Annotated[Settings, Depends(get_settings)],
 ) -> ServerDetail:
     server = await service.enable(
         server_id,
@@ -393,7 +398,7 @@ async def enable_maintenance(
         request_id=request_id,
     )
     await _invalidate_detail_cache(server_id, cache)
-    return ServerDetail.from_server(server)
+    return ServerDetail.from_server(server, nic_name_catalog(settings.nic_os_names))
 
 
 @router.delete("/servers/{server_id}/maintenance", response_model=ServerDetail)
@@ -403,7 +408,8 @@ async def disable_maintenance(
     cache: Annotated[CacheClient, Depends(_cache_client)],
     actor: Annotated[Actor, Depends(get_current_actor)],
     request_id: Annotated[str | None, Depends(get_request_id)],
+    settings: Annotated[Settings, Depends(get_settings)],
 ) -> ServerDetail:
     server = await service.disable(server_id, actor=actor, request_id=request_id)
     await _invalidate_detail_cache(server_id, cache)
-    return ServerDetail.from_server(server)
+    return ServerDetail.from_server(server, nic_name_catalog(settings.nic_os_names))

@@ -27,7 +27,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.domain.enums import Vendor
 from app.domain.models.classification import Classification
@@ -38,6 +38,7 @@ from app.domain.models.maintenance import Maintenance
 from app.domain.models.network import NetworkInfo
 from app.domain.models.openshift import OpenShiftLifecycle
 from app.domain.models.server import Identity, ProfileTemplate, Server
+from app.domain.value_objects.nic_names import NicNameCatalog
 
 
 class ConnectivitySummary(BaseModel):
@@ -102,6 +103,11 @@ class ServerListResponse(BaseModel):
     page: PageInfo
 
 
+# An empty catalog: the default when no mapping is configured, so the
+# hardware names render alone rather than as guesses.
+_NO_NIC_NAMES = NicNameCatalog(names_by_kind={})
+
+
 class ServerDetail(BaseModel):
     """Full server detail. See module docstring for why this is a
     dedicated model rather than `Server` returned as-is.
@@ -128,13 +134,32 @@ class ServerDetail(BaseModel):
     search_tokens: list[str]
     source_provider: str | None
     unread_fields: list[str]
+    # A hardware interface name (`NIC.Slot.8-1-1`) against the name the
+    # host's OS gives it (`ens8f0np0`), for the interfaces a mapping is
+    # configured for. Derived from `INVENTORY_NIC_OS_NAMES` rather than
+    # collected — no management API reports an OS-level name — and sent
+    # alongside `network` rather than inside it so the stored document
+    # keeps only what a collector actually read.
+    nic_os_names: dict[str, str] = Field(default_factory=dict)
     last_seen_at: datetime | None
     revision: int
     created_at: datetime
     updated_at: datetime
 
     @classmethod
-    def from_server(cls, server: Server) -> ServerDetail:
+    def from_server(cls, server: Server, nic_names: NicNameCatalog = _NO_NIC_NAMES) -> ServerDetail:
+        """
+        Build the detail response for one server.
+
+        Args:
+            server (Server): The stored document.
+            nic_names (NicNameCatalog): The configured FQDD-to-OS-name
+                mapping. Defaults to an empty one, which renders the
+                hardware names alone rather than inventing any.
+
+        Returns:
+            ServerDetail: The response model.
+        """
         return cls(
             id=server.id,
             schema_version=server.schema_version,
@@ -157,6 +182,11 @@ class ServerDetail(BaseModel):
             search_tokens=server.search_tokens,
             source_provider=server.source_provider,
             unread_fields=server.unread_fields,
+            nic_os_names={
+                interface.name: os_name
+                for interface in server.network.interfaces
+                if (os_name := nic_names.os_name_for(interface.name)) is not None
+            },
             last_seen_at=server.last_seen_at,
             revision=server.revision,
             created_at=server.created_at,
