@@ -642,16 +642,48 @@ against simulated hardware and answers real XML API calls — see
 and validate against UCSPE (or real hardware) before trusting this in
 production.
 
-**A known local-sandbox gotcha, not a code bug**: in some CLI sandbox
-environments, rootless Podman containers get reaped between separate
-shell commands because the user session has no working `systemd`
-linger (`loginctl show-user $(whoami) | grep Linger` shows `no`, and
-`loginctl enable-linger` fails with "No such device or address" — no
-`systemd-logind` D-Bus session to talk to). If `scripts/dev-up.sh up`
-reports success but a subsequent command can't reach Mongo, that's very
-likely this — check `podman ps` before assuming a real regression. Real
-CI (GitHub Actions) does not have this problem; it gets fresh, real
-service containers per run.
+**If the suite looks stuck, the dev stack is simply not running.** Run
+`podman ps`, then `scripts/dev-up.sh up`. That is the whole diagnosis —
+do not go looking for a regression, and do not cycle `down`/`up`.
+
+This paragraph used to say something else, and a session that acts on the
+old version wastes its time, so the correction is worth reading once.
+
+*What it claimed:* rootless Podman containers get reaped between separate
+shell commands for want of `systemd` linger, so a stack reported as
+started may be gone by the next command.
+
+*What was measured, 2026-09-05:* it did not reproduce. A pod started in
+one shell call was still `Up` in a separate later one, with all three
+`conmon` processes alive — `conmon` holds a container and needs no
+`systemd` to do it. The `linger` framing cannot have been right here
+either: this environment has no `systemd` at all (PID 1 is
+`init(Ubuntu)`, `loginctl` answers "System has not been booted with
+systemd as init system", and Podman falls back to `--cgroup-manager
+cgroupfs`), so there is no linger to be missing. **Keep one detail from
+the original, because it is the only mechanism that still fits the
+symptom:** Podman's runroot here is `/mnt/wslg/runtime-dir/containers`,
+inside WSLg's runtime directory. If WSLg restarts, that directory can be
+recreated underneath Podman, which would lose track of running
+containers and look exactly like reaping. Unproven, but it is the thing
+to check if containers ever really do vanish.
+
+*What the symptom actually was:* not a hang and nothing to do with
+containers vanishing. `tests/integration/conftest.py`'s fixtures are
+function-scoped, so with the stack down every one of the ~60 Mongo-backed
+tests paid `mongo_server_selection_timeout_ms` (5s) over again to
+rediscover the same dead server — one file of 7 skips took 35s, the
+64-test directory about five minutes. A suite doing nothing for five
+minutes reads as hung.
+
+*Fixed*, so this cannot recur: those fixtures now remember the first
+unreachable service for the rest of the session and pay the timeout once.
+With the stack down `tests/integration` reports `60 skipped in 5.22s`;
+with it up, `64 passed in 1.83s`. **A slow integration run is therefore
+no longer a symptom of anything — if you see one, it is new.**
+
+Real CI (GitHub Actions) has neither problem; it gets fresh, real service
+containers per run.
 
 ## Keeping CI current (a standing chore, not a one-off)
 

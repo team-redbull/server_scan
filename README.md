@@ -402,6 +402,11 @@ npm run lint && npm run typecheck && npm run test -- --run && npm run build
 npm run test:e2e                  # Playwright — needs the dev stack + backend + frontend all running
 ```
 
+The integration tests need the dev stack; without it they skip rather
+than fail, and the whole directory reports `60 skipped` in about five
+seconds. If they take noticeably longer than that, something is wrong
+that this note does not cover.
+
 At scale, `tools/verify_indexes.py` and `tools/loadtest.py` verify query
 plans and latency against a real 10k/50k-server seeded dataset — see
 `docs/adr/0007-scale-verification-and-request-coalescing.md`.
