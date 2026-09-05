@@ -1,11 +1,17 @@
 # Local development stack. `compose.yaml` is the current canonical filename
 # for the Compose spec (docker-compose.yml is kept working for backward
 # compatibility by every implementation, but is no longer the name new
-# projects are told to use); works with `docker compose` and `podman
-# compose` interchangeably. For a zero-extra-tooling path on a machine with
-# only rootless podman and no compose provider installed, use
-# `scripts/dev-up.sh` instead — it drives the same three containers with
-# plain `podman run`.
+# projects are told to use).
+#
+# Verified 2026-09-05 with `docker compose` (v5.5.1) and with
+# `podman-compose` (the Python implementation, 1.6.0). NOT with
+# `podman compose` — the space-separated Podman 6 subcommand, which is a
+# different program and needs a socket that does not exist on a machine
+# without systemd. See CLAUDE.md, "Which compose".
+#
+# For a zero-extra-tooling path on a machine with no compose provider at
+# all, use `scripts/dev-up.sh` instead — it drives the same containers
+# with plain `podman run`.
 
 services:
   mongo:

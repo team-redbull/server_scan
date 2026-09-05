@@ -685,6 +685,49 @@ no longer a symptom of anything — if you see one, it is new.**
 Real CI (GitHub Actions) has neither problem; it gets fresh, real service
 containers per run.
 
+### Which compose
+
+Three ways to start the dev stack work, one looks like it should and
+does not. All measured 2026-09-05 on the user's machine (Podman 6.1.1,
+Docker 29.8.0, Docker Compose v5.5.1, podman-compose 1.6.0), each
+followed by the integration suite:
+
+| Command | Result |
+|---|---|
+| `docker compose up -d mongo redis` | works — 64 passed in 2.48s |
+| `podman-compose up -d mongo redis` | works — 64 passed in 2.62s |
+| `podman compose up -d mongo redis` | **fails** |
+| `scripts/dev-up.sh up` | works, no compose provider needed |
+
+**`podman compose` (space) and `podman-compose` (hyphen) are different
+programs.** The hyphenated one is the Python implementation and shells
+out to `podman run`, so it just works. The space-separated Podman 6
+subcommand implements nothing itself — it delegates to the Docker Compose
+plugin pointed at a Podman socket, which is normally started by systemd
+socket activation. There is no systemd here, so it fails with:
+
+```
+failed to connect to the docker API at unix:///mnt/wslg/runtime-dir/podman/podman.sock
+```
+
+That is a real, reproducible consequence of the systemd-less environment
+— unlike the container-reaping story above, which is not.
+
+**Prefer `docker compose`** for the dev stack, and do not read that as a
+verdict on Podman: the `Containerfile` is UBI-based and deploys to
+OpenShift, so `podman build` remains the right way to test the image.
+This is only about the three dev containers. `scripts/dev-up.sh` stays
+the fallback — it depends on no compose provider at all, which is what
+the air-gapped and CI paths may need.
+
+**The three paths cannot see each other.** They name containers
+differently — `server-inventory-dev-mongo` (dev-up.sh),
+`server_scan-mongo-1` (docker compose), `server_scan_mongo_1`
+(podman-compose) — while all binding 27017 and 6379. So a stack started
+one way is invisible to another way's `ps` and still takes the ports.
+On a port-in-use error, check all three before concluding nothing is
+running.
+
 ## Keeping CI current (a standing chore, not a one-off)
 
 Every action in `.github/workflows/ci.yml` is pinned to a commit SHA, so

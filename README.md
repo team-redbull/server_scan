@@ -294,9 +294,9 @@ Requires [uv](https://docs.astral.sh/uv/), Node 24+, and a container
 runtime (Podman or Docker) for the dev Mongo/Redis stack.
 
 ```bash
-# 1. Bring up MongoDB + Redis (rootless podman/docker, no compose
-#    provider required):
-scripts/dev-up.sh up
+# 1. Bring up MongoDB + Redis. Either of these works:
+docker compose up -d mongo redis   # or: podman-compose up -d mongo redis
+scripts/dev-up.sh up               # no compose provider required
 
 # 2. Backend
 uv sync --all-groups
@@ -314,9 +314,15 @@ cd frontend && npm install && npm run dev
 Then open http://localhost:5173 for the inventory UI, or
 http://localhost:8080/docs for the API's OpenAPI docs.
 
-When you are done, stop the UI and API processes and bring the stack
-down with `scripts/dev-up.sh down` — a leftover container is the usual
-cause of a later `pytest` run hanging.
+When you are done, stop the UI and API processes and bring the stack down
+the same way you brought it up (`docker compose down`, `podman-compose
+down`, or `scripts/dev-up.sh down`). The three name their containers
+differently but all bind 27017 and 6379, so a stack left up one way is
+invisible to another way's `ps` and still holds the ports.
+
+Note that `podman compose` (with a space) is **not** `podman-compose`
+(with a hyphen) and does not work here — it needs a socket that systemd
+would normally start. Use the hyphenated one, or Docker.
 
 ### Fake data
 
