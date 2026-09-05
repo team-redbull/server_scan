@@ -227,7 +227,8 @@ had their field mappings run against live hardware, which is a different
 state from every collector before them and is the outstanding action on
 the repo. Three platform-wide changes landed with that work and are worth
 knowing before reading any collector: a **built-in GPU catalog**
-(ADR-0021) fills in VRAM no vendor API reports, **`Server.unread_fields`**
+(ADR-0021) fills in VRAM the Cisco and HPE APIs do not report (Redfish
+does, so a real reading wins), **`Server.unread_fields`**
 records what a collection could not read, and **every collector now
 reports power supplies**, so the health engine's `power.*` metrics
 finally have something to read. All three are in "Key technical facts"
@@ -508,12 +509,36 @@ non-obvious enough to bite you.
   forward is not enough on a *first* ingest: `Hardware` has no "unknown"
   state, so an iLO-4 server that reported nothing stored `0` drives and
   rendered as a confident, real zero.
-- **GPU VRAM comes from a built-in catalog, not from any vendor API.** No
-  management plane this platform collects from reports a GPU's memory
-  size — confirmed against both Cisco SDKs, Cisco's own metrics API,
-  Redfish and OneView — so `app.domain.value_objects.gpu_catalog` ships a
-  table of 30 NVIDIA and AMD datacenter cards
-  (`gpu_models.DEFAULT_GPU_MODELS`) and `IngestService` enriches from it.
+- **GPU VRAM comes from a built-in catalog wherever the vendor API does
+  not report it — which is everywhere except Redfish.** Corrected
+  2026-09-05: this entry used to say flatly that no management plane
+  reports a GPU's memory size, which would tell you not to bother reading
+  one. Per collector, as the code actually stands:
+
+  | Collector | Real VRAM from the API? |
+  |---|---|
+  | `REDFISH_STANDALONE` | **yes, attempted** |
+  | `OPENMANAGE` (Dell) | **yes** — hardware comes from iDRAC over the same Redfish mapping |
+  | `ONEVIEW` | no — `memory_bytes` is hardcoded `None` |
+  | `INTERSIGHT` | no — hardcoded `None` |
+  | `UCS_CENTRAL` / Manager | no — no such field exists |
+
+  `redfish.mapping.gpus_from_processors` reads
+  `MemorySummary.TotalMemorySizeMiB` off a `ProcessorType == "GPU"`
+  member (standard since Redfish 1.0), falling back to summing
+  `ProcessorMemory[].CapacityMiB` for pre-2020.4 firmware that has no
+  `MemorySummary`. **What is unverified is whether Dell or HPE actually
+  populate it for arbitrary add-in GPUs** — the path is standard, the
+  data is best-effort, and no live hardware has settled it. See
+  `docs/field-test-checklist.md` part 3.
+
+  So the catalog is a *fallback*, not a replacement:
+  `GpuCatalog.enrich` returns the GPU untouched when `memory_bytes` is
+  already set, so a real reading always wins. It exists because Cisco and
+  HPE have no field to read at all.
+  `app.domain.value_objects.gpu_catalog` ships a table of 30 NVIDIA and
+  AMD datacenter cards (`gpu_models.DEFAULT_GPU_MODELS`) and
+  `IngestService` enriches from it.
   **`INVENTORY_GPU_MODELS` overrides that table per identifier; it is no
   longer the only source, and an empty value no longer means "enrich
   nothing"** — that reversal is `docs/adr/0021-built-in-gpu-catalog-with-

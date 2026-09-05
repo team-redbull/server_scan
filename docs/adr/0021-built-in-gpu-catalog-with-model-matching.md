@@ -184,3 +184,44 @@ Center GPU Flex.
   `40 * 1024**3` bytes, matching `Gpu.memory_bytes` elsewhere in the
   platform. Vendors write "40GB" for what is 40 GiB, so this reads
   correctly for every row in the table.
+
+## Update, 2026-09-05: the catalog is a fallback, not the only source
+
+This ADR and `CLAUDE.md` were both read as saying that no management
+plane reports GPU VRAM at all. That is not what the code does, and stated
+that broadly it would tell a future session not to bother reading one.
+
+`redfish.mapping.gpus_from_processors` **does** read it, and has since
+ADR-0016: `MemorySummary.TotalMemorySizeMiB` on a `ProcessorType ==
+"GPU"` member, which is standard Redfish 1.0, with a fallback to summing
+`ProcessorMemory[].CapacityMiB` for pre-2020.4 firmware that predates
+`MemorySummary`. That covers `REDFISH_STANDALONE` and — because Dell's
+hardware pass reuses the same mapping (ADR-0020) — `OPENMANAGE` as well.
+
+The three that report nothing are `UCS_CENTRAL`/`UCS_MANAGER` (no field
+in the object model), `INTERSIGHT` and `ONEVIEW` (both hardcode
+`memory_bytes: None`; neither API has a VRAM attribute on a GPU). Those
+are what this ADR was written for, and the reasoning above is unaffected.
+
+The precedence was always right and is worth stating plainly, because it
+is what makes the two facts compatible: `GpuCatalog.enrich` returns the
+GPU untouched when `memory_bytes` is already set, so **a value a
+collector really read always wins and the catalog only fills a gap** —
+the same "a provider's `None` means unread, not zero" contract the rest
+of the platform follows.
+
+### Still unverified
+
+Whether Dell or HPE actually populate `TotalMemorySizeMiB` for arbitrary
+add-in GPUs. The path is standard; the data is best-effort, and
+`gpus_from_processors`' own docstring has said so since it was written
+("no evidence was found that Dell or HPE populate this"). No live
+hardware has settled it either way, so the practical coverage today is
+unknown rather than absent.
+
+It is cheap to settle — one authenticated Redfish GET against a Dell with
+a GPU fitted — and is now part 3 of `docs/field-test-checklist.md`.
+Record the answer here. If iDRAC does populate it, the catalog quietly
+stops mattering for Dell and stays load-bearing for Cisco and HPE. If it
+does not, that is worth knowing too: it means the standard path is
+decorative on real hardware and the catalog is carrying every vendor.

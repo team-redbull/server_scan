@@ -1,20 +1,21 @@
 # What to run against your vendor managers, and what to bring back
 
 Written 2026-08-29 for the first real run of the Intersight collector,
-extended 2026-09-04 for OneView. Everything here is read-only: no MongoDB
-write, no ingest, no `POST` other than the login a probe needs to make
-and then deletes. Nothing you run can change anything in Intersight, in
-OneView, or in the inventory database.
+extended 2026-09-04 for OneView and 2026-09-05 with a one-request Dell
+GPU check. Everything here is read-only: no MongoDB write, no ingest, no
+`POST` other than the login a probe needs to make and then deletes.
+Nothing you run can change anything in Intersight, in OneView, in iDRAC,
+or in the inventory database.
 
-Two collectors are in this state. Both were built entirely from their
-vendor's published contract and neither has ever seen live hardware:
+| # | Target | Probe | The one answer that matters most |
+|---|---|---|---|
+| 1 | Intersight | `uv run python -m tools.verify_intersight` | Is `TotalMemory` MiB? If not, every server's memory is 4.86% high, silently. |
+| 2 | HPE OneView | `uv run python -m tools.verify_oneview` | Does `processorCount * processorCoreCount` equal the real core count? If not, every two-socket server's core count is halved, silently. |
+| 3 | A Dell iDRAC with a GPU | one `curl` (part 3) | Does iDRAC populate `TotalMemorySizeMiB` for an add-in GPU? Decides whether the built-in GPU catalog carries Dell or Redfish does. |
 
-| Collector | Probe | The one answer that matters most |
-|---|---|---|
-| Intersight | `uv run python -m tools.verify_intersight` | Is `TotalMemory` MiB? If not, every server's memory is 4.86% high, silently. |
-| OneView | `uv run python -m tools.verify_oneview` | Does `processorCount * processorCoreCount` equal the real core count? If not, every two-socket server's core count is halved, silently. |
-
-**Part 1 (Intersight) is below; part 2 (OneView) follows it.**
+Parts 1 and 2 are whole collectors that have never seen live hardware.
+Part 3 is much smaller — a single request settling one open question —
+so do it opportunistically if a Dell with a GPU is to hand.
 
 ---
 
@@ -352,3 +353,80 @@ that would print it. If your site's rules do not allow hostnames or
 serials out, redact them and say so; the core-count check, the paging
 answer and the populated-fields table are still worth having on their
 own.
+
+---
+
+# Part 3 — Does a Dell iDRAC report GPU VRAM?
+
+Added 2026-09-05. This is one HTTP request, not a probe script, and it
+needs **a Dell server with a GPU fitted** — any other Dell tells you
+nothing.
+
+## Why it is worth the two minutes
+
+No Cisco or HPE management API has a field for a GPU's memory size at
+all, which is why this platform ships a built-in catalog of 30 cards and
+looks VRAM up by model (ADR-0021). Redfish is different: it has a
+standard field, and the collector already reads it —
+`MemorySummary.TotalMemorySizeMiB` on a `ProcessorType == "GPU"` member,
+standard since Redfish 1.0. Dell's hardware is collected over Redfish
+from each iDRAC, so Dell *may* be reporting real VRAM already, in which
+case the catalog is only a fallback there.
+
+What nobody has confirmed is whether iDRAC actually fills that field in
+for an ordinary add-in GPU, or leaves it empty. The collector handles
+both — a real value always wins, and the catalog fills the gap otherwise
+— so nothing is broken either way. But which one happens decides whether
+Dell GPU VRAM is measured or inferred, and that is worth writing down
+rather than assuming.
+
+## What to run
+
+Against the iDRAC of a Dell that has a GPU, with any read-only account:
+
+```bash
+IDRAC=10.0.0.5
+USER=readonly-user
+
+# 1. List the processors. GPUs appear here alongside CPUs.
+curl -sk -u "$USER" "https://$IDRAC/redfish/v1/Systems/System.Embedded.1/Processors"
+
+# 2. Pick the @odata.id of one whose id looks like a GPU (Dell names them
+#    "Video.Embedded.1", "ProcessorGPU.Slot.N" or similar), and fetch it:
+curl -sk -u "$USER" "https://$IDRAC/redfish/v1/Systems/System.Embedded.1/Processors/<that-id>"
+```
+
+`-k` skips certificate verification, which self-signed iDRACs need.
+`curl` will prompt for the password so it stays out of your shell
+history.
+
+## What I need back
+
+The **whole second response**, verbatim. Four fields decide it:
+
+| Field | What it tells me |
+|---|---|
+| `ProcessorType` | Must be `"GPU"` — anything else and the collector never treats it as one. |
+| `MemorySummary.TotalMemorySizeMiB` | **The answer.** A number means iDRAC reports real VRAM. Absent or `null` means the catalog is carrying Dell. |
+| `ProcessorMemory[].CapacityMiB` | The pre-2020.4 fallback path. If `MemorySummary` is missing but this is present, the collector still gets a real figure. |
+| `Model` | The string the catalog matches on — e.g. `NVIDIA A100-PCIE-40GB`. Tells me whether the built-in table would have matched it anyway. |
+
+Please also say the **iDRAC firmware version** (`System > Overview` in
+the UI, or `/redfish/v1/Managers/iDRAC.Embedded.1`), since the
+`MemorySummary` path only exists from Redfish 2020.4 onward.
+
+## What each outcome means
+
+- **A real `TotalMemorySizeMiB`** — Dell reports measured VRAM and the
+  catalog quietly stops mattering for Dell. It stays load-bearing for
+  Cisco and HPE, which have no such field.
+- **Missing on modern firmware** — the standard path is decorative on
+  real hardware and the catalog carries every vendor. Also worth knowing:
+  it means `Model` matching is the only thing standing between a Dell GPU
+  and a blank VRAM column, so the table's coverage matters more than
+  assumed.
+- **A `Model` string the table does not have** — send it and I will add a
+  row, with the VRAM cited from NVIDIA's or AMD's datasheet.
+
+Record the result in `docs/adr/0021-built-in-gpu-catalog-with-model-
+matching.md`, under its 2026-09-05 update.
