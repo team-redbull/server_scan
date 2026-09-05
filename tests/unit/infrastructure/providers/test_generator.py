@@ -22,6 +22,7 @@ from app.infrastructure.providers.fake.generator import (
     list_managers,
     list_sites,
     manager_id_for,
+    nic_slot_for,
     provider_type_for,
 )
 
@@ -603,3 +604,55 @@ def test_redfish_nic_names_carry_the_fqdd_kind_an_os_name_derives_from() -> None
 
     assert any(k.startswith("NIC.Integrated") for k in kinds), kinds
     assert any(k.startswith("NIC.Slot") for k in kinds), kinds
+
+
+def test_a_servers_nic_slot_matches_the_profile_its_name_declares() -> None:
+    """The hostname token is the only thing that says which PCIe slot a
+    server's add-in NIC is in, and an OS-level interface name is derived
+    from that slot. A seeded fleet whose names and interfaces disagreed
+    would make that join untestable.
+    """
+    checked = 0
+    for server in generate_servers(seed=42, count=1000, sites=SITES):
+        slot = nic_slot_for(server.name)
+        if slot is None or not server.nics:
+            continue
+        checked += 1
+        assert [n.name for n in server.nics if n.name.startswith(f"NIC.Slot.{slot}-")], (
+            f"{server.name} declares slot {slot} but its NICs are {[n.name for n in server.nics]}"
+        )
+
+    assert checked, "no seeded server carried a hardware profile token"
+
+
+def test_the_add_in_cards_ports_are_the_third_and_fourth_macs() -> None:
+    """Dell's onboard LOM is two ports and is enumerated first, so on a
+    server with an add-in card the card's ports are MACs three and four.
+    That positional fact is what existing tooling selects on; this pins it
+    so the structural lookup (by slot) and the positional one agree.
+    """
+    checked = 0
+    for server in generate_servers(seed=42, count=1000, sites=SITES):
+        if nic_slot_for(server.name) is None or len(server.nics) != 4:
+            continue
+        checked += 1
+        onboard, card = server.nics[:2], server.nics[2:]
+        assert all(n.name.startswith("NIC.Integrated.1-") for n in onboard), server.name
+        assert all(n.name.startswith("NIC.Slot.") for n in card), server.name
+        assert [n.mac for n in card] == list(server.nic_macs or ())[2:4], server.name
+
+    assert checked, "no seeded server had an add-in card"
+
+
+def test_a_server_with_no_profile_token_has_onboard_nics_only() -> None:
+    """These boot as `eno...` rather than `ens...`, which is the whole
+    reason the two FQDD kinds have to be distinguishable.
+    """
+    for server in generate_servers(seed=42, count=600, sites=SITES):
+        if nic_slot_for(server.name) is not None or not server.nics:
+            continue
+        if not server.nics[0].name.startswith("NIC."):
+            continue  # a OneView server, named by adapter and port
+        assert all(n.name.startswith("NIC.Integrated.1-") for n in server.nics), (
+            f"{server.name} has no profile token but reports {[n.name for n in server.nics]}"
+        )

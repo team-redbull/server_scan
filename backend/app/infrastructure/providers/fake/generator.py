@@ -278,6 +278,28 @@ _CPU_MODELS: dict[str, tuple[str, ...]] = {
 # UPI node roles, in the real cluster vocabulary.
 _NAME_ROLES = ("compute", "control-plane", "infra")
 
+# A Dell hostname's hardware token and the PCIe slot its add-in NIC sits
+# in. The token is what an operator reads ("this is a GPU node"); the slot
+# is what decides the interface's OS-level name once the host boots, since
+# systemd derives `ens<slot>f<function>np<port>` from PCI topology. Both
+# halves are here so a seeded fleet exercises the join between them.
+#
+# `""` is the default profile: onboard NICs only, `NIC.Integrated.1-*`,
+# which boots as `eno...` rather than `ens...`.
+_NIC_PROFILE_SLOTS: tuple[tuple[str, int], ...] = (
+    ("h100", 8),
+    ("h200", 33),
+    ("10tb-", 2),
+    ("5tb-", 2),
+)
+_NAME_HARDWARE_PROFILES = ("", "", "h100", "h200", "10tb", "5tb")
+
+# Dell's PowerEdge onboard NIC is a two-port LOM, so a server with no
+# add-in card has exactly two interfaces and one with a card has four —
+# which is what makes "the third and fourth MACs" name the card's ports.
+_ONBOARD_PORTS = 2
+_SLOT_PORTS = 2
+
 # Environment segment some UPI hostnames carry (`ocp4-prod-tlv-infra-01`),
 # and some don't (`ocp4-nyc-control-plane-02`). Both real shapes.
 _NAME_ENVIRONMENTS = ("prod", "prep", None)
@@ -524,7 +546,13 @@ def _profile_dn(collector: ManagerType, *, name: str, site_code: str) -> str | N
 
 
 def _build_name(
-    rng: random.Random, vendor: str, index: int, site_code: str, model: str, memory_gib: int
+    rng: random.Random,
+    vendor: str,
+    index: int,
+    site_code: str,
+    model: str,
+    memory_gib: int,
+    collector: ManagerType,
 ) -> str:
     """
     A hostname in the shapes this estate actually uses.
@@ -542,6 +570,10 @@ def _build_name(
         site_code (str): The site token to embed.
         model (str): Its model, one hostname shape embeds a short form.
         memory_gib (int): Its memory, likewise embedded in that shape.
+        collector (ManagerType): The collector that owns it. Only a
+            Redfish-sourced server takes a hardware-profile token, since
+            that token names a PCIe slot and only an FQDD-shaped interface
+            can agree with it.
 
     Returns:
         str: The hostname.
@@ -557,9 +589,15 @@ def _build_name(
         # ocp-dell-r650-tlv-128c-1024gb-<serial>
         short_model = model.split()[-1].lower()
         cores = rng.choice((64, 128, 192))
+        profile = (
+            rng.choice(_NAME_HARDWARE_PROFILES)
+            if collector is ManagerType.REDFISH_STANDALONE
+            else ""
+        )
+        hardware = f"{profile}-" if profile else ""
         return (
             f"ocp-{vendor}-{short_model}-{site_code}-{cores}c-"
-            f"{memory_gib}gb-{vendor[:3].upper()}{index:07d}"
+            f"{memory_gib}gb-{hardware}{vendor[:3].upper()}{index:07d}"
         )
 
     if family == "upi":
@@ -821,8 +859,48 @@ def _build_attachments(rng: random.Random, *, site_code: str) -> tuple[ProviderA
     return tuple(physical) + tuple(vnics)
 
 
+def nic_slot_for(name: str) -> int | None:
+    """
+    Which PCIe slot a server's add-in NIC sits in, read from its name.
+
+    The hostname token is the only thing that says so — no management API
+    reports an OS-level interface name, and the slot is what one is
+    derived from. Public because it is the same lookup anything generating
+    per-server network configuration needs.
+
+    Args:
+        name (str): The server's hostname.
+
+    Returns:
+        int | None: The slot number, or None for a server with onboard
+            NICs only.
+    """
+    lowered = name.lower()
+    for token, slot in _NIC_PROFILE_SLOTS:
+        if token in lowered:
+            return slot
+    return None
+
+
+def _nic_port_count(rng: random.Random, collector: ManagerType, *, slot: int | None) -> int:
+    """
+    How many interfaces one server has.
+
+    Args:
+        rng (random.Random): The seeded generator.
+        collector (ManagerType): The collector that owns this server.
+        slot (int | None): Its add-in NIC's slot, or None for onboard only.
+
+    Returns:
+        int: The port count.
+    """
+    if collector is ManagerType.REDFISH_STANDALONE:
+        return _ONBOARD_PORTS + (_SLOT_PORTS if slot is not None else 0)
+    return rng.randint(2, 4)
+
+
 def _nics_for(
-    rng: random.Random, collector: ManagerType, macs: tuple[str, ...]
+    rng: random.Random, collector: ManagerType, macs: tuple[str, ...], *, slot: int | None
 ) -> tuple[ProviderNic, ...]:
     """
     Build the per-interface view for one server, in its collector's shape.
@@ -863,21 +941,33 @@ def _nics_for(
             )
             for port, mac in enumerate(macs, start=1)
         )
-    # An add-in card lives in a PCIe slot; the onboard NIC is Integrated.
-    # Slot 8 is the shape a GPU node's high-speed card takes in this
-    # estate, so it is worth generating rather than always Integrated.
-    slot = rng.choice((None, 2, 8))
-    kind = "Integrated.1" if slot is None else f"Slot.{slot}"
-    return tuple(
-        ProviderNic(
-            name=f"NIC.{kind}-{port}-1",
-            mac=mac,
-            speed_mbps=rng.choice((10_000, 25_000)),
-            link_state="UP" if port == 1 else rng.choice(("UP", "DOWN")),
-            location=f"{slot or 1}/{port}/1",
+    # Onboard first, then the add-in card, because that is the order a
+    # BMC enumerates them and therefore the order the MACs come back in.
+    # It is what makes "the third and fourth MACs" name the card's ports
+    # on a four-interface server: onboard contributes the first two.
+    nics: list[ProviderNic] = []
+    for port, mac in enumerate(macs[:_ONBOARD_PORTS], start=1):
+        nics.append(
+            ProviderNic(
+                name=f"NIC.Integrated.1-{port}-1",
+                mac=mac,
+                speed_mbps=rng.choice((10_000, 25_000)),
+                link_state="UP",
+                location=f"1/{port}/1",
+            )
         )
-        for port, mac in enumerate(macs, start=1)
-    )
+    if slot is not None:
+        for port, mac in enumerate(macs[_ONBOARD_PORTS:], start=1):
+            nics.append(
+                ProviderNic(
+                    name=f"NIC.Slot.{slot}-{port}-1",
+                    mac=mac,
+                    speed_mbps=rng.choice((25_000, 100_000)),
+                    link_state="UP",
+                    location=f"{slot}/{port}/1",
+                )
+            )
+    return tuple(nics)
 
 
 def generate_servers(
@@ -923,13 +1013,14 @@ def generate_servers(
         memory_gib = rng.choice((128, 256, 512, 1024))
         memory_total_bytes = memory_gib * 1024**3
 
-        name = _build_name(rng, vendor, index, site_code, model, memory_gib)
+        name = _build_name(rng, vendor, index, site_code, model, memory_gib, collector)
         serial = f"{vendor[:3].upper()}{index:07d}"
         system_uuid = _random_uuid(rng)
 
-        nic_count = rng.randint(2, 4)
+        nic_slot = nic_slot_for(name)
+        nic_count = _nic_port_count(rng, collector, slot=nic_slot)
         nic_macs = tuple(_random_mac(rng) for _ in range(nic_count))
-        nics = _nics_for(rng, collector, nic_macs)
+        nics = _nics_for(rng, collector, nic_macs, slot=nic_slot)
         bmc_mac = _random_mac(rng)
         bmc_ip = _fake_ip(site_index, index)
 
