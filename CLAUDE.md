@@ -714,16 +714,25 @@ in code and unfinished in proof. The natural next steps:
    was not). For OneView it is the core-count check and whether paging
    gets past the 256-profile ceiling.
 
-2. **Close the two gaps the collector work left in the UI and the
-   seeder.** `frontend/src/api/sites.ts`'s `SOURCE_PROVIDERS` still
-   offers only `UCS_CENTRAL`/`INTERSIGHT`/`REDFISH_STANDALONE`, so no
-   Dell or HPE server can be filtered for by source — the same class of
-   drift `tests/unit/test_frontend_manager_types.py` was written to catch
-   for `ManagerType`, in a list that guard does not cover. And the
-   fake-data generator's `COLLECTOR_TYPES` seeds four of the five
-   collectors: there is no `OPENMANAGE` shape, so Dell's OME-plus-iDRAC
-   path has no seeded data to look at. Both are small; neither is
-   invisible to an operator.
+2. **Give the Dell collector a seeded shape.** The UI half of this item
+   is done: `SOURCE_PROVIDERS` now lists all five collectors, and the
+   guard that was supposed to catch its drift no longer *restates* the
+   set of implemented collectors — it derives it from
+   `tools.run_collector.PROVIDER_FACTORIES`, which is the one source of
+   truth. That is why the drift was invisible: the guard had drifted
+   along with the list it guarded and stayed green.
+
+   What is left is the seeder. `COLLECTOR_TYPES` shapes four of the five,
+   and `tests/unit/infrastructure/providers/test_generator.py`'s
+   `_UNSEEDED_COLLECTORS` now names `OPENMANAGE` as a deliberate,
+   documented exclusion rather than an oversight — so a *sixth* collector
+   with no shape fails that test, but Dell's stays a known gap. It is not
+   a list entry: a Dell server collected through OME is read over
+   Redfish, so `provider_type_for` cannot tell it apart from a
+   `REDFISH_STANDALONE` Dell by `external_id` prefix, which is the
+   discriminator every other collector uses. Seeding it means carrying
+   the collector on the generated server instead of reading it back off
+   `external_id`.
 
 3. **UCS's own leftovers, still open** and still only settleable on real
    hardware: the `total_memory` MB assumption (UCSPE reports one

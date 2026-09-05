@@ -22,6 +22,7 @@ import re
 from pathlib import Path
 
 import pytest
+from tools.run_collector import PROVIDER_FACTORIES
 
 from app.domain.enums import ManagerType
 
@@ -29,16 +30,17 @@ pytestmark = pytest.mark.unit
 
 _REPO = Path(__file__).resolve().parents[2]
 
-# Manager types with a collector, so a server can really carry them in
-# `source_provider`. Filtering by a type with no implementation would
-# always return nothing, which is why the Source filter lists only these.
-_IMPLEMENTED = frozenset(
-    {
-        ManagerType.UCS_CENTRAL,
-        ManagerType.INTERSIGHT,
-        ManagerType.REDFISH_STANDALONE,
-    }
-)
+# Derived, never restated. Manager types with a collector, so a server can
+# really carry them in `source_provider`; filtering by a type with no
+# implementation would always return nothing, which is why the Source
+# filter lists only these.
+#
+# This used to be a hand-written set here, and it drifted exactly like the
+# frontend list it guards: OPENMANAGE and ONEVIEW shipped, nobody updated
+# it, and the guard went green while Dell and HPE servers were
+# unfilterable in the UI. A guard that restates the fact it protects
+# protects nothing.
+_IMPLEMENTED = frozenset(PROVIDER_FACTORIES)
 
 
 def _source(relative: str) -> str:

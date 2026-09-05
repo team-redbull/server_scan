@@ -86,5 +86,7 @@ export const VENDORS: readonly Vendor[] = ["dell", "cisco", "hp", "standalone"];
 export const SOURCE_PROVIDERS: readonly { value: string; label: string }[] = [
   { value: "UCS_CENTRAL", label: "UCS Central" },
   { value: "INTERSIGHT", label: "Intersight" },
+  { value: "OPENMANAGE", label: "OpenManage (Dell)" },
+  { value: "ONEVIEW", label: "OneView (HPE)" },
   { value: "REDFISH_STANDALONE", label: "Standalone (Redfish)" },
 ];

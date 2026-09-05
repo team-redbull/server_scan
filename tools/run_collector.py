@@ -97,7 +97,7 @@ def _openmanage_provider(
     settings: Settings,
 ) -> ServerInventoryProvider:
     """OME says who exists, each server's iDRAC says what it is — see
-    `_PROVIDER_FACTORIES`' comment below.
+    `PROVIDER_FACTORIES`' comment below.
     """
     # Raised here, before any connection is attempted, so a half-configured
     # deployment gets the variable names to set rather than a per-BMC 401
@@ -176,7 +176,7 @@ def _ucs_central_provider(
     settings: Settings,
 ) -> ServerInventoryProvider:
     """Central for the domain list, each domain's own UCS Manager for the
-    servers — see `_PROVIDER_FACTORIES`' comment below.
+    servers — see `PROVIDER_FACTORIES`' comment below.
     """
     # Raised here, before any connection is attempted, so a half-configured
     # deployment gets the variable names to set rather than a per-domain
@@ -360,7 +360,13 @@ _ENDPOINTLESS_TYPES = frozenset({ManagerType.REDFISH_STANDALONE})
 _UNFILTERED_TYPES = frozenset({ManagerType.REDFISH_STANDALONE})
 
 
-_PROVIDER_FACTORIES: dict[ManagerType, Callable[..., ServerInventoryProvider]] = {
+# The single source of truth for "which collectors exist". Public, and
+# read across the language boundary by
+# `tests/unit/test_frontend_manager_types.py`, because the alternative —
+# each consumer restating the same list by hand — is what let the Dell
+# and HPE collectors ship unfilterable in the UI while the guard written
+# to catch exactly that drifted along with them and stayed green.
+PROVIDER_FACTORIES: dict[ManagerType, Callable[..., ServerInventoryProvider]] = {
     ManagerType.UCS_CENTRAL: _ucs_central_provider,
     ManagerType.OPENMANAGE: _openmanage_provider,
     ManagerType.REDFISH_STANDALONE: _redfish_provider,
@@ -537,7 +543,7 @@ async def _build_provider(
     test) can decide which collector variant it is exercising. It defaults
     to the process-wide settings for the callers that have no opinion.
     """
-    factory = _PROVIDER_FACTORIES.get(manager.type)
+    factory = PROVIDER_FACTORIES.get(manager.type)
     if factory is None:
         # UCS Manager gets its own message: the collector for it very much
         # exists and runs on every Central run, it just has no endpoint of

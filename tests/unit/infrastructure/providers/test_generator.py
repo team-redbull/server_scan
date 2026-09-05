@@ -7,7 +7,7 @@ from __future__ import annotations
 import re
 from collections import Counter
 
-from tools.run_collector import manager_for
+from tools.run_collector import PROVIDER_FACTORIES, manager_for
 
 from app.domain.enums import HealthSeverity, ManagerType, Vendor
 from app.domain.models.hardware import Gpu
@@ -16,6 +16,7 @@ from app.domain.value_objects.gpu_catalog import gpu_catalog
 from app.domain.value_objects.site import parse_site_code, site_catalog
 from app.infrastructure.mongodb.classification_rule_repository import default_system_rules
 from app.infrastructure.providers.fake.generator import (
+    COLLECTOR_TYPES,
     collector_for,
     generate_servers,
     list_managers,
@@ -50,6 +51,36 @@ def _installation_type(name: str) -> str:
         if pattern.match(name):
             return installation_type
     return "UNCLASSIFIED"
+
+
+# The seeder deliberately does not shape every collector, but the gap is
+# named here rather than left to be noticed. Derived from
+# `PROVIDER_FACTORIES` so a sixth collector fails this test instead of
+# quietly having no seed data — which is how OPENMANAGE's absence went
+# unnoticed after the Dell collector shipped.
+#
+# ponytail: OPENMANAGE has no seeded shape because a Dell server collected
+# through OME is read over Redfish, so `provider_type_for` cannot tell it
+# apart from a REDFISH_STANDALONE Dell by `external_id` prefix — the
+# discriminator every other collector uses. Seeding it means carrying the
+# collector on the generated server instead of reading it back off
+# `external_id`. Do that when someone needs to look at Dell's OME path in
+# the UI without live hardware.
+_UNSEEDED_COLLECTORS = frozenset({ManagerType.OPENMANAGE})
+
+
+def test_the_seeder_shapes_every_implemented_collector() -> None:
+    """A collector with no seeded shape cannot be looked at in the UI
+    without live hardware, which is most of what the seeder is for.
+    """
+    expected = frozenset(PROVIDER_FACTORIES) - _UNSEEDED_COLLECTORS
+    missing = expected - frozenset(COLLECTOR_TYPES)
+
+    assert not missing, (
+        f"COLLECTOR_TYPES is missing {sorted(t.value for t in missing)}. Give the "
+        "collector a shape in the generator, or add it to _UNSEEDED_COLLECTORS "
+        "with the reason."
+    )
 
 
 def test_same_seed_produces_byte_identical_output() -> None:
