@@ -133,7 +133,7 @@ class _FakeRedfish:
         self._servers = servers
         self.collection_errors: tuple[str, ...] = ()
 
-    async def list_servers(self) -> AsyncIterator[ProviderServer]:
+    async def collect(self) -> AsyncIterator[ProviderServer]:
         """
         Yields:
             ProviderServer: Each canned server in order.
@@ -222,7 +222,7 @@ class TestDiscovery:
         )
         client = _FakeOmeClient([], [])
         provider._new_client = lambda: client  # type: ignore[method-assign]
-        [server async for server in provider.list_servers()]
+        [server async for server in provider.collect()]
         assert client.paths == ["/ProfileService/Profiles", "/DeviceService/Devices"]
 
     async def test_the_name_filter_runs_before_any_bmc_is_contacted(self) -> None:
@@ -243,7 +243,7 @@ class TestDiscovery:
             servers=[_collected("10.0.0.1")],
             name_pattern="^ocp",
         )
-        [server async for server in provider.list_servers()]
+        [server async for server in provider.collect()]
         assert [t.host for t in recorded["redfish"].targets] == ["10.0.0.1"]
 
     async def test_an_undeployed_profile_is_skipped_without_failing_the_run(self) -> None:
@@ -255,7 +255,7 @@ class TestDiscovery:
             devices=[],
             servers=[],
         )
-        assert [server async for server in provider.list_servers()] == []
+        assert [server async for server in provider.collect()] == []
         assert recorded == {} or recorded["redfish"].targets == []
         assert provider.collection_errors == ()
 
@@ -269,7 +269,7 @@ class TestDiscovery:
             devices=[_device("10.0.0.1", service_tag="7XKD9P3")],
             servers=[_collected("10.0.0.1")],
         )
-        [server async for server in provider.list_servers()]
+        [server async for server in provider.collect()]
         target = recorded["redfish"].targets[0]
         assert target.name == "ocp4-nyc-prod-worker-03"
         assert target.credential.username == "bu"
@@ -287,7 +287,7 @@ class TestTheJoin:
             devices=[_device("10.0.0.1", service_tag="7XKD9P3")],
             servers=[_collected("10.0.0.1")],
         )
-        [server] = [s async for s in provider.list_servers()]
+        [server] = [s async for s in provider.collect()]
         assert server.profile_template_name == "RHOCP Worker v4"
         assert server.profile_template_external_id == "412"
 
@@ -302,7 +302,7 @@ class TestTheJoin:
             devices=[_device("10.0.0.1", service_tag="7XKD9P3")],
             servers=[_collected("10.0.0.1")],
         )
-        [server] = [s async for s in provider.list_servers()]
+        [server] = [s async for s in provider.collect()]
         assert server.bmc_address_raw == (
             "idrac-virtualmedia://10.0.0.1/redfish/v1/Systems/System.Embedded.1"
         )
@@ -316,7 +316,7 @@ class TestTheJoin:
             devices=[_device("10.0.0.1", service_tag="OME-TAG", model="OME Model")],
             servers=[_collected("10.0.0.1", serial="BMC-TAG", model="BMC Model")],
         )
-        [server] = [s async for s in provider.list_servers()]
+        [server] = [s async for s in provider.collect()]
         assert server.serial == "BMC-TAG"
         assert server.model == "BMC Model"
         assert server.cpu_threads == 64
@@ -331,7 +331,7 @@ class TestTheJoin:
             devices=[_device("10.0.0.1", service_tag="7XKD9P3", model="PowerEdge R650")],
             servers=[_collected("10.0.0.1", model=None, serial=None)],
         )
-        [server] = [s async for s in provider.list_servers()]
+        [server] = [s async for s in provider.collect()]
         assert server.model == "PowerEdge R650"
         assert server.serial == "7XKD9P3"
 
@@ -347,7 +347,7 @@ class TestTheJoin:
                 _collected("10.0.0.1", external_id="sys-2"),
             ],
         )
-        servers = [s async for s in provider.list_servers()]
+        servers = [s async for s in provider.collect()]
         assert [s.profile_template_name for s in servers] == ["RHOCP Worker v4"] * 2
 
     async def test_the_manager_id_is_this_run_s(self) -> None:
@@ -359,7 +359,7 @@ class TestTheJoin:
             devices=[_device("10.0.0.1", service_tag="7XKD9P3")],
             servers=[_collected("10.0.0.1", manager_id="something-else")],
         )
-        [server] = [s async for s in provider.list_servers()]
+        [server] = [s async for s in provider.collect()]
         assert server.manager_id == "mgr-ome-1"
 
 
@@ -377,7 +377,7 @@ class TestPartialRuns:
             servers=[_collected("10.0.0.1")],
         )
         servers = []
-        async for server in provider.list_servers():
+        async for server in provider.collect():
             recorded["redfish"].collection_errors = ("10.0.0.2: unreachable",)
             servers.append(server)
         assert provider.collection_errors == ("10.0.0.2: unreachable",)

@@ -307,7 +307,7 @@ class IngestService:
 
         await provider.health_check()
 
-        async for provider_server in provider.list_servers():
+        async for provider_server in provider.collect():
             summary.fetched += 1
             try:
                 created = await self._ingest_one(

@@ -124,6 +124,12 @@ class OneViewClient:
         self._configured_api_version = api_version
         self._api_version: int | None = None
         self._session_id: str | None = None
+        # One message per `get_all` call that paged short of the
+        # collection's own reported `total` — read by `OneViewProvider`
+        # after every bulk call this client makes, so a run that lost
+        # part of the appliance's inventory to a paging ceiling reports
+        # PARTIAL rather than a silently-complete success. See ADR-0023.
+        self.truncations: list[str] = []
         # verify=False is deliberate for self-signed appliances — see the
         # `verify_tls` argument docstring.
         self._http = httpx.AsyncClient(
@@ -366,6 +372,15 @@ class OneViewClient:
                     "the list is truncated without saying whether nextPageUri continues "
                     "past it. Servers beyond this point were NOT collected."
                 ),
+            )
+            # Named for `OneViewProvider.collection_errors`: an operator
+            # reading a failed CronJob needs the three numbers in one
+            # line to tell a lost connection from the paging ceiling
+            # without opening the logs.
+            self.truncations.append(
+                f"{path}: appliance reports {total} member(s) but paging with "
+                f"count={page_size} returned only {len(members)} — /rest/server-profiles "
+                "has a documented 256-per-request ceiling"
             )
         return members
 

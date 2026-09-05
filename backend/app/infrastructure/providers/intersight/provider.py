@@ -16,14 +16,14 @@ would make one document's fields flip on every run. ADR-0017,
 from __future__ import annotations
 
 import time
-from collections.abc import AsyncIterator, Callable, Iterable, Mapping
+from collections.abc import AsyncGenerator, Callable, Iterable, Mapping
 from typing import Any
 
 import structlog
 
 from app.domain.enums import ManagerType
 from app.domain.models.manager import Manager
-from app.domain.ports.provider import ProviderServer
+from app.domain.ports.provider import ProviderServer, ServerInventoryProvider
 from app.infrastructure.providers.intersight import mapping
 from app.infrastructure.providers.intersight.client import (
     IntersightClient,
@@ -201,7 +201,7 @@ class _Joins:
         return table.get(moid, [])
 
 
-class IntersightProvider:
+class IntersightProvider(ServerInventoryProvider):
     """
     Collect an Intersight tenant or on-prem appliance in one pass.
 
@@ -245,6 +245,7 @@ class IntersightProvider:
             debug_http (bool): Log method, path and status per request.
             client_factory (Callable[[], Any] | None): Injected in tests.
         """
+        super().__init__()
         self._manager = manager
         self._endpoint = endpoint
         self._api_key_id = api_key_id
@@ -256,22 +257,6 @@ class IntersightProvider:
         self._run_budget_seconds = run_budget_seconds
         self._debug_http = debug_http
         self._client_factory = client_factory
-        self._collection_errors: list[str] = []
-
-    @property
-    def collection_errors(self) -> tuple[str, ...]:
-        """
-        Sub-resource queries this run could not complete.
-
-        Read by `tools.run_collector`, which turns a non-empty result
-        into exit code 3 (PARTIAL). A run that could not read drives is
-        not a run that found no drives, and must not be reported as a
-        clean one.
-
-        Returns:
-            tuple[str, ...]: One message per failed query.
-        """
-        return tuple(self._collection_errors)
 
     def _new_client(self) -> Any:
         """
@@ -354,7 +339,7 @@ class IntersightProvider:
             return [row async for row in client.list_all(resource, select=select)]
         except IntersightError as exc:
             message = f"{resource}: {exc}"
-            self._collection_errors.append(message)
+            self._record_error(message)
             logger.warning("intersight.subresource_failed", resource=resource, error=str(exc))
             return None
 
@@ -546,10 +531,10 @@ class IntersightProvider:
             phase (str): What the run had reached when the budget went.
         """
         message = f"run budget of {self._run_budget_seconds:.0f}s exhausted {phase}"
-        self._collection_errors.append(message)
+        self._record_error(message)
         logger.warning("intersight.run_budget_exhausted", phase=phase)
 
-    async def list_servers(self) -> AsyncIterator[ProviderServer]:
+    async def _list_servers(self) -> AsyncGenerator[ProviderServer, None]:
         """
         Every server this endpoint reports, in the modes configured.
 

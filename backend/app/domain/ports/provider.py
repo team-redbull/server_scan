@@ -1,28 +1,28 @@
-"""The future-collector seam.
+"""The collector seam every vendor provider implements.
 
-`ServerInventoryProvider` and `ProviderServer` are the interface every
-real vendor collector (Dell OpenManage, Cisco UCS Manager, Cisco
-Intersight, HPE OneView) will implement/produce later. The Phase 1 fake
-data generator implements this *same* Protocol and emits this *same* DTO
-— it does not take a shortcut and write `Server` documents directly — so
-the ingestion pipeline (normalize -> correlate -> upsert) is exercised
-end-to-end by fake data exactly as it will be by real collectors, and
-adding a real collector later is "write a new provider", not "extend the
-pipeline".
+`ServerInventoryProvider` and `ProviderServer` are the interface all seven
+providers (`fake`, `ucs_manager`, `ucs_central`, `intersight`,
+`openmanage`, `oneview`, `redfish`) implement/produce.
+`app.application.services.ingest` is the one caller: it drives
+`collect()`, then normalizes each `ProviderServer` into a domain `Server`
+(correlate -> classify -> health-evaluate -> upsert).
 
 `ProviderServer` is intentionally flatter and less structured than the
 domain `Server` model: it's the raw-ish shape a collector naturally
 produces (already vendor-normalized, but not yet correlated against
 existing records or run through the search/cursor/health/classification
-machinery). `app.application.services.ingest` is what turns one into the
-other.
+machinery).
+
+`ServerInventoryProvider` is an `ABC`, not a `Protocol` — see ADR-0023 for
+why, and for the mechanism behind `_list_servers`' exact signature.
 """
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from abc import ABC, abstractmethod
+from collections.abc import AsyncGenerator
+from contextlib import aclosing
 from dataclasses import dataclass, field
-from typing import Protocol
 
 
 @dataclass(frozen=True, slots=True)
@@ -170,9 +170,107 @@ class ProviderServer:
     tags: tuple[str, ...] = field(default_factory=tuple)
 
 
-class ServerInventoryProvider(Protocol):
+class ServerInventoryProvider(ABC):
+    """
+    The lifecycle every vendor collector implements.
+
+    `collect()` is the one method a caller drives: it resets
+    `collection_errors` for this run and guarantees `_list_servers()`'s
+    generator is closed even if the caller stops early (a raised
+    exception, `--limit`, a cancelled task), which releases whatever
+    session or resources it opened rather than deferring that to
+    garbage collection. A subclass fills in `_list_servers()`,
+    `health_check()`, and calls `_record_error()` for a failure that
+    means part of the fleet was not collected — see ADR-0023 for what
+    does and does not count as one.
+
+    Subclasses with their own `__init__` must call `super().__init__()`.
+    """
+
     provider_type: str
 
-    async def health_check(self) -> None: ...
+    def __init__(self) -> None:
+        """Start this run's failure list empty."""
+        self._collection_errors: list[str] = []
 
-    def list_servers(self) -> AsyncIterator[ProviderServer]: ...
+    @property
+    def collection_errors(self) -> tuple[str, ...]:
+        """
+        Partial failures this run recorded.
+
+        Read by `tools.run_collector`, which turns a non-empty result into
+        exit code 3 (PARTIAL) — a run that reported success despite
+        missing part of the fleet is worse than one that says so.
+
+        Returns:
+            tuple[str, ...]: One message per failure, empty for a run
+                that collected everything it planned to.
+        """
+        return tuple(self._collection_errors)
+
+    def _record_error(self, message: str) -> None:
+        """
+        Record one failure that cost this run part of the fleet.
+
+        Args:
+            message (str): A human-readable description, naming the
+                endpoint/domain/host and, where relevant, the numbers
+                (e.g. how many were expected versus fetched) — this is
+                what an operator reads to tell a lost connection from a
+                paging ceiling.
+        """
+        self._collection_errors.append(message)
+
+    async def collect(self) -> AsyncGenerator[ProviderServer, None]:
+        """
+        Run this collector once, yielding every server it can reach.
+
+        Declared `AsyncGenerator`, not the narrower `AsyncIterator`, so a
+        caller that closes it early (`generator.aclose()`, or wrapping it
+        in another `contextlib.aclosing`) type-checks — matching why
+        `_list_servers` is declared the same way.
+
+        Resets `collection_errors` before iterating, so a second call on
+        the same instance reports only this run's failures. Wraps
+        `_list_servers()` in `contextlib.aclosing` so an abandoned run
+        still closes the underlying generator — and with it, whatever
+        session or client `_list_servers()` opened.
+
+        Yields:
+            ProviderServer: Each server `_list_servers()` produces.
+        """
+        self._collection_errors = []
+        async with aclosing(self._list_servers()) as stream:
+            async for server in stream:
+                yield server
+
+    @abstractmethod
+    async def health_check(self) -> None:
+        """
+        Verify this collector is reachable and its credentials work.
+
+        Raises:
+            Exception: A vendor-specific connection or authentication
+                error, on any failure.
+        """
+        ...
+
+    @abstractmethod
+    def _list_servers(self) -> AsyncGenerator[ProviderServer, None]:
+        """
+        Yield every server this collector can reach, one pass.
+
+        Must be a plain `def`, never `async def`: an `async def` stub
+        with no `yield` in its body types as
+        `Coroutine[Any, Any, AsyncGenerator[ProviderServer, None]]`,
+        which every concrete async-generator override (every real
+        implementation of this method) then violates under Liskov
+        substitution — `ty` rejects it on all seven providers. Declared
+        `AsyncGenerator`, not the narrower `AsyncIterator`, because
+        `collect()` wraps it in `contextlib.aclosing`, which needs
+        `aclose()` on the thing it wraps. See ADR-0023.
+
+        Yields:
+            ProviderServer: One server, already vendor-normalized.
+        """
+        ...

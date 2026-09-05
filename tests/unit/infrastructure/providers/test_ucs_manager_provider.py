@@ -254,7 +254,7 @@ def _domain(**overrides: list[Any]) -> dict[str, list[Any]]:
 
 
 async def _collect(provider: UcsManagerProvider) -> list[Any]:
-    return [server async for server in provider.list_servers()]
+    return [server async for server in provider.collect()]
 
 
 class TestListServers:
@@ -601,7 +601,7 @@ class TestListServers:
         `finally`.
         """
         client = FakeUcsClient(responses=_domain())
-        generator = _provider(client).list_servers()
+        generator = _provider(client).collect()
         await generator.__anext__()
         await generator.aclose()
         assert client.calls[-1] == "logout"

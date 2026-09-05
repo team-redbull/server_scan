@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import dataclasses
 import re
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncGenerator, Callable
 from typing import Any
 
 import structlog
@@ -36,7 +36,7 @@ import structlog
 from app.domain.enums import ManagerType
 from app.domain.models.manager import Manager
 from app.domain.ports.credentials import ManagerConnection
-from app.domain.ports.provider import ProviderServer
+from app.domain.ports.provider import ProviderServer, ServerInventoryProvider
 from app.domain.value_objects.bmc_address import parse_bmc_address
 from app.infrastructure.providers.openmanage.client import OmeClient
 from app.infrastructure.providers.openmanage.mapping import (
@@ -51,7 +51,7 @@ logger = structlog.get_logger(__name__)
 _PROVIDER_TYPE = ManagerType.OPENMANAGE.value
 
 
-class OpenManageProvider:
+class OpenManageProvider(ServerInventoryProvider):
     """
     Collects one OpenManage Enterprise appliance's Dell inventory.
 
@@ -118,6 +118,7 @@ class OpenManageProvider:
         """
         if not manager.endpoint:
             raise ValueError(f"Manager {manager.id!r} has no endpoint configured.")
+        super().__init__()
         self._endpoint: str = manager.endpoint
         self._manager = manager
         self._credentials = credentials
@@ -130,18 +131,6 @@ class OpenManageProvider:
         self._bmc_verify_tls_reason = bmc_verify_tls_reason
         self._bmc_ca_bundle = bmc_ca_bundle
         self._verify_tls = verify_tls
-        self._collection_errors: list[str] = []
-
-    @property
-    def collection_errors(self) -> tuple[str, ...]:
-        """Servers this run could not fully collect.
-
-        Read by `tools.run_collector` so a run that reached OME but could
-        not reach every matched server's BMC reports PARTIAL rather than a
-        silently-complete success. Carries the Redfish pass's own per-host
-        errors through unchanged, plus any profile OME gave no address for.
-        """
-        return tuple(self._collection_errors)
 
     def _new_client(self) -> OmeClient:
         """
@@ -173,9 +162,12 @@ class OpenManageProvider:
         async with self._new_client():
             return
 
-    async def list_servers(self) -> AsyncIterator[ProviderServer]:
+    async def _list_servers(self) -> AsyncGenerator[ProviderServer, None]:
         """
         Yield every matched Dell server, named by OME and measured by its BMC.
+
+        `collect()` (the base class) resets `collection_errors` before
+        calling this.
 
         Yields:
             ProviderServer: One Dell server: hardware as its iDRAC reports
@@ -186,7 +178,6 @@ class OpenManageProvider:
                 enumeration call. A single unreachable BMC is recorded in
                 `collection_errors` and does not abort the run.
         """
-        self._collection_errors = []
         identities = await self._discover()
         if not identities:
             logger.info("ome.no_matching_profiles", endpoint=self._endpoint)
@@ -200,9 +191,10 @@ class OpenManageProvider:
         )
 
         redfish = self._redfish_provider_factory(targets)
-        async for server in redfish.list_servers():
+        async for server in redfish.collect():
             yield self._merged(server, identities)
-        self._collection_errors.extend(getattr(redfish, "collection_errors", ()))
+        for message in redfish.collection_errors:
+            self._record_error(message)
 
     async def _discover(self) -> dict[str, OmeIdentity]:
         """

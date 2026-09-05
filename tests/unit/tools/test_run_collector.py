@@ -8,6 +8,7 @@ a vendor endpoint.
 
 from __future__ import annotations
 
+from collections.abc import AsyncGenerator
 from types import SimpleNamespace
 from typing import Any
 
@@ -20,7 +21,6 @@ from tools.run_collector import (
     _parse_args,
     _run,
     _run_one_manager,
-    collection_errors_of,
 )
 
 from app.application.services.ingest import IngestSummary
@@ -29,7 +29,7 @@ from app.domain.enums import ManagerType
 from app.domain.models.common import AuditFields
 from app.domain.models.manager import Manager
 from app.domain.ports.credentials import ManagerConnection, ManagerNotConfiguredError
-from app.domain.ports.provider import ProviderAttachment, ProviderServer
+from app.domain.ports.provider import ProviderAttachment, ProviderServer, ServerInventoryProvider
 
 pytestmark = pytest.mark.unit
 
@@ -257,13 +257,21 @@ class TestRunOneManager:
         """
 
         class PartiallyFailedProvider:
+            """Duck-typed, not `ServerInventoryProvider`: `FakeIngestService`
+            below never drives `collect()`/`_list_servers()` at all, so a
+            plain `collection_errors` attribute — what a real run would have
+            reported by the time `_run_one_manager` reads it — is the
+            honest double here, not a body that looks like it runs but
+            never gets called.
+            """
+
             provider_type = "UCS_CENTRAL"
             collection_errors = ("domain 'b' (10.0.0.2) failed: bad credentials",)
 
             async def health_check(self) -> None:
                 return None
 
-            async def list_servers(self) -> Any:
+            async def _list_servers(self) -> Any:
                 return
                 yield
 
@@ -380,13 +388,13 @@ class TestDryRun:
         events, no upsert.
         """
 
-        class FakeProvider:
+        class FakeProvider(ServerInventoryProvider):
             provider_type = "UCS_MANAGER"
 
             async def health_check(self) -> None:
                 return None
 
-            async def list_servers(self) -> Any:
+            async def _list_servers(self) -> Any:
                 for name in ("ocp4-prod-tlv-infra-01", "ocp4-hypershift-five-01"):
                     yield ProviderServer(external_id=f"dn/{name}", vendor="cisco", name=name)
 
@@ -411,13 +419,13 @@ class TestDryRun:
         when its service profile lives under a site-named org.
         """
 
-        class FakeProvider:
+        class FakeProvider(ServerInventoryProvider):
             provider_type = "UCS_CENTRAL"
 
             async def health_check(self) -> None:
                 return None
 
-            async def list_servers(self) -> Any:
+            async def _list_servers(self) -> Any:
                 yield ProviderServer(
                     external_id="compute/sys-1/blade-1",
                     vendor="cisco",
@@ -440,13 +448,13 @@ class TestDryRun:
         is visible before a write.
         """
 
-        class FakeProvider:
+        class FakeProvider(ServerInventoryProvider):
             provider_type = "REDFISH_STANDALONE"
 
             async def health_check(self) -> None:
                 return None
 
-            async def list_servers(self) -> Any:
+            async def _list_servers(self) -> Any:
                 yield ProviderServer(
                     external_id="redfish://10.0.0.5/redfish/v1/Systems/1",
                     vendor="standalone",
@@ -493,13 +501,13 @@ class TestDryRun:
         print never had anything to show either.
         """
 
-        class FakeProvider:
+        class FakeProvider(ServerInventoryProvider):
             provider_type = "INTERSIGHT"
 
             async def health_check(self) -> None:
                 return None
 
-            async def list_servers(self) -> Any:
+            async def _list_servers(self) -> Any:
                 yield ProviderServer(
                     external_id="intersight/moid1",
                     vendor="cisco",
@@ -544,13 +552,13 @@ class TestDryRun:
         (PSUs)"). A provider without it (Intersight) always prints "—".
         """
 
-        class FakeProvider:
+        class FakeProvider(ServerInventoryProvider):
             provider_type = "UCS_CENTRAL"
 
             async def health_check(self) -> None:
                 return None
 
-            async def list_servers(self) -> Any:
+            async def _list_servers(self) -> Any:
                 yield ProviderServer(
                     external_id="sys/rack-unit-3",
                     vendor="cisco",
@@ -587,13 +595,13 @@ class TestDryRun:
         FI-shaped line as a direct consequence of this.
         """
 
-        class FakeProvider:
+        class FakeProvider(ServerInventoryProvider):
             provider_type = "INTERSIGHT"
 
             async def health_check(self) -> None:
                 return None
 
-            async def list_servers(self) -> Any:
+            async def _list_servers(self) -> Any:
                 yield ProviderServer(
                     external_id="intersight/moid1",
                     vendor="cisco",
@@ -633,13 +641,13 @@ class TestDryRun:
         assert "FI model/serial" not in out
 
     async def test_dry_run_respects_limit(self, capsys: Any) -> None:
-        class FakeProvider:
+        class FakeProvider(ServerInventoryProvider):
             provider_type = "UCS_MANAGER"
 
             async def health_check(self) -> None:
                 return None
 
-            async def list_servers(self) -> Any:
+            async def _list_servers(self) -> Any:
                 for i in range(10):
                     yield ProviderServer(external_id=f"dn/{i}", vendor="cisco", name=f"srv-{i}")
 
@@ -660,23 +668,27 @@ class TestNameFilter:
     this platform's at all.
     """
 
-    class _Fake:
+    class _Fake(ServerInventoryProvider):
         provider_type = "UCS_MANAGER"
 
-        def __init__(self, *names: str) -> None:
+        def __init__(self, *names: str, error: str | None = None) -> None:
+            super().__init__()
             self._names = names
+            self._error = error
             self.health_checked = 0
 
         async def health_check(self) -> None:
             self.health_checked += 1
 
-        async def list_servers(self) -> Any:
+        async def _list_servers(self) -> AsyncGenerator[ProviderServer, None]:
             for name in self._names:
                 yield ProviderServer(external_id=f"dn/{name}", vendor="cisco", name=name)
+            if self._error is not None:
+                self._record_error(self._error)
 
     async def _names_through(self, pattern: str, *names: str) -> list[str]:
-        provider = _filtered(self._Fake(*names), pattern)  # type: ignore[arg-type]
-        return [ps.name async for ps in provider.list_servers()]
+        provider = _filtered(self._Fake(*names), pattern)
+        return [ps.name async for ps in provider.collect()]
 
     async def test_keeps_only_matching_servers(self) -> None:
         kept = await self._names_through(
@@ -735,35 +747,31 @@ class TestNameFilter:
         assert "^ocp" in out
 
 
-class TestCollectionErrorsOf:
-    """Read reflectively, so a provider that cannot partially fail — the
-    fake seeder, and every single-endpoint vendor collector — needs no
-    attribute at all.
+class TestNameFilteredProviderCollectionErrors:
+    """`_NameFilteredProvider.collection_errors` must delegate to the
+    provider it wraps, never accumulate its own — the wrapper never calls
+    `_record_error`, so inheriting the base's bookkeeping unmodified would
+    always read back empty, making every filtered run (every real run,
+    since `^ocp` is always set) look complete even when the inner
+    provider missed part of the fleet.
     """
 
-    def test_a_provider_without_the_attribute_reports_none(self) -> None:
-        assert collection_errors_of(object()) == ()
+    async def test_delegates_to_the_inner_providers_own_errors(self) -> None:
+        inner = TestNameFilter._Fake("ocp4-prod-tlv-infra-01", error="domain 'b' (10.0.0.2) failed")
+        wrapped = _filtered(inner, "^ocp")
 
-    def test_errors_are_passed_through(self) -> None:
-        provider = SimpleNamespace(collection_errors=("domain 'b' failed",))
-        assert collection_errors_of(provider) == ("domain 'b' failed",)
+        async for _ in wrapped.collect():
+            pass
 
-    def test_a_none_attribute_is_treated_as_no_errors(self) -> None:
-        """`getattr` returning `None` must not become `(None,)`, which would
-        report a phantom failure and turn a healthy run red.
-        """
-        assert collection_errors_of(SimpleNamespace(collection_errors=None)) == ()
+        assert wrapped.collection_errors == ("domain 'b' (10.0.0.2) failed",)
 
-    def test_the_name_filter_wrapper_does_not_hide_them(self) -> None:
-        """The wrapper stands in for the provider everywhere `_run_one_manager`
-        looks, so swallowing this would make every filtered run — which is
-        every real run, since `^ocp` is always set — report as complete.
-        """
-        inner = TestNameFilter._Fake()
-        inner.collection_errors = ("domain 'b' (10.0.0.2) failed",)  # type: ignore[attr-defined]
+    async def test_a_provider_with_no_failure_reports_none(self) -> None:
+        wrapped = _filtered(TestNameFilter._Fake("ocp4-prod-tlv-infra-01"), "^ocp")
 
-        wrapped = _filtered(inner, "^ocp")  # type: ignore[arg-type]
-        assert collection_errors_of(wrapped) == ("domain 'b' (10.0.0.2) failed",)
+        async for _ in wrapped.collect():
+            pass
+
+        assert wrapped.collection_errors == ()
 
 
 class FakeMongo:

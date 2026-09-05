@@ -32,7 +32,7 @@ from __future__ import annotations
 import asyncio
 import re
 from collections import Counter
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncGenerator, Callable
 from typing import Any
 
 import structlog
@@ -40,7 +40,7 @@ import structlog
 from app.domain.enums import ManagerType
 from app.domain.models.manager import Manager
 from app.domain.ports.credentials import ManagerConnection
-from app.domain.ports.provider import ProviderServer
+from app.domain.ports.provider import ProviderServer, ServerInventoryProvider
 from app.infrastructure.providers.oneview.client import (
     DEFAULT_PAGE_SIZE,
     EXPANDED_PAGE_SIZE,
@@ -66,7 +66,7 @@ _SERVER_PROFILE_TEMPLATES = "/rest/server-profile-templates"
 _SERVER_HARDWARE = "/rest/server-hardware"
 
 
-class OneViewProvider:
+class OneViewProvider(ServerInventoryProvider):
     """
     Collects one HPE OneView appliance's inventory.
 
@@ -126,6 +126,7 @@ class OneViewProvider:
         """
         if not manager.endpoint:
             raise ValueError(f"Manager {manager.id!r} has no endpoint configured.")
+        super().__init__()
         self._endpoint: str = manager.endpoint
         self._manager = manager
         self._credentials = credentials
@@ -165,9 +166,12 @@ class OneViewProvider:
         async with self._client_factory():
             return
 
-    async def list_servers(self) -> AsyncIterator[ProviderServer]:
+    async def _list_servers(self) -> AsyncGenerator[ProviderServer, None]:
         """
         Yield every matched HPE server on the appliance.
+
+        `collect()` (the base class) resets `collection_errors` before
+        calling this.
 
         Yields:
             ProviderServer: One HPE server, named by its server profile
@@ -191,6 +195,13 @@ class OneViewProvider:
             )
             matched = self._matched(profiles=profiles, templates=templates, hardware=hardware)
             power_supplies = await self._power_supplies(client, [member for member, _ in matched])
+            # A truncated profiles/templates/hardware page means real
+            # servers were never even listed — the same failure class as
+            # an unreachable UCS domain or Redfish host, unlike a
+            # per-server unreadable subresource (handled by `psus=None`/
+            # `unread_fields` below, never a collection error).
+            for message in client.truncations:
+                self._record_error(message)
 
         logger.info(
             "oneview.collected",

@@ -109,7 +109,7 @@ def _provider(port: int, *targets: RedfishTarget, **overrides: Any) -> RedfishSt
 
 
 async def _collect(provider: RedfishStandaloneProvider) -> list[Any]:
-    return [server async for server in provider.list_servers()]
+    return [server async for server in provider.collect()]
 
 
 class TestHealthyHost:

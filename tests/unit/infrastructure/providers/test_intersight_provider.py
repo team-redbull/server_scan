@@ -230,7 +230,7 @@ async def _collect(provider: IntersightProvider) -> list[Any]:
     Returns:
         list[Any]: Every server it yielded.
     """
-    return [server async for server in provider.list_servers()]
+    return [server async for server in provider.collect()]
 
 
 # --- the fleet-wide join ----------------------------------------------

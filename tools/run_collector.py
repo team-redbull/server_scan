@@ -21,7 +21,7 @@ import argparse
 import asyncio
 import os
 import re
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from dataclasses import dataclass
 
 import structlog
@@ -454,7 +454,7 @@ def manager_for(manager_type: ManagerType, connection: ManagerConnection) -> Man
     )
 
 
-class _NameFilteredProvider:
+class _NameFilteredProvider(ServerInventoryProvider):
     """Drops every server whose name doesn't match `pattern` before it
     reaches the pipeline — `INVENTORY_COLLECTOR_NAME_PATTERN`.
 
@@ -467,12 +467,17 @@ class _NameFilteredProvider:
     filter living there would make a dry run print servers a real run
     would never write.
 
-    Vendor-agnostic by construction: it wraps the `ServerInventoryProvider`
-    Protocol, so OpenManage/OneView/Intersight inherit it the day they
-    exist without a line of their own.
+    Vendor-agnostic by construction: it wraps `ServerInventoryProvider`,
+    so every real collector inherits it without a line of their own.
+
+    A wrapper, not a vendor: `collection_errors` is overridden to
+    delegate to `_inner`'s own rather than the base's — it never calls
+    `_record_error` itself, so accumulating into the inherited list would
+    silently under-report (a filtered run always reads back empty).
     """
 
     def __init__(self, inner: ServerInventoryProvider, pattern: str) -> None:
+        super().__init__()
         self._inner = inner
         self._pattern = re.compile(pattern)
         self.provider_type = inner.provider_type
@@ -482,17 +487,16 @@ class _NameFilteredProvider:
         """Pass the wrapped collector's partial failures straight through.
 
         Without this the wrapper would swallow them and every filtered run
-        would look complete. Providers that report none are treated as
-        having none.
+        would look complete.
         """
-        return collection_errors_of(self._inner)
+        return self._inner.collection_errors
 
     async def health_check(self) -> None:
         await self._inner.health_check()
 
-    async def list_servers(self) -> AsyncIterator[ProviderServer]:
+    async def _list_servers(self) -> AsyncGenerator[ProviderServer, None]:
         kept = skipped = 0
-        async for provider_server in self._inner.list_servers():
+        async for provider_server in self._inner.collect():
             if self._pattern.search(provider_server.name):
                 kept += 1
                 yield provider_server
@@ -512,24 +516,6 @@ class _NameFilteredProvider:
 
 def _filtered(provider: ServerInventoryProvider, pattern: str) -> ServerInventoryProvider:
     return _NameFilteredProvider(provider, pattern) if pattern else provider
-
-
-def collection_errors_of(provider: object) -> tuple[str, ...]:
-    """Partial failures a collector recorded, or none if it reports any.
-
-    Read reflectively rather than added to the `ServerInventoryProvider`
-    Protocol: only a collector that fans out over several endpoints can
-    partially fail, so requiring the attribute of every provider — the
-    fake seeder included — would be ceremony for a single vendor's shape.
-
-    Args:
-        provider (object): Any collector, wrapped or not.
-
-    Returns:
-        tuple[str, ...]: One message per failure, empty if the run was
-            complete or the provider does not track this.
-    """
-    return tuple(getattr(provider, "collection_errors", ()) or ())
 
 
 async def _build_provider(
@@ -709,7 +695,7 @@ async def _dry_run_one_manager(
         print(f"    (only servers whose name matches {name_pattern!r} are shown/collected)")
 
     count = 0
-    async for ps in provider.list_servers():
+    async for ps in provider.collect():
         if limit is not None and count >= limit:
             print(f"  … stopped at --limit {limit}")
             break
@@ -892,7 +878,7 @@ async def _run_one_manager(
         # server carried a `manager_id` pointing at a document that was
         # never created — see docs/adr/0016.
         summary = await ingest_service.ingest(provider, managers=[manager])
-        return _RunOutcome(summary=summary, collection_errors=collection_errors_of(provider))
+        return _RunOutcome(summary=summary, collection_errors=provider.collection_errors)
     except Exception:
         logger.exception(
             "collector.manager_failed", manager_id=manager.id, manager_name=manager.name

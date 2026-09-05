@@ -15,9 +15,9 @@ set.
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 
-from app.domain.ports.provider import ProviderServer
+from app.domain.ports.provider import ProviderServer, ServerInventoryProvider
 from app.domain.value_objects.site import SiteCatalog
 from app.infrastructure.providers.fake.generator import (
     COLLECTOR_TYPES,
@@ -26,10 +26,10 @@ from app.infrastructure.providers.fake.generator import (
 )
 
 
-class FakeProvider:
+class FakeProvider(ServerInventoryProvider):
     """`ServerInventoryProvider` for deterministic fake data. `seed`,
     `count` and `provider_type` are fixed at construction time —
-    `list_servers()` yields the same servers, generated from the same
+    `collect()` yields the same servers, generated from the same
     `seed`, every time it is called on a given instance.
     """
 
@@ -52,6 +52,7 @@ class FakeProvider:
             sites (SiteCatalog | None): The sites whose codes appear in
                 generated hostnames, or None for the shipped default.
         """
+        super().__init__()
         self._seed = seed
         self._count = count
         self.provider_type = provider_type
@@ -61,7 +62,7 @@ class FakeProvider:
         """No real backend to check — the fake provider is always healthy."""
         return
 
-    async def list_servers(self) -> AsyncIterator[ProviderServer]:
+    async def _list_servers(self) -> AsyncGenerator[ProviderServer, None]:
         """
         Yields:
             ProviderServer: Each fake server this collector would own.

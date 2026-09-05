@@ -11,12 +11,12 @@ construction, Mongo round-trip) to be useful.
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 
 import pytest
 
 from app.application.services.ingest import IngestService
-from app.domain.ports.provider import ProviderServer
+from app.domain.ports.provider import ProviderServer, ServerInventoryProvider
 from app.domain.value_objects.gpu_catalog import GpuCatalog
 from app.domain.value_objects.site import site_catalog
 from app.infrastructure.mongodb import MongoClientHolder
@@ -32,18 +32,19 @@ pytestmark = pytest.mark.integration
 _CURSOR_SECRET = "test-cursor-secret"
 
 
-class _OneShotProvider:
+class _OneShotProvider(ServerInventoryProvider):
     """Yields exactly the `ProviderServer`s it is handed."""
 
     provider_type = "test"
 
     def __init__(self, *servers: ProviderServer) -> None:
+        super().__init__()
         self._servers = servers
 
     async def health_check(self) -> None:
         return
 
-    async def list_servers(self) -> AsyncIterator[ProviderServer]:
+    async def _list_servers(self) -> AsyncGenerator[ProviderServer, None]:
         for server in self._servers:
             yield server
 

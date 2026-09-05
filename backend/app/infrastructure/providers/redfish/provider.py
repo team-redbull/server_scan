@@ -21,7 +21,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import random
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncGenerator, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -29,7 +29,7 @@ import structlog
 
 from app.domain.enums import ManagerType
 from app.domain.models.manager import Manager
-from app.domain.ports.provider import ProviderServer
+from app.domain.ports.provider import ProviderServer, ServerInventoryProvider
 from app.infrastructure.providers.redfish.client import (
     RedfishAuthError,
     RedfishClient,
@@ -114,7 +114,7 @@ class _AuthGuard:
         return self.total_failures >= self.budget
 
 
-class RedfishStandaloneProvider:
+class RedfishStandaloneProvider(ServerInventoryProvider):
     """
     Collects every BMC in the configured inventory.
 
@@ -168,8 +168,8 @@ class RedfishStandaloneProvider:
         self._concurrency = max(1, fleet_concurrency)
         self._tls_min_version = tls_min_version
         self._debug_http = debug_http
+        super().__init__()
         self._guard = _AuthGuard(threshold=auth_failure_threshold, budget=auth_failure_budget)
-        self._collection_errors: list[str] = []
         self._client_factory: Callable[[RedfishTarget], Any] = client_factory or self._new_client
 
     def _new_client(self, target: RedfishTarget) -> RedfishClient:
@@ -190,21 +190,6 @@ class RedfishStandaloneProvider:
             debug_http=self._debug_http,
         )
 
-    @property
-    def collection_errors(self) -> tuple[str, ...]:
-        """
-        Report the hosts this run could not collect.
-
-        `tools.run_collector` turns a non-empty result into a non-zero
-        exit status, which is what keeps a partial run from being
-        indistinguishable from a healthy run against a smaller estate.
-
-        Returns:
-            tuple[str, ...]: One message per failure, empty for a complete
-                run.
-        """
-        return tuple(self._collection_errors)
-
     async def health_check(self) -> None:
         """
         Verify the collector is configured well enough to run.
@@ -214,7 +199,7 @@ class RedfishStandaloneProvider:
         canary host would reintroduce the single point of failure this
         collector exists to remove — one host being reimaged would kill
         every other host's run. Credential validity is checked instead by
-        the pre-flight at the head of `list_servers`, against a host that
+        the pre-flight at the head of `_list_servers`, against a host that
         actually answers.
 
         Raises:
@@ -225,18 +210,18 @@ class RedfishStandaloneProvider:
         if not self._targets:
             raise ValueError("Redfish inventory is empty; there is nothing to collect.")
 
-    async def list_servers(self) -> AsyncIterator[ProviderServer]:
+    async def _list_servers(self) -> AsyncGenerator[ProviderServer, None]:
         """
         Collect every host in the inventory.
 
         Yields each host's servers as that host finishes rather than
         gathering the fleet, so a run killed at its deadline has already
-        persisted what completed.
+        persisted what completed. `collect()` (the base class) resets
+        `collection_errors` before calling this.
 
         Yields:
             ProviderServer: One per `ComputerSystem` found.
         """
-        self._collection_errors.clear()
         self._guard = _AuthGuard(threshold=self._guard.threshold, budget=self._guard.budget)
 
         # Shuffled because completion order is not arrival order: without
@@ -268,7 +253,7 @@ class RedfishStandaloneProvider:
                     "or raise INVENTORY_REDFISH_FLEET_CONCURRENCY."
                 ),
             )
-            self._collection_errors.append(
+            self._record_error(
                 f"run budget of {self._run_budget:.0f}s expired with {unfinished} host(s) "
                 "not yet collected"
             )
@@ -298,7 +283,7 @@ class RedfishStandaloneProvider:
             "redfish.run_summary",
             hosts_total=total,
             servers_collected=collected,
-            hosts_failed=len(self._collection_errors),
+            hosts_failed=len(self.collection_errors),
             auth_failures=self._guard.total_failures,
             credentials_disabled=sorted(
                 name for name in self._guard.rejected_hosts if self._guard.is_open(name)
@@ -324,12 +309,12 @@ class RedfishStandaloneProvider:
         async with semaphore:
             credential = target.credential.name
             if self._guard.exhausted():
-                self._collection_errors.append(
+                self._record_error(
                     f"{target.host}: skipped, the run's authentication failure budget was spent"
                 )
                 return []
             if self._guard.is_open(credential):
-                self._collection_errors.append(
+                self._record_error(
                     f"{target.host}: skipped, credential {credential!r} was disabled after "
                     f"{self._guard.threshold} rejections"
                 )
@@ -355,20 +340,18 @@ class RedfishStandaloneProvider:
                     host=target.host,
                     budget_seconds=self._host_budget,
                 )
-                self._collection_errors.append(
-                    f"{target.host}: exceeded its {self._host_budget:.0f}s budget"
-                )
+                self._record_error(f"{target.host}: exceeded its {self._host_budget:.0f}s budget")
             except RedfishAuthError as exc:
                 self._record_auth_failure(target, exc)
             except RedfishTlsError as exc:
                 logger.error("redfish.tls_verify_failed", host=target.host, error=str(exc))
-                self._collection_errors.append(f"{target.host}: TLS verification failed — {exc}")
+                self._record_error(f"{target.host}: TLS verification failed — {exc}")
             except RedfishUnreachableError as exc:
                 logger.warning("redfish.host_unreachable", host=target.host, error=str(exc))
-                self._collection_errors.append(f"{target.host}: unreachable — {exc}")
+                self._record_error(f"{target.host}: unreachable — {exc}")
             except (RedfishError, ValueError) as exc:
                 logger.warning("redfish.host_failed", host=target.host, error=str(exc))
-                self._collection_errors.append(f"{target.host}: {exc}")
+                self._record_error(f"{target.host}: {exc}")
             return []
 
     def _record_auth_failure(self, target: RedfishTarget, exc: RedfishAuthError) -> None:
@@ -389,7 +372,7 @@ class RedfishStandaloneProvider:
             threshold=self._guard.threshold,
             run_failures=self._guard.total_failures,
         )
-        self._collection_errors.append(
+        self._record_error(
             f"{target.host}: login failed for credential {credential!r} — not retried"
         )
         if self._guard.is_open(credential):
@@ -543,7 +526,7 @@ class RedfishStandaloneProvider:
                 "licensed on this hardware."
             ),
         )
-        self._collection_errors.append(f"{target.host}: authenticated but exposes no system")
+        self._record_error(f"{target.host}: authenticated but exposes no system")
 
     async def _optional(
         self, client: Any, system: dict[str, Any], key: str

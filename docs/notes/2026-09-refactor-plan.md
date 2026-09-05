@@ -3,15 +3,24 @@
 Companion to `docs/notes/2026-09-audit.md` (findings, with IDs referenced
 here) and the seven `docs/notes/2026-09-research-*.md` files.
 
-**Status: awaiting approval. No source code has been changed.**
+**Status: approved 2026-09-06. Phase 1 in progress.**
 
 Ordering follows the brief: contract and architecture first while the diff
 is still legible, mechanical sweeps last. One phase = one reviewable
 commit. Every phase runs the full convention-7 gate before it is called
 done, and the output is pasted into the report.
 
-Three phases are **blocked on a decision** and are marked so: Phase 1
-(Q6), Phase 4 (Q1, Q4), Phase 7 (Q7).
+## Decisions taken (2026-09-06)
+
+| Q | Decision |
+|---|---|
+| Q1 | **Delete the preview path; keep the validators and re-point them.** `preview()` has zero callers — `f9ab059`'s own message says both `/preview` endpoints "had no caller left once the editors went". But `validate_rule_write`/`validate_policy_write` get wired into `bootstrap.py`, which today seeds the shipped defaults **without validating them**. Since writes are gone, those defaults are the *entire population* of rules and policies, so this is complete coverage — and it closes C12 outright rather than deferring it. |
+| Q2 | **Oversight — fix it.** OneView gets `collection_errors`; truncation messages must name the numbers (profiles returned, count requested, the 256 ceiling); the commit body must state that exit 3 is new for OneView and what an operator does about it. |
+| Q3 | **Fix the shutdown stall with a dedicated executor**, never joined at shutdown, so `shutdown_default_executor` has nothing to wait for. Not a hard exit (would risk truncating the summary that *is* the run's record) and not `activeDeadlineSeconds` tuning (encodes a bug in cluster config). **Whole-run budget stays deferred** per ADR-0014:496–504 — a deliberate decision, not reopened. |
+| Q4 | **In scope.** Compare-and-set, raise the existing `RevisionConflictError`, map to 409, surface in the UI as part of C14. |
+| Q5 | **Keep the behaviour; one line in ADR-0002** recording the deliberate exception. |
+| Q6 | **Build the ABC** — superseding the research's Protocol recommendation. See Phase 1. |
+| Q7 | **UX-1, UX-2, UX-4. Hold UX-3.** |
 
 ---
 
@@ -30,43 +39,110 @@ began; the performance run left `podman ps -a` empty.
 
 ---
 
-## Phase 1 — The provider contract  ⚠ blocked on Q6
+## Phase 1 — The provider contract
 
 **Commit:** `feat!: require every collector to report collection_errors and release its session`
 
-### The decision you need to make first
+### The decision, and why the ABC/Protocol debate was the wrong debate
 
-The brief asks for an `ABC`. The research recommends a **6-member
-`Protocol`** instead, and I think the evidence is good enough to put to
-you rather than quietly follow either way.
+An ABC, decided 2026-09-06. The research recommended a 6-member
+`Protocol` and was overruled on a changed criterion — worth recording,
+because the reasoning generalises.
 
-| | ABC | 6-member Protocol |
-|---|---|---|
-| Catches a missing member | runtime `TypeError` | **ty, at the call site, by name** |
-| Catches abstract instantiation | runtime | ty 0.0.76 **does not flag it** (probed) |
-| Shared behaviour to inherit | ~none — providers differ in kind | n/a |
-| Enforces `async with` | yes | **yes, twice** — protocol member *and* `invalid-context-manager` on the concrete type |
-| Existing `@property` implementers | fine | fine, **if** declared a read-only property |
-| Default method bodies | natural | PEP 544: a defaulted member becomes *required*; broke conforming classes in probe |
+Every argument in the original comparison (runtime `TypeError` vs ty
+diagnostic, nominal vs structural, where the check fires) is about
+**catching a mistake**. Both options catch it, which is why it kept
+reducing to a cost tiebreak.
 
-Proposed contract, verified `All checks passed!` under this repo's own
-ty 0.0.76 against all three real shapes simultaneously — property-style
-(`ucs_central`, `intersight`, `openmanage`, `redfish`), attribute-style
-(`fake`, `ucs_manager`, test stubs), and the `_NameFilteredProvider`
-wrapper:
+But OneView's defect was not a wrong shape. Four providers each
+hand-wrote the same four lines of error bookkeeping and the author of the
+fifth did not. **Nobody forgot to declare something; somebody forgot to
+reimplement something for the fifth time.** A Protocol holds no code, so
+the best it can do is tell that author they got it wrong — after which
+they hand-write the same four lines a fifth time and hopefully get them
+right. The ABC is the only construct that lets them not write those lines
+at all.
 
+The research's "~none to inherit" measurement is accurate about the code
+as it stands and answers the wrong question: it measures what *is*
+shared, not what *should* be. The four headline findings are each a place
+where a provider was left to get a shared discipline right alone, and one
+did not. That measurement describes the bug.
+
+### What the base class owns
+
+```python
+class ServerInventoryProvider(ABC):
+    def __init__(self) -> None:
+        self._collection_errors: list[str] = []
+
+    # inherited — a vendor never writes these
+    @property
+    def collection_errors(self) -> tuple[str, ...]:
+        return tuple(self._collection_errors)
+
+    def record_error(self, message: str) -> None:
+        self._collection_errors.append(message)
+
+    async def __aenter__(self) -> Self:
+        await self._connect()
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        await self._disconnect()
+
+    # each vendor fills these in
+    @abstractmethod
+    async def _connect(self) -> None: ...
+    @abstractmethod
+    async def _disconnect(self) -> None: ...
+    @abstractmethod
+    async def health_check(self) -> None: ...
+    @abstractmethod
+    def list_servers(self) -> AsyncIterator[ProviderServer]: ...
 ```
-provider_type: str
-__aenter__          # connect / authenticate
-__aexit__           # disconnect / logout — guaranteed
-health_check
-list_servers        # MUST stay `def`, not `async def`
-collection_errors   # MUST be a read-only property
-```
 
-**Say the word and I build an ABC instead.** The brief's actual goal —
-one file, named members, type-checked, obvious what a new vendor writes —
-is met either way; only the mechanism differs.
+Run-summary logging (start/end/counts) moves in too, replacing five
+near-identical hand-rolled versions — same argument.
+
+### Three subtleties, and the mechanism for the ADR
+
+1. **`list_servers` MUST stay `def`.** The rule looks like a typo, so the
+   *mechanism* goes in the ADR verbatim, not just the rule:
+
+   ```python
+   async def f() -> AsyncIterator[str]: ...        # no yield  -> CoroutineType[..., AsyncIterator[str]]
+   async def f() -> AsyncIterator[str]: yield x    # has yield -> AsyncIterator[str]
+   ```
+
+   Both are `async def` with the same annotation; a `yield` in the body
+   decides the meaning, and a stub cannot have one. So an `async def`
+   abstract method promises "await it, then iterate" while all seven
+   implementations deliver "iterate", and ty 0.0.76 rejects every one with
+   a Liskov violation. The current Protocol already gets this right and
+   nothing says why — which is the real danger: it reads as an oversight,
+   so a future session "fixes" it and breaks all seven at once. One-line
+   comment on the signature, mechanism in the ADR.
+2. **`_NameFilteredProvider` is a wrapper, not a vendor.** It must
+   inherit (an ABC is nominal) while **delegating** `collection_errors` to
+   the provider it wraps, never accumulating its own — otherwise a
+   filtered run silently swallows every error, the exact failure class
+   this refactor exists to remove. Today it already delegates via
+   `collection_errors_of(self._inner)`; under the ABC, `__init__` gives it
+   its own empty list and the inherited property would return that.
+   **Verify empirically once the base exists** rather than trusting the
+   reading.
+3. **`__aexit__` params positional-only** (or `*exc: object`), else the
+   spelling `oneview/client.py:165` already uses is rejected.
+
+### The failure mode being accepted, knowingly
+
+Every provider becomes coupled to one base class. The day a vendor
+genuinely does not fit the lifecycle, the temptation is to bolt an
+optional hook onto the base rather than admit the misfit. **Watch for the
+base class growing optional hooks — that is this design's disease.**
+Chosen anyway because it is slower and more visible than the current
+disease: five providers quietly diverging on the same bookkeeping.
 
 ### Three spellings that are load-bearing (all verified, not inferred)
 
@@ -104,10 +180,14 @@ is met either way; only the mechanism differs.
 ### What could break
 
 Everything that constructs a provider: `tools/run_collector.py`
-(2 call sites, `:874` and `:693`), the seeder, and ~10 test stubs. The
-stubs are **outside** `ty check backend/app tools`, so they are checked by
-nobody today and carry coded `# type: ignore[...]` that ty ignores anyway
-— extending ty's scope to `tests/` is the cheap guard and belongs here.
+(2 call sites, `:874` and `:693`), the seeder, and ~10 test stubs.
+
+**Extending `ty` to `tests/` ships in this phase and is a deliverable, not
+a nice-to-have.** Those stubs sit outside `ty check backend/app tools`, so
+they are checked by nobody, and they carry mypy-style
+`# type: ignore[...]` that ty does not understand — **those suppressions
+have been suppressing nothing.** Fixing the batch of errors ty surfaces
+is the point of the change, not scope creep.
 
 Vendor mapping logic is **not** touched. The constraint holds: this
 restructures the contract around the mappings, not the mappings.
@@ -126,9 +206,26 @@ where it previously returned 0.
 
 C5 (`singleflight` — `asyncio.shield`), C6 (Redfish timeout across a
 generator yield), C7 (UCS Central task cancellation / session leak),
-C8 (UCS call deadline + per-domain budget — **check Q3 first**),
 C9 (OpenManage errors lost on early close), C10 (OneView bare `gather`),
 M11 (pointless `async`).
+
+**C8, restated correctly.** The earlier framing ("no call deadline") was
+wrong: `ucs_central/client.py:112` already wraps every SDK call in
+`asyncio.wait_for(asyncio.to_thread(...))`, exactly as ADR-0014:115 says,
+and ADR-0014:496–504 deliberately defers the whole-run budget. The real
+defect is that `wait_for` cancels the *await* but cannot cancel the OS
+thread: the blocking `ucscsdk` call keeps running, the collector correctly
+reports "timed out after Ns" and continues, and then `asyncio.run()` →
+`Runner.close()` → `loop.shutdown_default_executor()` waits on the
+abandoned thread for `asyncio.constants.THREAD_JOIN_TIMEOUT` = **300 s**
+(verified on this project's 3.13.12). One wedged domain stalls the pod for
+five minutes *after* it has finished and reported.
+
+**Fix:** give the client its own `ThreadPoolExecutor` and never join it at
+shutdown, so `shutdown_default_executor` has nothing to wait for. The
+abandoned thread dies with the process — which already happens; we simply
+stop paying five minutes to watch it not finish. The whole-run budget
+stays deferred.
 
 **Could break:** C6 and C10 change streaming shapes; C8 changes how a
 wedged domain terminates. Each needs a test that fails before the fix.
@@ -158,17 +255,37 @@ commit or an upgrade wedges.
 
 ---
 
-## Phase 4 — API and domain correctness  ⚠ blocked on Q1, Q4
+## Phase 4 — API and domain correctness
 
-**Commit:** `fix: re-sync shipped health policies whose conditions changed in code`
+**Commit:** `fix: validate the shipped classification rules and health policies at startup`
 
-C11 (bootstrap re-sync), C12 (nothing validates stored conditions since
-writes were removed — **needs Q1**), C13 (optimistic concurrency —
-**needs Q4**), M6/M7 (`mongo.ping_failed` gains `error=`/`exc_info`, and
-`mongo_ping_failures_total` gets incremented), M8 (bind run context in
-`run_collector.py` so `ingest.completed` carries `manager_type`), M9,
-M10, M3 (delete dead `get_inventory`), M1 (dead read-only-migration code
-— **needs Q1**).
+The Q1 decision makes this phase bigger and better than drafted.
+
+- **C12 is closed, not deferred.** `validate_rule_write` and
+  `validate_policy_write` move into `bootstrap.py`, which today seeds the
+  shipped defaults with no validation at all (`validate` appears nowhere
+  in that file). Because writes are gone, those defaults are the *entire
+  population* of rules and policies that can ever exist — so validating
+  them at startup is total coverage, and it turns ~35 existing unit tests
+  from dead-code tests into tests of the guard that protects the "every
+  deployment scores identically" guarantee. Fail loudly at startup on a
+  malformed default.
+- **Delete the preview path** — `classification_service.py:198`,
+  `health_policy_service.py:222`, and the draft-preview request schemas at
+  `classification_schemas.py:139` / `health_policy_schemas.py:136`. Zero
+  callers; `f9ab059`'s own message records that both `/preview` endpoints
+  "had no caller left once the editors went".
+- **C13 (Q4): compare-and-set** on `revision`, raise the existing
+  `RevisionConflictError` (`errors.py:127`, currently never raised), map
+  to 409, and surface it in the UI as part of C14 — a silently-lost
+  maintenance toggle is exactly the bug class this platform's rules exist
+  to prevent.
+- C11 (bootstrap re-sync of drifted policies), M6/M7 (`mongo.ping_failed`
+  gains `error=`/`exc_info`; `mongo_ping_failures_total` finally gets
+  incremented), M8 (bind run context so `ingest.completed` carries
+  `manager_type`), M9, M10, M3, M1.
+- **Q5:** one line in ADR-0002 recording `/health/ready`'s plain-dict body
+  as a deliberate exception, so the next session does not "fix" it.
 
 ---
 
@@ -216,7 +333,7 @@ Raising page size and moving to `useInfiniteQuery` is the real fix.
 
 ---
 
-## Phase 7 — Operator UX  ⚠ blocked on Q7, build only what you approve
+## Phase 7 — Operator UX  (UX-1, UX-2, UX-4 approved; UX-3 held)
 
 - **UX-1 (S)** — `HealthSummary` carries seven severities;
   `OverviewTab.tsx:44` renders one. The page opened to answer *why is this
@@ -319,6 +436,79 @@ seed distribution — **an ADR update, not a code change**.
 
 ---
 
+## Phase 12 — One login per collection run (deferred, not scheduled in this pass)
+
+**Not part of this refactor.** Raised during Phase 1 review, kept out of
+it deliberately: it changes real vendor session-lifetime behaviour rather
+than restructuring an interface, and a session-lifetime bug against a
+manager that enforces a per-user session cap is exactly the class of
+defect that has only ever surfaced on live hardware (ADR-0009's whole
+history). Bundling it into Phase 1 would mean that if something breaks,
+there'd be no way to tell whether the contract change or the login change
+caused it. It gets its own phase, its own ADR, and — like Intersight and
+OneView — a live-hardware confirmation before it ships, via
+`docs/field-test-checklist.md`.
+
+**The defect.** `IngestService.ingest` (`ingest.py:308-310`) is the one
+path every real collection run takes, and it always does this:
+
+```python
+await provider.health_check()          # a full login, then an immediate logout
+async for provider_server in provider.list_servers():   # a second, independent login
+```
+
+For `ucs_manager` (`provider.py:85-96` then `:119-193`) and `ucs_central`
+(`:280-293` then `:312-316`), each login is, per the collector's own
+comment at `run_collector.py:883`, "~4 sequential HTTP round trips (auth,
+then the SDK's own is-this-UCSM / version / domain-name probes)" — so
+every production run against UCS pays roughly 8 round trips of login
+overhead where 4 would do, and opens a second session against UCS
+Manager's per-user session cap for no reason. `intersight`
+(`provider.py:298-300`) pays the same shape at smaller cost (build a
+client, call its own `.health_check()`, `aclose()` it, then build a
+second client for `list_servers()`).
+
+**This has already been half-noticed, in the wrong place.** The comment
+at `run_collector.py:883` exists because someone saw this exact waste —
+but only in the CLI's own call site, where `provider.health_check()` is
+now deliberately *not* called a second time before `ingest_service.ingest()`,
+specifically to avoid **tripling** the login cost. That fix does nothing
+for the doubling that happens inside `ingest()` itself on every run; there
+is no workaround for it today.
+
+**Why it isn't simply a bug to fix inline.** `health_check` and
+`list_servers` are two different interface members precisely because
+"can I log in" needs a fast, isolated answer *before* a run commits to
+the expensive work — for most systems that check is cheap. For UCS and
+Intersight, logging in **is** the expensive step, so the check ends up
+costing nearly as much as the thing it's guarding. Fixing this means one
+login shared across both calls, which means both calls need to agree on
+when that login happens and who owns closing it — exactly the kind of
+session-lifetime restructuring Phase 1 explicitly avoided doing to any
+vendor's mapping logic.
+
+**What changes, roughly:** `ucs_manager`, `ucs_central` and `intersight`
+each hold one client for the duration of a call to `collect()` (the
+Phase 1 method), login once inside it, and make their own
+`health_check()` a no-op once already connected — or, more precisely,
+`health_check` and the first phase of `collect()` merge into one login,
+with `list_servers`/`_list_servers` reusing the already-authenticated
+client. `openmanage` and `oneview` are unaffected: their client already
+*is* the context manager (`openmanage/provider.py:162,213`;
+`oneview/provider.py:166,185`), so `health_check`'s brief open-and-close
+is already close to free. `redfish` is unaffected — it never had a
+single login to begin with (`redfish/provider.py:193`).
+
+**Verified by:** a regression test asserting `client.login()` is called
+exactly once per `collect()` invocation, for each affected provider —
+today nothing asserts the call count, which is exactly how the doubling
+went unnoticed. Then, per `docs/field-test-checklist.md`, a live run
+against UCS Central and UCS Manager (the same trip already queued to
+settle the `total_memory` unit) confirming session count and behaviour
+under the real per-user session cap, before this ships.
+
+---
+
 ## What this plan deliberately does not do
 
 - **Touch authentication.** `get_current_actor` stays as it is.
@@ -331,6 +521,10 @@ seed distribution — **an ADR update, not a code change**.
   alongside it.
 - **Rewrite vendor mappings.** Phase 1 restructures the contract around
   them.
+- **Merge `health_check` and `list_servers` into one login.** Real,
+  measured waste (see Phase 12) — kept out of this pass because it
+  changes vendor session lifetime rather than an interface, and needs
+  live-hardware confirmation this pass has no way to get.
 - **Add project-authored decorators.** Researched honestly, verdict is
   zero: retry policies are deliberately opposite between collectors,
   timing is already one middleware (and `prometheus_client` ships

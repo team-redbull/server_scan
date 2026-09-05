@@ -221,7 +221,7 @@ async def _collect(provider: OneViewProvider) -> list[ProviderServer]:
         list[ProviderServer]: Everything it yielded.
     """
     collected: list[ProviderServer] = []
-    async with contextlib.aclosing(provider.list_servers()) as servers:
+    async with contextlib.aclosing(provider.collect()) as servers:
         async for server in servers:
             collected.append(server)
     return collected
@@ -327,6 +327,91 @@ class TestCollection:
 
         with pytest.raises(OneViewConnectionError):
             await _collect(provider)
+
+
+class TestCollectionErrors:
+    """`collection_errors` — the motivating bug this refactor's provider
+    contract exists to close. Before it, OneView had no member at all:
+    `oneview.collection_truncated` logged at ERROR and the run still
+    exited 0, indistinguishable from a healthy run against a smaller
+    estate. See ADR-0023.
+    """
+
+    async def test_a_truncated_page_becomes_a_collection_error(self) -> None:
+        """`/rest/server-profiles`' documented 256-per-request ceiling: the
+        appliance reports more members than the one page returned, and
+        `nextPageUri` is null past it.
+        """
+
+        def handle(request: httpx.Request) -> httpx.Response:
+            path = request.url.path
+            if path == "/rest/version":
+                return httpx.Response(200, json={"currentVersion": 8000, "minimumVersion": 1})
+            if path == "/rest/login-sessions":
+                if request.method == "DELETE":
+                    return httpx.Response(204)
+                return httpx.Response(200, json={"sessionID": "token"})
+            if path == "/rest/server-profiles":
+                return httpx.Response(
+                    200,
+                    json={
+                        "start": 0,
+                        "count": 1,
+                        "total": 300,
+                        "members": [_PROFILE_A],
+                        "uri": path,
+                        "nextPageUri": None,
+                    },
+                )
+            if path == "/rest/server-profile-templates":
+                return httpx.Response(
+                    200,
+                    json={
+                        "start": 0,
+                        "count": 0,
+                        "total": 0,
+                        "members": [],
+                        "uri": path,
+                        "nextPageUri": None,
+                    },
+                )
+            if path == "/rest/server-hardware":
+                hardware = [_hardware(_HARDWARE_A, profile_uri="/rest/server-profiles/a")]
+                return httpx.Response(
+                    200,
+                    json={
+                        "start": 0,
+                        "count": len(hardware),
+                        "total": len(hardware),
+                        "members": hardware,
+                        "uri": path,
+                        "nextPageUri": None,
+                    },
+                )
+            return httpx.Response(404, json={})
+
+        provider = _provider(handle)
+
+        servers = await _collect(provider)
+
+        # The run still collects what it could reach — a paging ceiling
+        # is not the same failure as an unreachable appliance.
+        assert len(servers) == 1
+        assert provider.collection_errors
+        assert "/rest/server-profiles" in provider.collection_errors[0]
+        assert "300" in provider.collection_errors[0]
+
+    async def test_a_complete_run_reports_no_errors(self) -> None:
+        provider = _provider(
+            _appliance(
+                profiles=[_PROFILE_A],
+                hardware=[_hardware(_HARDWARE_A, profile_uri="/rest/server-profiles/a")],
+            )
+        )
+
+        await _collect(provider)
+
+        assert provider.collection_errors == ()
 
 
 class TestSubresources:

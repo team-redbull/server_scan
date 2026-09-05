@@ -13,7 +13,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import re
-from collections.abc import AsyncIterator, Callable, Iterable
+from collections.abc import AsyncGenerator, Callable, Iterable
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -22,7 +22,7 @@ import structlog
 from app.domain.enums import ManagerType
 from app.domain.models.manager import Manager
 from app.domain.ports.credentials import ManagerConnection
-from app.domain.ports.provider import ProviderServer
+from app.domain.ports.provider import ProviderServer, ServerInventoryProvider
 from app.infrastructure.providers.ucs_central.client import UcsCentralClient
 from app.infrastructure.providers.ucs_common import TEMPLATE_TYPES
 from app.infrastructure.providers.ucs_manager.provider import UcsManagerProvider
@@ -176,7 +176,7 @@ def domains_to_collect(
     return to_collect, skipped
 
 
-class UcsCentralProvider:
+class UcsCentralProvider(ServerInventoryProvider):
     """
     Collect every registered UCS Manager domain in one run, using UCS
     Central as a directory and each domain's own UCS Manager as the source
@@ -224,6 +224,7 @@ class UcsCentralProvider:
         """
         if not manager.endpoint:
             raise ValueError(f"Manager {manager.id!r} has no endpoint configured.")
+        super().__init__()
         self._endpoint: str = manager.endpoint
         self._manager = manager
         self._credentials = credentials
@@ -231,7 +232,6 @@ class UcsCentralProvider:
         self._domain_login = domain_login
         self._name_pattern = name_pattern
         self._concurrency = max(1, concurrency)
-        self._collection_errors: list[str] = []
         self._client_factory: Callable[[], Any] = client_factory or self._new_client
         self._domain_provider_factory: Callable[[DomainTarget], Any] = (
             domain_provider_factory or self._new_domain_provider
@@ -276,25 +276,6 @@ class UcsCentralProvider:
             ),
             timeout_seconds=self._timeout_seconds,
         )
-
-    @property
-    def collection_errors(self) -> tuple[str, ...]:
-        """
-        Report the domains this run could not collect, one message each.
-
-        A domain that fails is logged and skipped so the rest of the fleet
-        still collects, which means a run can succeed overall while silently
-        returning fewer servers than it should. This is how a caller tells
-        the two apart; `tools.run_collector` turns a non-empty result into a
-        non-zero exit status.
-
-        Empty until `list_servers` has been iterated to exhaustion.
-
-        Returns:
-            tuple[str, ...]: One human-readable message per unreachable or
-                failed domain, empty if every domain was collected.
-        """
-        return tuple(self._collection_errors)
 
     async def health_check(self) -> None:
         """
@@ -358,12 +339,12 @@ class UcsCentralProvider:
         )
         # A domain skipped for having no address is a fault, not a pruning
         # decision: Central registered it but gave us nothing to connect to.
-        self._collection_errors.extend(
-            f"domain {t.name or t.domain_id!r} is registered with UCS Central but reports "
-            "no address to connect to"
-            for t in skipped
-            if not t.endpoint
-        )
+        for t in skipped:
+            if not t.endpoint:
+                self._record_error(
+                    f"domain {t.name or t.domain_id!r} is registered with UCS Central but "
+                    "reports no address to connect to"
+                )
         for target in skipped:
             logger.info(
                 "ucs_central.domain_skipped",
@@ -416,7 +397,7 @@ class UcsCentralProvider:
             provider = self._domain_provider_factory(target)
             collected: list[ProviderServer] = []
             try:
-                async with contextlib.aclosing(provider.list_servers()) as servers:
+                async with contextlib.aclosing(provider.collect()) as servers:
                     async for provider_server in servers:
                         collected.append(
                             replace(
@@ -434,7 +415,7 @@ class UcsCentralProvider:
                     endpoint=target.endpoint,
                     collected_before_failure=len(collected),
                 )
-                self._collection_errors.append(
+                self._record_error(
                     f"domain {target.name or target.domain_id!r} ({target.endpoint}) failed "
                     f"after {len(collected)} server(s): {exc}"
                 )
@@ -470,20 +451,21 @@ class UcsCentralProvider:
         """
         return target, await self._collect_domain(target, sem)
 
-    async def list_servers(self) -> AsyncIterator[ProviderServer]:
+    async def _list_servers(self) -> AsyncGenerator[ProviderServer, None]:
         """
         Collect every domain worth contacting and yield their servers.
 
         Yields each domain's servers as that domain finishes rather than
         gathering the fleet, so a run killed at its deadline has already
         persisted what completed — the same shape
-        `..redfish.provider.RedfishStandaloneProvider.list_servers`
+        `..redfish.provider.RedfishStandaloneProvider._list_servers`
         already uses, and for the same reason: before this, nothing was
         yielded until every domain in flight had finished, so a kill at
         `activeDeadlineSeconds` lost the *entire* run rather than just
         the domains still in progress.
 
-        Must be iterated to exhaustion, or closed via `contextlib.aclosing`.
+        `collect()` (the base class) wraps this in `contextlib.aclosing`
+        and resets `collection_errors` before calling it.
 
         See docs/cisco-collectors.md, "SDK behaviour, sessions and timeouts".
 
@@ -494,10 +476,6 @@ class UcsCentralProvider:
             UcsCentralConnectionError: If UCS Central itself is unreachable.
                 A single failing domain is logged and skipped instead.
         """
-        # Reset first: `collection_errors` describes *this* run, so a second
-        # iteration of the same provider must not inherit the first's
-        # failures and report each one twice.
-        self._collection_errors.clear()
         targets, domain_mo_by_id = await self._plan()
         sem = asyncio.Semaphore(self._concurrency)
 

@@ -30,7 +30,7 @@ multi-domain orchestration layered on top of them.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from types import SimpleNamespace
 from typing import Any
 
@@ -41,7 +41,7 @@ from app.domain.enums import ManagerType
 from app.domain.models.common import AuditFields
 from app.domain.models.manager import Manager
 from app.domain.ports.credentials import ManagerConnection
-from app.domain.ports.provider import ProviderServer
+from app.domain.ports.provider import ProviderServer, ServerInventoryProvider
 from app.infrastructure.providers.ucs_central.provider import (
     DomainTarget,
     UcsCentralProvider,
@@ -121,7 +121,7 @@ class FakeCentralClient:
         return [c.removeprefix("query:") for c in self.calls if c.startswith("query:")]
 
 
-class FakeDomainProvider:
+class FakeDomainProvider(ServerInventoryProvider):
     """Stands in for a per-domain `UcsManagerProvider`."""
 
     def __init__(
@@ -131,6 +131,7 @@ class FakeDomainProvider:
         error: Exception | None = None,
         delay: float = 0.0,
     ) -> None:
+        super().__init__()
         self._servers = servers
         self._error = error
         # Only used to make one domain finish observably after another in
@@ -138,7 +139,10 @@ class FakeDomainProvider:
         # every other test leaves this at 0.
         self._delay = delay
 
-    async def list_servers(self) -> AsyncIterator[ProviderServer]:
+    async def health_check(self) -> None:
+        return None
+
+    async def _list_servers(self) -> AsyncGenerator[ProviderServer, None]:
         if self._delay:
             await asyncio.sleep(self._delay)
         if self._error is not None:
@@ -188,7 +192,7 @@ def _provider(
 
 
 async def _collect(provider: UcsCentralProvider) -> list[ProviderServer]:
-    return [ps async for ps in provider.list_servers()]
+    return [ps async for ps in provider.collect()]
 
 
 async def _collect_with_logs(
@@ -203,7 +207,7 @@ async def _collect_with_logs(
     payload instead of on rendered text makes the test independent of that.
     """
     with capture_logs() as events:
-        servers = [ps async for ps in provider.list_servers()]
+        servers = [ps async for ps in provider.collect()]
     return servers, events
 
 
@@ -453,7 +457,7 @@ class TestListServers:
             name_pattern="",
         )
 
-        arrival_order = [server.name async for server in provider.list_servers()]
+        arrival_order = [server.name async for server in provider.collect()]
 
         assert arrival_order == ["ocp4-fast-01", "ocp4-slow-01"]
 
@@ -820,7 +824,7 @@ class TestDomainSummaryDiagnostics:
         )
 
         with capture_logs() as events:
-            gen = provider.list_servers()
+            gen = provider.collect()
             await anext(gen)
             await gen.aclose()
 

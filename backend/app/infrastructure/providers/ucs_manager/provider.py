@@ -5,12 +5,12 @@ See docs/cisco-collectors.md, "Shared object model and DN joins".
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 
 from app.domain.enums import ManagerType
 from app.domain.models.manager import Manager
 from app.domain.ports.credentials import ManagerConnection
-from app.domain.ports.provider import ProviderServer
+from app.domain.ports.provider import ProviderServer, ServerInventoryProvider
 from app.infrastructure.providers.ucs_common import (
     bmc_interface as _bmc_interface,
 )
@@ -30,7 +30,7 @@ from app.infrastructure.providers.ucs_manager.client import UcsManagerClient
 from app.infrastructure.providers.ucs_manager.mapping import compute_unit_to_provider_server
 
 
-class UcsManagerProvider:
+class UcsManagerProvider(ServerInventoryProvider):
     """
     Collects one UCS Manager domain's inventory.
 
@@ -61,6 +61,7 @@ class UcsManagerProvider:
         """
         if not manager.endpoint:
             raise ValueError(f"Manager {manager.id!r} has no endpoint configured.")
+        super().__init__()
         self._endpoint: str = manager.endpoint
         self._manager = manager
         self._timeout_seconds = timeout_seconds
@@ -94,14 +95,14 @@ class UcsManagerProvider:
         finally:
             await client.logout()
 
-    async def list_servers(self) -> AsyncIterator[ProviderServer]:
+    async def _list_servers(self) -> AsyncGenerator[ProviderServer, None]:
         """
         Yield every physically-present server in the domain.
 
-        Must be iterated to exhaustion, or closed via
-        `contextlib.aclosing`: abandoning it part-way defers the session
-        teardown to GC time, and UCS Manager enforces a per-user session
-        cap. `IngestService.ingest` drains it fully.
+        `collect()` (the base class) wraps this in `contextlib.aclosing`,
+        so an abandoned run still tears the session down rather than
+        deferring it to GC time — UCS Manager enforces a per-user session
+        cap.
 
         Yields:
             ProviderServer: One equipped compute unit, already normalized.
