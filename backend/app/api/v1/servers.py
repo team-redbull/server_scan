@@ -35,7 +35,13 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query, Request
 
 from app.api.v1.maintenance_schemas import MaintenanceEnableRequest
-from app.api.v1.schemas import PageInfo, ServerDetail, ServerListResponse, ServerSummary
+from app.api.v1.schemas import (
+    PageInfo,
+    ServerDetail,
+    ServerFacets,
+    ServerListResponse,
+    ServerSummary,
+)
 from app.application.services.audit_service import AuditService
 from app.application.services.classification_service import ClassificationService
 from app.application.services.health_policy_service import HealthPolicyService
@@ -59,12 +65,13 @@ from app.infrastructure.mongodb.client import MongoClientHolder
 from app.infrastructure.mongodb.health_policy_repository import MongoHealthPolicyRepository
 from app.infrastructure.mongodb.server_repository import MongoServerRepository
 from app.infrastructure.redis.cache import (
+    FACETS_TTL_SECONDS,
     LIST_PAGE_TTL_SECONDS,
     SERVER_DETAIL_TTL_SECONDS,
     CacheClient,
 )
 from app.infrastructure.redis.client import RedisClientHolder
-from app.infrastructure.redis.keys import list_key, server_key
+from app.infrastructure.redis.keys import facets_key, list_key, server_key
 from app.infrastructure.singleflight import coalesce
 from app.utils.digest import stable_hash
 from app.utils.timeutil import utcnow
@@ -240,6 +247,49 @@ async def list_servers(
 
     response_dict = await coalesce(cache_key, _compute)
     return ServerListResponse.model_validate(response_dict)
+
+
+# Declared BEFORE `/servers/{server_id}`: FastAPI matches routes in
+# declaration order, and the other way round "facets" is swallowed as a
+# server id and answers 404.
+@router.get("/servers/facets", response_model=ServerFacets)
+async def server_facets(
+    request: Request,
+    repo: Annotated[MongoServerRepository, Depends(_server_repo)],
+    cache: Annotated[CacheClient, Depends(_cache_client)],
+    search: str | None = Query(default=None),
+) -> ServerFacets:
+    """
+    How many servers each filter option would match, under the filters
+    already applied.
+
+    Takes the same `?vendor=`/`?site_id=`/... parameters and the same
+    `?search=` as `GET /servers`, so a caller passes its current query
+    through unchanged and gets numbers describing exactly the page it is
+    showing.
+
+    Args:
+        request (Request): Carries the raw filter query parameters.
+        repo (MongoServerRepository): The server repository.
+        cache (CacheClient): Cache-aside for the aggregation.
+        search (str | None): The same free-text search `GET /servers` takes.
+
+    Returns:
+        ServerFacets: One count per option, plus the matching total.
+    """
+    raw_filters = _extract_raw_filters(request)
+    mongo_filters = build_filter_query(raw_filters)
+
+    cache_key = facets_key(stable_hash({"filters": mongo_filters, "search": search}))
+    cached = await cache.get(cache_key)
+    if cached is not None:
+        return ServerFacets.model_validate(cached)
+
+    facets = ServerFacets.from_rows(
+        await repo.facet_breakdown(filters=mongo_filters, search=search)
+    )
+    await cache.set(cache_key, facets.model_dump(mode="json"), ttl_seconds=FACETS_TTL_SECONDS)
+    return facets
 
 
 @router.get("/servers/{server_id}", response_model=ServerDetail)

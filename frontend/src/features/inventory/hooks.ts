@@ -1,7 +1,7 @@
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 
 import { queryKeys } from "@/api/queryKeys";
-import { listServers } from "@/api/servers";
+import { getServerFacets, listServers } from "@/api/servers";
 import type { ServerListParams } from "@/api/servers";
 
 /**
@@ -15,6 +15,21 @@ export function useServersQuery(params: ServerListParams) {
   return useQuery({
     queryKey: queryKeys.servers.list(params),
     queryFn: () => listServers(params),
+    placeholderData: keepPreviousData,
+  });
+}
+
+/**
+ * Per-option counts for the current filter set.
+ *
+ * `keepPreviousData` for the same reason the list uses it: the numbers
+ * sitting beside each filter should not blank out while the next set is in
+ * flight, which would make every filter change flicker twice.
+ */
+export function useServerFacetsQuery(params: ServerListParams) {
+  return useQuery({
+    queryKey: queryKeys.servers.facets(params),
+    queryFn: () => getServerFacets(params),
     placeholderData: keepPreviousData,
   });
 }

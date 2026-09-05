@@ -291,3 +291,22 @@ export interface ServerDetail {
   updated_at: string;
   created_at: string;
 }
+
+/**
+ * How many servers each filter option would match, for one view.
+ *
+ * Every count is *within the filters already applied*, so after picking a
+ * site the vendor counts describe that site rather than the estate.
+ *
+ * A value matching nothing is absent rather than zero, which is what lets
+ * the UI show an option as unavailable instead of silently selectable.
+ */
+export interface ServerFacets {
+  total: number;
+  vendor: Record<string, number>;
+  source_provider: Record<string, number>;
+  installation_type: Record<string, number>;
+  health_overall: Record<string, number>;
+  /** Keyed `"true"`/`"false"` — JSON object keys cannot be booleans. */
+  maintenance: Record<string, number>;
+}

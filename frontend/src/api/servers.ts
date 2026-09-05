@@ -1,5 +1,5 @@
 import { apiFetch } from "@/api/client";
-import type { ServerDetail, ServerListResponse } from "@/types/server";
+import type { ServerDetail, ServerFacets, ServerListResponse } from "@/types/server";
 
 /**
  * Query params accepted by `GET /api/v1/servers`. All optional — omitted
@@ -38,6 +38,27 @@ export function listServers(params: ServerListParams = {}): Promise<ServerListRe
   const query = buildSearchParams(params).toString();
   const path = query ? `/api/v1/servers?${query}` : "/api/v1/servers";
   return apiFetch<ServerListResponse>(path);
+}
+
+/**
+ * How many servers each filter option would match, under the filters
+ * already applied.
+ *
+ * Takes the same params as `listServers`; the pagination and ordering ones
+ * are dropped before the request because the counts describe the whole
+ * filtered set rather than one page of it, and sending them would split
+ * the cache by page for no reason.
+ */
+export function getServerFacets(params: ServerListParams = {}): Promise<ServerFacets> {
+  const { cursor, page_size, sort, sort_desc, with_count, ...filters } = params;
+  void cursor;
+  void page_size;
+  void sort;
+  void sort_desc;
+  void with_count;
+  const query = buildSearchParams(filters).toString();
+  const path = query ? `/api/v1/servers/facets?${query}` : "/api/v1/servers/facets";
+  return apiFetch<ServerFacets>(path);
 }
 
 export function getServer(id: string): Promise<ServerDetail> {

@@ -12,6 +12,7 @@ on to stay an IXSCAN at every page.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
 from pymongo.asynchronous.collection import AsyncCollection
@@ -42,6 +43,28 @@ def _cursor_position_clause(
             {"$and": [{sort_field: position.sort_value}, {"_id": {op: position.id_value}}]},
         ]
     }
+
+
+@dataclass(frozen=True, slots=True)
+class FacetRow:
+    """
+    One combination of filterable values and how many servers share it.
+
+    Attributes:
+        vendor (str | None): `identity.vendor`.
+        source_provider (str | None): The collector that found them.
+        installation_type (str | None): `classification.installation_type`.
+        health_overall (str | None): `health.overall`.
+        maintenance (bool): Whether maintenance is enabled.
+        count (int): How many servers.
+    """
+
+    vendor: str | None
+    source_provider: str | None
+    installation_type: str | None
+    health_overall: str | None
+    maintenance: bool
+    count: int
 
 
 class MongoServerRepository:
@@ -146,6 +169,75 @@ class MongoServerRepository:
 
     async def count(self, filters: dict[str, object]) -> int:
         return await self._collection.count_documents(dict(filters))
+
+    async def facet_breakdown(
+        self, *, filters: dict[str, object], search: str | None
+    ) -> list[FacetRow]:
+        """
+        Per-combination server counts for one filtered view, in one round
+        trip.
+
+        A single `$group` over a composite key rather than a `$facet` with
+        one sub-pipeline per dimension, for the same reason
+        `site_breakdown` uses one: the key's cardinality is bounded by the
+        enums and not by the estate — 4 vendors x 5 collectors x 3
+        installation types x 5 severities x 2 maintenance states, so 600
+        small rows at absolute worst — and each dimension's counts are the
+        marginals the caller sums out of them. The alternative is a
+        `count_documents` per option, which is one round trip per number
+        on the screen.
+
+        `site_id` is deliberately not part of the key. It is a filter an
+        operator has usually already applied by the time they want these
+        numbers, and including it would multiply the rows by the site
+        count to answer a question the site overview already answers.
+
+        Args:
+            filters (dict[str, object]): The same Mongo filter document
+                `list_page` receives, so the counts describe exactly the
+                page being looked at.
+            search (str | None): The same search string, applied the same
+                way.
+
+        Returns:
+            list[FacetRow]: One row per non-empty combination.
+        """
+        match: dict[str, object] = dict(filters)
+        if search:
+            match.update(build_search_query(search))
+
+        pipeline: list[dict[str, Any]] = []
+        if match:
+            pipeline.append({"$match": match})
+        pipeline.append(
+            {
+                "$group": {
+                    "_id": {
+                        "vendor": "$identity.vendor",
+                        "source_provider": "$source_provider",
+                        "installation_type": "$classification.installation_type",
+                        "health_overall": "$health.overall",
+                        "maintenance": "$maintenance.enabled",
+                    },
+                    "count": {"$sum": 1},
+                }
+            }
+        )
+
+        rows: list[FacetRow] = []
+        async for doc in await self._collection.aggregate(pipeline):
+            key = doc["_id"]
+            rows.append(
+                FacetRow(
+                    vendor=key.get("vendor"),
+                    source_provider=key.get("source_provider"),
+                    installation_type=key.get("installation_type"),
+                    health_overall=key.get("health_overall"),
+                    maintenance=bool(key.get("maintenance")),
+                    count=int(doc["count"]),
+                )
+            )
+        return rows
 
     async def site_breakdown(self) -> list[SiteBreakdownRow]:
         """Per (site, vendor, health, maintenance, installation type)

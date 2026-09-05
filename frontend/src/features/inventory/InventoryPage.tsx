@@ -6,7 +6,7 @@ import type { ServerListParams } from "@/api/servers";
 import type { SortableField } from "@/features/inventory/InventoryTable";
 import { InventoryTable } from "@/features/inventory/InventoryTable";
 import { siteOptions, SOURCE_PROVIDERS, VENDORS } from "@/api/sites";
-import { useServersQuery } from "@/features/inventory/hooks";
+import { useServerFacetsQuery, useServersQuery } from "@/features/inventory/hooks";
 import { useSitesQuery } from "@/features/sites/hooks";
 import { useDebouncedValue } from "@/lib/useDebouncedValue";
 
@@ -104,6 +104,26 @@ export function InventoryPage() {
 
   const { data, isPending, isError, error, isFetching } =
     useServersQuery(queryParams);
+  const { data: facets } = useServerFacetsQuery(queryParams);
+
+  /** Append a filter option's match count to its label.
+   *
+   * Deliberately silent in two cases rather than showing a wrong number.
+   * When `filtered` is true this dimension already has a value selected,
+   * so the single request behind these counts only saw servers matching
+   * it — every other option would read as zero when it is really unknown.
+   * And an option genuinely matching nothing is absent from the response,
+   * which renders as a plain label rather than "(0)". */
+  function withCount(
+    label: string,
+    counts: Record<string, number> | undefined,
+    value: string,
+    filtered: boolean,
+  ): string {
+    if (filtered || !counts) return label;
+    const count = counts[value];
+    return count === undefined ? label : `${label} (${count})`;
+  }
 
   /** Apply a filter patch to the URL and drop any in-flight cursor — the
    * backend rejects a cursor from before a filter change, so the UI
@@ -208,10 +228,10 @@ export function InventoryPage() {
             }}
             className={FIELD_CLASS}
           >
-            <option value="">All</option>
+            <option value="">All{facets ? ` (${facets.total})` : ""}</option>
             {VENDORS.map((v) => (
               <option key={v} value={v}>
-                {v}
+                {withCount(v, facets?.vendor, v, vendor !== "")}
               </option>
             ))}
           </select>
@@ -229,10 +249,15 @@ export function InventoryPage() {
             }}
             className={FIELD_CLASS}
           >
-            <option value="">All</option>
+            <option value="">All{facets ? ` (${facets.total})` : ""}</option>
             {SOURCE_PROVIDERS.map((s) => (
               <option key={s.value} value={s.value}>
-                {s.label}
+                {withCount(
+                  s.label,
+                  facets?.source_provider,
+                  s.value,
+                  sourceProvider !== "",
+                )}
               </option>
             ))}
           </select>
@@ -247,7 +272,7 @@ export function InventoryPage() {
             }}
             className={FIELD_CLASS}
           >
-            <option value="">All sites</option>
+            <option value="">All sites{facets ? ` (${facets.total})` : ""}</option>
             {sites.map((site) => (
               <option key={site.value} value={site.value}>
                 {site.label}
@@ -265,10 +290,10 @@ export function InventoryPage() {
             }}
             className={FIELD_CLASS}
           >
-            <option value="">All</option>
+            <option value="">All{facets ? ` (${facets.total})` : ""}</option>
             {INSTALLATION_TYPES.map((t) => (
               <option key={t} value={t}>
-                {t}
+                {withCount(t, facets?.installation_type, t, installationType !== "")}
               </option>
             ))}
           </select>
@@ -283,10 +308,10 @@ export function InventoryPage() {
             }}
             className={FIELD_CLASS}
           >
-            <option value="">All</option>
+            <option value="">All{facets ? ` (${facets.total})` : ""}</option>
             {HEALTH_SEVERITIES.map((h) => (
               <option key={h} value={h}>
-                {h}
+                {withCount(h, facets?.health_overall, h, healthOverall !== "")}
               </option>
             ))}
           </select>

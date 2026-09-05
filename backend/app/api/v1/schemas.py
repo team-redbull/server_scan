@@ -25,6 +25,8 @@ preference:
 
 from __future__ import annotations
 
+from collections import Counter
+from collections.abc import Iterable
 from datetime import datetime
 
 from pydantic import BaseModel, Field
@@ -39,6 +41,7 @@ from app.domain.models.network import NetworkInfo
 from app.domain.models.openshift import OpenShiftLifecycle
 from app.domain.models.server import Identity, ProfileTemplate, Server
 from app.domain.value_objects.nic_names import NicNameCatalog
+from app.infrastructure.mongodb.server_repository import FacetRow
 
 
 class ConnectivitySummary(BaseModel):
@@ -191,4 +194,78 @@ class ServerDetail(BaseModel):
             revision=server.revision,
             created_at=server.created_at,
             updated_at=server.updated_at,
+        )
+
+
+class ServerFacets(BaseModel):
+    """
+    How many servers each filter option would match, for one view.
+
+    Every count is *within the filters already applied*, so picking a site
+    and then reading the vendor counts describes that site rather than the
+    estate. That is the number an operator is actually asking for, and it
+    is why these are computed per request rather than cached fleet-wide.
+
+    A value with no matching server is absent rather than zero: the UI
+    renders what is there, and an option that would return an empty page
+    is worth being visibly unavailable rather than looking selectable.
+
+    Attributes:
+        total (int): Servers matching the current filters.
+        vendor (dict[str, int]): Counts by `identity.vendor`.
+        source_provider (dict[str, int]): Counts by collector.
+        installation_type (dict[str, int]): Counts by classification.
+        health_overall (dict[str, int]): Counts by health severity.
+        maintenance (dict[str, int]): Counts keyed `"true"`/`"false"`,
+            strings because JSON object keys cannot be booleans.
+    """
+
+    total: int
+    vendor: dict[str, int] = Field(default_factory=dict)
+    source_provider: dict[str, int] = Field(default_factory=dict)
+    installation_type: dict[str, int] = Field(default_factory=dict)
+    health_overall: dict[str, int] = Field(default_factory=dict)
+    maintenance: dict[str, int] = Field(default_factory=dict)
+
+    @classmethod
+    def from_rows(cls, rows: Iterable[FacetRow]) -> ServerFacets:
+        """
+        Sum the grouped rows into one marginal per dimension.
+
+        Args:
+            rows (Iterable[FacetRow]): `MongoServerRepository.
+                facet_breakdown`'s output.
+
+        Returns:
+            ServerFacets: The per-option counts.
+        """
+        totals: dict[str, Counter[str]] = {
+            "vendor": Counter(),
+            "source_provider": Counter(),
+            "installation_type": Counter(),
+            "health_overall": Counter(),
+            "maintenance": Counter(),
+        }
+        total = 0
+        for row in rows:
+            total += row.count
+            for dimension, value in (
+                ("vendor", row.vendor),
+                ("source_provider", row.source_provider),
+                ("installation_type", row.installation_type),
+                ("health_overall", row.health_overall),
+                ("maintenance", "true" if row.maintenance else "false"),
+            ):
+                # A `None` is a server the field was never set on. It is
+                # counted in `total` but named by no option, because there
+                # is no filter value that would select it.
+                if value is not None:
+                    totals[dimension][str(value)] += row.count
+        return cls(
+            total=total,
+            vendor=dict(totals["vendor"]),
+            source_provider=dict(totals["source_provider"]),
+            installation_type=dict(totals["installation_type"]),
+            health_overall=dict(totals["health_overall"]),
+            maintenance=dict(totals["maintenance"]),
         )

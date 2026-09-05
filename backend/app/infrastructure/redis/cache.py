@@ -36,6 +36,14 @@ logger = structlog.get_logger(__name__)
 # to recompute, so they get a much shorter TTL than the low-churn,
 # per-document server cache.
 SERVER_DETAIL_TTL_SECONDS = 60
+
+# Facet counts are an aggregation over every server matching a filter, so
+# they cost more than a page does and are read once per filter change
+# rather than per scroll. A short TTL rather than explicit invalidation,
+# for the same reason the site overview uses one: a count that is a minute
+# stale is a count, while invalidating on every ingest would clear it
+# continuously on a fleet with five CronJobs writing to it.
+FACETS_TTL_SECONDS = 60
 LIST_PAGE_TTL_SECONDS = 15
 
 # `redis-py`'s async client raises the stdlib `TimeoutError` (not a

@@ -23,3 +23,19 @@ def server_key(server_id: str, revision: int) -> str:
 
 def list_key(filter_hash: str, cursor_hash: str) -> str:
     return f"si:{_NAMESPACE_VERSION}:list:{filter_hash}:{cursor_hash}"
+
+
+def facets_key(filter_hash: str) -> str:
+    """
+    The cache key for one filtered view's facet counts.
+
+    No cursor component, unlike `list_key`: the counts describe the whole
+    filtered set, so every page of the same query shares one entry.
+
+    Args:
+        filter_hash (str): A stable hash of the filters and search string.
+
+    Returns:
+        str: The key.
+    """
+    return f"si:{_NAMESPACE_VERSION}:facets:{filter_hash}"

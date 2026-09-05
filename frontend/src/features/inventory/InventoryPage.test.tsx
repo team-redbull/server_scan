@@ -100,16 +100,33 @@ function renderInventoryPage() {
   return { router };
 }
 
+/** The most recent request for the server *list*.
+ *
+ * `/api/v1/servers/facets` is excluded as well as `/api/v1/sites`: the
+ * page fires it alongside every list request and it deliberately drops the
+ * pagination params, so treating it as "the last request" makes every
+ * cursor assertion here read `null`. */
 function lastRequestUrl(fetchMock: ReturnType<typeof vi.fn>): URL {
   const urls = (fetchMock.mock.calls as [string, RequestInit][])
     .map(([input]) => new URL(input, "http://localhost"))
-    .filter((url) => url.pathname !== "/api/v1/sites");
+    .filter((url) => url.pathname === "/api/v1/servers");
   const last = urls.at(-1);
   if (!last) {
     throw new Error("fetch was never called for the server list");
   }
   return last;
 }
+
+/** Counts for the filter dropdowns, as the page requests them alongside
+ * every list query. */
+const FACETS_RESPONSE = {
+  total: 2,
+  vendor: { dell: 1, cisco: 1 },
+  source_provider: { OPENMANAGE: 1, INTERSIGHT: 1 },
+  installation_type: { UPI: 2 },
+  health_overall: { HEALTHY: 2 },
+  maintenance: { false: 2 },
+};
 
 describe("InventoryPage", () => {
   let fetchMock: ReturnType<typeof vi.fn>;
@@ -121,6 +138,9 @@ describe("InventoryPage", () => {
       const url = new URL(input, "http://localhost");
       if (url.pathname === "/api/v1/sites") {
         return jsonResponse(SITES_RESPONSE);
+      }
+      if (url.pathname === "/api/v1/servers/facets") {
+        return jsonResponse(FACETS_RESPONSE);
       }
       return handler(url);
     });
@@ -286,5 +306,57 @@ describe("InventoryPage", () => {
     await waitFor(() => {
       expect(screen.getByText("page_size must be <= 200")).toBeInTheDocument();
     });
+  });
+
+  it("shows how many servers each filter option would match", async () => {
+    mockServerList(() =>
+      jsonResponse({ items: [], page: { next_cursor: null, has_more: false } }),
+    );
+
+    renderInventoryPage();
+
+    // The counts come from the facets request, which carries the same
+    // filters as the list, so they describe the view rather than the fleet.
+    expect(
+      await screen.findByRole("option", { name: "dell (1)" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("option", { name: "OpenManage (Dell) (1)" }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "HEALTHY (2)" })).toBeInTheDocument();
+  });
+
+  it("leaves an option matching nothing unannotated rather than showing (0)", async () => {
+    mockServerList(() =>
+      jsonResponse({ items: [], page: { next_cursor: null, has_more: false } }),
+    );
+
+    renderInventoryPage();
+
+    // hp is absent from FACETS_RESPONSE.vendor. A "(0)" would be a claim;
+    // a bare label is the absence of one.
+    expect(await screen.findByRole("option", { name: "hp" })).toBeInTheDocument();
+  });
+
+  it("drops pagination params from the facets request", async () => {
+    // The counts describe the whole filtered set, not one page of it, so
+    // sending a cursor would split the cache per page for no gain.
+    mockServerList(() =>
+      jsonResponse({ items: [], page: { next_cursor: null, has_more: false } }),
+    );
+
+    renderInventoryPage();
+    await screen.findByRole("option", { name: "dell (1)" });
+
+    const facetUrls = (fetchMock.mock.calls as [string, RequestInit][])
+      .map(([input]) => new URL(input, "http://localhost"))
+      .filter((url) => url.pathname === "/api/v1/servers/facets");
+
+    expect(facetUrls.length).toBeGreaterThan(0);
+    for (const url of facetUrls) {
+      expect(url.searchParams.get("cursor")).toBeNull();
+      expect(url.searchParams.get("page_size")).toBeNull();
+      expect(url.searchParams.get("sort")).toBeNull();
+    }
   });
 });
