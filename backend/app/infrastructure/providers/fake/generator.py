@@ -68,6 +68,7 @@ _DEFAULT_SITES = site_catalog("")
 COLLECTOR_TYPES: tuple[ManagerType, ...] = (
     ManagerType.UCS_CENTRAL,
     ManagerType.INTERSIGHT,
+    ManagerType.OPENMANAGE,
     ManagerType.ONEVIEW,
     ManagerType.REDFISH_STANDALONE,
 )
@@ -150,9 +151,9 @@ def collector_for(vendor: str, model: str) -> ManagerType:
     directly into Intersight. Nothing is collected by both, mirroring the
     `ManagementMode` partition the Intersight collector enforces.
 
-    HPE goes to OneView, the aggregator that actually owns ProLiant
-    hardware in this estate. Dell has no implemented aggregator collector
-    to belong to, so it stays on its own BMC alongside `standalone`.
+    HPE goes to OneView and Dell to OpenManage, the aggregators that
+    actually own that hardware in this estate. Only `standalone` — a
+    manufacturer this platform does not model — is left on its own BMC.
 
     Args:
         vendor (str): A `Vendor` value.
@@ -163,6 +164,8 @@ def collector_for(vendor: str, model: str) -> ManagerType:
     """
     if vendor == "hp":
         return ManagerType.ONEVIEW
+    if vendor == "dell":
+        return ManagerType.OPENMANAGE
     if vendor != "cisco":
         return ManagerType.REDFISH_STANDALONE
     if _is_blade(model):
@@ -179,6 +182,12 @@ def provider_type_for(server: ProviderServer) -> str:
     stamps with its own identity — so this cannot drift from what
     `collector_for` decided when the server was built.
 
+    Dell is the one case `external_id` alone cannot settle, and it is not
+    a shortcut: OpenManage reads a Dell's hardware from its own iDRAC over
+    Redfish (ADR-0020), so an OME-collected Dell carries the *same*
+    `redfish://` identifier a standalone BMC would. The vendor is what
+    separates them, exactly as it does in `collector_for`.
+
     Args:
         server (ProviderServer): A generated server.
 
@@ -191,6 +200,8 @@ def provider_type_for(server: ProviderServer) -> str:
         return ManagerType.UCS_CENTRAL.value
     if server.external_id.startswith("/rest/server-hardware/"):
         return ManagerType.ONEVIEW.value
+    if server.vendor == "dell":
+        return ManagerType.OPENMANAGE.value
     return ManagerType.REDFISH_STANDALONE.value
 
 
@@ -299,6 +310,12 @@ _NAME_HARDWARE_PROFILES = ("", "", "h100", "h200", "10tb", "5tb")
 # which is what makes "the third and fourth MACs" name the card's ports.
 _ONBOARD_PORTS = 2
 _SLOT_PORTS = 2
+
+# The collectors that read a BMC over Redfish and so report FQDD-shaped
+# interface names. Dell is in both senses one of them: OpenManage takes a
+# Dell's identity from the appliance but its hardware from the server's
+# own iDRAC (ADR-0020), reusing the Redfish mapping unchanged.
+_FQDD_COLLECTORS = (ManagerType.OPENMANAGE, ManagerType.REDFISH_STANDALONE)
 
 # Environment segment some UPI hostnames carry (`ocp4-prod-tlv-infra-01`),
 # and some don't (`ocp4-nyc-control-plane-02`). Both real shapes.
@@ -589,11 +606,7 @@ def _build_name(
         # ocp-dell-r650-tlv-128c-1024gb-<serial>
         short_model = model.split()[-1].lower()
         cores = rng.choice((64, 128, 192))
-        profile = (
-            rng.choice(_NAME_HARDWARE_PROFILES)
-            if collector is ManagerType.REDFISH_STANDALONE
-            else ""
-        )
+        profile = rng.choice(_NAME_HARDWARE_PROFILES) if collector in _FQDD_COLLECTORS else ""
         hardware = f"{profile}-" if profile else ""
         return (
             f"ocp-{vendor}-{short_model}-{site_code}-{cores}c-"
@@ -894,7 +907,7 @@ def _nic_port_count(rng: random.Random, collector: ManagerType, *, slot: int | N
     Returns:
         int: The port count.
     """
-    if collector is ManagerType.REDFISH_STANDALONE:
+    if collector in _FQDD_COLLECTORS:
         return _ONBOARD_PORTS + (_SLOT_PORTS if slot is not None else 0)
     return rng.randint(2, 4)
 

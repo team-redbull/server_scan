@@ -54,20 +54,12 @@ def _installation_type(name: str) -> str:
     return "UNCLASSIFIED"
 
 
-# The seeder deliberately does not shape every collector, but the gap is
-# named here rather than left to be noticed. Derived from
+# Every implemented collector is seeded. Derived from
 # `PROVIDER_FACTORIES` so a sixth collector fails this test instead of
 # quietly having no seed data — which is how OPENMANAGE's absence went
-# unnoticed after the Dell collector shipped.
-#
-# ponytail: OPENMANAGE has no seeded shape because a Dell server collected
-# through OME is read over Redfish, so `provider_type_for` cannot tell it
-# apart from a REDFISH_STANDALONE Dell by `external_id` prefix — the
-# discriminator every other collector uses. Seeding it means carrying the
-# collector on the generated server instead of reading it back off
-# `external_id`. Do that when someone needs to look at Dell's OME path in
-# the UI without live hardware.
-_UNSEEDED_COLLECTORS = frozenset({ManagerType.OPENMANAGE})
+# unnoticed for a while after the Dell collector shipped. A collector that
+# genuinely cannot be shaped goes here, with the reason.
+_UNSEEDED_COLLECTORS: frozenset[ManagerType] = frozenset()
 
 
 def test_the_seeder_shapes_every_implemented_collector() -> None:
@@ -391,13 +383,12 @@ def test_managers_are_exactly_the_implemented_collectors() -> None:
     """Seeding a manager type with no collector would invent a data path
     that cannot exist — and `--manager-type UCS_MANAGER` was removed, so
     there is no Central/Manager pair to model any more.
+
+    Derived from `PROVIDER_FACTORIES`, never restated: a hand-written copy
+    here is the same drift that left OPENMANAGE unseeded and Dell and HPE
+    missing from the UI's Source filter.
     """
-    assert {m.type for m in list_managers()} == {
-        ManagerType.UCS_CENTRAL,
-        ManagerType.INTERSIGHT,
-        ManagerType.ONEVIEW,
-        ManagerType.REDFISH_STANDALONE,
-    }
+    assert {m.type for m in list_managers()} == frozenset(PROVIDER_FACTORIES)
 
 
 def test_manager_ids_match_what_a_real_collector_writes() -> None:
@@ -406,12 +397,7 @@ def test_manager_ids_match_what_a_real_collector_writes() -> None:
     """
     assert {m.id for m in list_managers()} == {
         manager_for(t, ManagerConnection(endpoint="e", username="u", password="p")).id
-        for t in (
-            ManagerType.UCS_CENTRAL,
-            ManagerType.INTERSIGHT,
-            ManagerType.ONEVIEW,
-            ManagerType.REDFISH_STANDALONE,
-        )
+        for t in PROVIDER_FACTORIES
     }
 
 

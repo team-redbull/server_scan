@@ -14,7 +14,11 @@ from app.infrastructure.mongodb import MongoClientHolder
 from app.infrastructure.mongodb.manager_repository import MongoManagerRepository
 from app.infrastructure.mongodb.server_repository import MongoServerRepository
 from app.infrastructure.mongodb.site_repository import MongoSiteRepository
-from app.infrastructure.providers.fake.generator import list_managers, list_sites
+from app.infrastructure.providers.fake.generator import (
+    COLLECTOR_TYPES,
+    list_managers,
+    list_sites,
+)
 from app.infrastructure.providers.fake.provider import fake_providers
 
 SITES = site_catalog("")
@@ -92,7 +96,10 @@ async def test_source_provider_names_the_collector_that_found_each_server(
         with_count=False,
     )
     sources = {s.source_provider for s in page.items}
-    assert sources == {"UCS_CENTRAL", "INTERSIGHT", "ONEVIEW", "REDFISH_STANDALONE"}
+    # Derived, never restated: a hand-written copy of the collector set is
+    # the drift that left OPENMANAGE unseeded and Dell missing from the
+    # UI's Source filter.
+    assert sources == {t.value for t in COLLECTOR_TYPES}
     for server in page.items:
         if server.identity.vendor == Vendor.CISCO:
             # The two Cisco collectors partition the Cisco fleet rather
@@ -102,7 +109,14 @@ async def test_source_provider_names_the_collector_that_found_each_server(
         elif server.identity.vendor == Vendor.HP:
             # OneView owns the ProLiant fleet; nothing else does.
             assert server.source_provider == "ONEVIEW"
+        elif server.identity.vendor == Vendor.DELL:
+            # OpenManage owns the Dell fleet. Its hardware still arrives
+            # over Redfish from each iDRAC (ADR-0020), so the two are
+            # distinguishable only by vendor, never by `external_id`.
+            assert server.source_provider == "OPENMANAGE"
         else:
+            # What is left is a manufacturer this platform does not model,
+            # reached at its own BMC because no aggregator owns it.
             assert server.source_provider == "REDFISH_STANDALONE"
 
 
