@@ -26,6 +26,7 @@ from app.application.services.ingest import IngestService
 from app.config import get_settings
 from app.domain.services.health.metrics import build_default_registry
 from app.domain.services.regex_engine import RegexModuleEngine
+from app.domain.value_objects.gpu_catalog import gpu_catalog
 from app.domain.value_objects.site import site_catalog
 from app.infrastructure.logging import configure_logging
 from app.infrastructure.mongodb import MongoClientHolder
@@ -86,6 +87,12 @@ async def _run(*, count: int, seed: int) -> None:
             site_repo=MongoSiteRepository(mongo),
             manager_repo=MongoManagerRepository(mongo),
             sites=sites,
+            # Threaded explicitly for the same reason `sites` is: the
+            # parameter default is the built-in table with nothing
+            # configured over it, so without this `INVENTORY_GPU_MODELS`
+            # silently did nothing to seeded data — the one place a local
+            # override is easiest to try.
+            gpu_catalog=gpu_catalog(settings.gpu_models),
             classification_service=ClassificationService(
                 rule_repo=rule_repo, engine=regex_engine, mongo=mongo
             ),
