@@ -24,6 +24,7 @@ from app.application.services.classification_service import ClassificationServic
 from app.application.services.health_policy_service import HealthPolicyService
 from app.application.services.ingest import IngestService
 from app.config import get_settings
+from app.domain.enums import OpenShiftState
 from app.domain.services.health.metrics import build_default_registry
 from app.domain.services.regex_engine import RegexModuleEngine
 from app.domain.value_objects.gpu_catalog import gpu_catalog
@@ -40,6 +41,7 @@ from app.infrastructure.mongodb.manager_repository import MongoManagerRepository
 from app.infrastructure.mongodb.server_repository import MongoServerRepository
 from app.infrastructure.mongodb.site_repository import MongoSiteRepository
 from app.infrastructure.providers.fake.generator import list_managers, list_sites
+from app.infrastructure.providers.fake.openshift import openshift_for
 from app.infrastructure.providers.fake.provider import fake_providers
 
 logger = structlog.get_logger(__name__)
@@ -116,18 +118,63 @@ async def _run(*, count: int, seed: int) -> None:
             updated += summary.updated
             errors += summary.errors
 
+        reported = await _seed_openshift(
+            MongoServerRepository(mongo, cursor_secret=settings.cursor_secret)
+        )
+
         logger.info(
             "seed.completed",
             fetched=fetched,
             created=created,
             updated=updated,
             errors=errors,
+            openshift_reported=reported,
         )
         print(  # CLI output, distinct from the structured log line above
             f"fetched={fetched} created={created} updated={updated} errors={errors}"
         )
     finally:
         await mongo.close()
+
+
+async def _seed_openshift(repo: MongoServerRepository) -> int:
+    """
+    Stand in for the two OpenShift jobs, over the fleet just seeded.
+
+    Runs as a second pass rather than through the providers, because that
+    is the real shape: a `ProviderServer` has no `openshift` field at all,
+    since cluster membership is observed by a different system on a
+    different schedule from the hardware. Seeding it through a collector
+    would model a data path that does not exist.
+
+    Args:
+        repo (MongoServerRepository): Where the fleet was just written.
+
+    Returns:
+        int: How many servers a cluster or an MCE reported on — servers
+            left `UNKNOWN` are not counted, since nothing reported them.
+    """
+    reported = 0
+    cursor: str | None = None
+    while True:
+        page = await repo.list_page(
+            filters={},
+            search=None,
+            sort="name",
+            sort_desc=False,
+            cursor=cursor,
+            page_size=500,
+            with_count=False,
+        )
+        for server in page.items:
+            server.openshift = openshift_for(server)
+            if server.openshift.lifecycle_state is not OpenShiftState.UNKNOWN:
+                reported += 1
+            await repo.upsert(server)
+        if not page.has_more or page.next_cursor is None:
+            break
+        cursor = page.next_cursor
+    return reported
 
 
 def main(argv: list[str] | None = None) -> None:

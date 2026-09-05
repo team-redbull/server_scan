@@ -43,6 +43,19 @@ function makeServer(overrides: Partial<ServerDetail> = {}): ServerDetail {
     maintenance: { enabled: false, reason: null },
     unread_fields: [],
     nic_os_names: {},
+    openshift: {
+      lifecycle_state: "UNKNOWN",
+      mce_id: null,
+      cluster_name: null,
+      cluster_id: null,
+      role: null,
+      node_name: null,
+      bmh_name: null,
+      agent_id: null,
+      boot_mac: null,
+      last_reported_at: null,
+      reported_by_agent_id: null,
+    },
     tags: [],
     created_at: "2026-08-13T10:00:00Z",
     site_id: "tlv",
@@ -99,5 +112,81 @@ describe("OverviewTab maintenance controls", () => {
       />,
     );
     expect(screen.getByRole("button", { name: "End maintenance" })).toBeDisabled();
+  });
+});
+
+describe("OverviewTab OpenShift membership", () => {
+  it("shows nothing has reported rather than guessing from the classification", () => {
+    // A regex verdict on the hostname is not proof of cluster membership,
+    // so an unreported server must not borrow its classification here.
+    render(<OverviewTab server={makeServer()} />);
+
+    expect(screen.getByText("Not reported")).toBeInTheDocument();
+  });
+
+  it("names the hosted cluster and the MCE that reported it", () => {
+    const server = makeServer();
+    server.openshift = {
+      ...server.openshift,
+      lifecycle_state: "HOSTED_NODE",
+      mce_id: "mce-tlv",
+      cluster_name: "hc-tlv-02",
+      role: "worker",
+    };
+
+    render(<OverviewTab server={server} />);
+
+    expect(screen.getByText("Hosted cluster node")).toBeInTheDocument();
+    expect(screen.getByText("hc-tlv-02")).toBeInTheDocument();
+    expect(screen.getByText(/mce-tlv/)).toBeInTheDocument();
+  });
+
+  it("names the UPI cluster without an MCE, which does not manage one", () => {
+    const server = makeServer();
+    server.openshift = {
+      ...server.openshift,
+      lifecycle_state: "UPI_NODE",
+      cluster_name: "upi-tlv",
+      role: "master",
+    };
+
+    render(<OverviewTab server={server} />);
+
+    expect(screen.getByText("UPI node")).toBeInTheDocument();
+    expect(screen.getByText("upi-tlv")).toBeInTheDocument();
+    expect(screen.queryByText(/MCE /)).not.toBeInTheDocument();
+  });
+
+  it("shows an unbound agent as available, with no cluster name", () => {
+    const server = makeServer();
+    server.openshift = {
+      ...server.openshift,
+      lifecycle_state: "AVAILABLE",
+      mce_id: "mce-nyc",
+    };
+
+    render(<OverviewTab server={server} />);
+
+    expect(screen.getByText("Available in MCE")).toBeInTheDocument();
+    expect(screen.getByText(/mce-nyc/)).toBeInTheDocument();
+  });
+
+  it("shows a disagreement with the classification rather than hiding it", () => {
+    // The whole reason the two are separate: an UNCLASSIFIED name on a
+    // server a hosted cluster is really running is a misnamed server, and
+    // both values have to be visible to notice.
+    const server = makeServer();
+    server.classification.installation_type = "UNCLASSIFIED";
+    server.openshift = {
+      ...server.openshift,
+      lifecycle_state: "HOSTED_NODE",
+      cluster_name: "hc-nyc-01",
+      mce_id: "mce-nyc",
+    };
+
+    render(<OverviewTab server={server} />);
+
+    expect(screen.getByText("UNCLASSIFIED")).toBeInTheDocument();
+    expect(screen.getByText("Hosted cluster node")).toBeInTheDocument();
   });
 });

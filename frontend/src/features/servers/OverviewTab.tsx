@@ -3,7 +3,7 @@ import { useState } from "react";
 
 import { Badge } from "@/components/Badge";
 import { HealthBadge } from "@/components/HealthBadge";
-import type { ServerDetail } from "@/types/server";
+import type { OpenShiftState, ServerDetail } from "@/types/server";
 
 interface OverviewTabProps {
   server: ServerDetail;
@@ -40,6 +40,7 @@ export function OverviewTab({
       <Field label="Site" value={server.site_id ?? "—"} />
       <Field label="Manager" value={server.manager_id ?? "—"} />
       <Field label="Classification" value={<Badge>{server.classification.installation_type}</Badge>} />
+      <Field label="OpenShift" value={<OpenShiftValue server={server} />} />
       <Field label="Overall health" value={<HealthBadge severity={server.health.overall} />} />
       <Field
         label="Maintenance"
@@ -93,6 +94,48 @@ export function OverviewTab({
       />
       <Field label="Updated" value={new Date(server.updated_at).toLocaleString()} />
     </dl>
+  );
+}
+
+/** Labels for each observed state, said the way an operator would.
+ *
+ * `UNKNOWN` is "Not reported" rather than "Unknown": nothing has claimed
+ * this server, which is an ordinary state for a machine racked but not
+ * yet handed to OpenShift, not a failure to determine something. */
+const OPENSHIFT_LABELS: Record<OpenShiftState, string> = {
+  UNKNOWN: "Not reported",
+  UPI_NODE: "UPI node",
+  HOSTED_NODE: "Hosted cluster node",
+  AVAILABLE: "Available in MCE",
+};
+
+/** Where a server sits in OpenShift, according to OpenShift.
+ *
+ * Deliberately shown next to Classification rather than merged with it.
+ * Classification is a regex verdict on the hostname; this is a cluster or
+ * an MCE reporting what it actually holds. When the two disagree the
+ * server is misnamed or misplaced, and seeing both is the only way to
+ * notice — so this never falls back to the classification when nothing
+ * has reported. */
+function OpenShiftValue({ server }: { server: ServerDetail }) {
+  const { lifecycle_state, cluster_name, mce_id, role } = server.openshift;
+
+  if (lifecycle_state === "UNKNOWN") {
+    return <span className="text-[var(--text-secondary)]">Not reported</span>;
+  }
+
+  return (
+    <div className="flex flex-col gap-1">
+      <div className="flex flex-wrap items-center gap-2">
+        <Badge tone={"neutral"}>
+          {OPENSHIFT_LABELS[lifecycle_state]}
+        </Badge>
+        {cluster_name && <span className="font-medium">{cluster_name}</span>}
+      </div>
+      <span className="text-xs text-[var(--text-secondary)]">
+        {[mce_id && `MCE ${mce_id}`, role].filter(Boolean).join(" · ") || "—"}
+      </span>
+    </div>
   );
 }
 

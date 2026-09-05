@@ -70,6 +70,32 @@ class InstallationType(StrEnum):
     UNCLASSIFIED = "UNCLASSIFIED"
 
 
+class OpenShiftState(StrEnum):
+    """What OpenShift observed about a server, as opposed to what its name
+    suggests.
+
+    Deliberately parallel to `InstallationType` and deliberately not the
+    same thing. `InstallationType` is a regex verdict on a hostname, which
+    is a naming convention; this is a cluster or an MCE reporting what it
+    actually holds. When they disagree the server is misnamed or
+    misplaced, and that is worth seeing rather than reconciling away — see
+    `app.domain.models.openshift`.
+    """
+
+    UNKNOWN = "UNKNOWN"
+    """Nothing has reported on this server yet. The shipped default."""
+
+    UPI_NODE = "UPI_NODE"
+    """A node in a UPI cluster, seen in that cluster's own node list."""
+
+    HOSTED_NODE = "HOSTED_NODE"
+    """An Agent bound to a hosted cluster, seen on an MCE."""
+
+    AVAILABLE = "AVAILABLE"
+    """An Agent registered to an MCE and bound to nothing — spare
+    capacity that cluster creation can draw on."""
+
+
 class HealthSeverity(StrEnum):
     """Ordering matters and is defined once here (`RANK`) — every
     aggregation in the health engine sorts by this, never by enum

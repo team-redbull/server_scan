@@ -277,6 +277,12 @@ export interface ServerDetail {
    * a path is either carried over from an earlier run or the model's zero
    * — never a reading from this run, which is why the UI must not present
    * a `0`/`[]` there as fact. */
+  /** What OpenShift observed about this server, as opposed to what its
+   * name suggests. Written by the UPI and MCE jobs, never by a hardware
+   * collector, and deliberately not reconciled with
+   * `classification.installation_type`: that is a regex verdict on a
+   * hostname, and the two disagreeing is the signal, not a bug. */
+  openshift: OpenShiftLifecycle;
   unread_fields: string[];
   /** A hardware interface name (`NIC.Slot.8-1-1`) against the name the
    * host's OS gives it (`ens8f0np0`), for the interfaces a mapping is
@@ -309,4 +315,34 @@ export interface ServerFacets {
   health_overall: Record<string, number>;
   /** Keyed `"true"`/`"false"` — JSON object keys cannot be booleans. */
   maintenance: Record<string, number>;
+}
+
+/** Which job saw a server and in what role. */
+export type OpenShiftState =
+  | "UNKNOWN"
+  | "UPI_NODE"
+  | "HOSTED_NODE"
+  | "AVAILABLE";
+
+/**
+ * One server's observed OpenShift membership.
+ *
+ * Read `lifecycle_state` before trusting anything else: `cluster_name` is
+ * a UPI cluster on a `UPI_NODE` and a hosted cluster on a `HOSTED_NODE`,
+ * and `mce_id` is set only by the MCE job.
+ */
+export interface OpenShiftLifecycle {
+  lifecycle_state: OpenShiftState;
+  mce_id: string | null;
+  cluster_name: string | null;
+  cluster_id: string | null;
+  role: string | null;
+  node_name: string | null;
+  bmh_name: string | null;
+  agent_id: string | null;
+  boot_mac: string | null;
+  /** Nothing reports a *removal*, so a membership nobody has confirmed in
+   * weeks is indistinguishable from a live one except by this. */
+  last_reported_at: string | null;
+  reported_by_agent_id: string | null;
 }
