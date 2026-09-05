@@ -44,7 +44,7 @@ from app.domain.enums import ManagerType
 from app.domain.models.common import AuditFields
 from app.domain.models.manager import Manager
 from app.domain.models.site import Site
-from app.domain.ports.provider import ProviderAttachment, ProviderServer
+from app.domain.ports.provider import ProviderAttachment, ProviderNic, ProviderServer
 from app.domain.value_objects.site import SiteCatalog, site_catalog
 
 # --- Fixed reference universe -----------------------------------------
@@ -821,6 +821,65 @@ def _build_attachments(rng: random.Random, *, site_code: str) -> tuple[ProviderA
     return tuple(physical) + tuple(vnics)
 
 
+def _nics_for(
+    rng: random.Random, collector: ManagerType, macs: tuple[str, ...]
+) -> tuple[ProviderNic, ...]:
+    """
+    Build the per-interface view for one server, in its collector's shape.
+
+    Only the Redfish-sourced collectors populate this. A UCS or Intersight
+    server's networking is a link to a fabric interconnect rather than a
+    NIC as an OS would see it, so those report `attachments` and leave this
+    empty — mirroring the real collectors exactly.
+
+    Redfish names come out FQDD-shaped because that is what iDRAC and most
+    BMCs put in `EthernetInterface.Id`, and it is the only thing
+    distinguishing one interface from another: `Name` is the same generic
+    "System Ethernet Interface" on every one of them. The
+    `Integrated`-vs-`Slot` kind is what an OS-level name is derived from
+    downstream (`NIC.Integrated.1` -> `eno...`, `NIC.Slot.8` -> `ens8...`),
+    so both kinds are generated rather than only the simple one.
+
+    Args:
+        rng (random.Random): The seeded generator.
+        collector (ManagerType): The collector that owns this server.
+        macs (tuple[str, ...]): The server's MACs, one per interface.
+
+    Returns:
+        tuple[ProviderNic, ...]: One entry per physical port, empty for a
+            collector that reports fabric attachments instead.
+    """
+    if collector in (ManagerType.UCS_CENTRAL, ManagerType.INTERSIGHT):
+        return ()
+    if collector is ManagerType.ONEVIEW:
+        # HPE names a port by its adapter and port number, not an FQDD.
+        return tuple(
+            ProviderNic(
+                name=f"Physical Port {port}",
+                mac=mac,
+                speed_mbps=rng.choice((10_000, 25_000)),
+                link_state="UP" if port == 1 else rng.choice(("UP", "DOWN")),
+                location=f"1:{port}",
+            )
+            for port, mac in enumerate(macs, start=1)
+        )
+    # An add-in card lives in a PCIe slot; the onboard NIC is Integrated.
+    # Slot 8 is the shape a GPU node's high-speed card takes in this
+    # estate, so it is worth generating rather than always Integrated.
+    slot = rng.choice((None, 2, 8))
+    kind = "Integrated.1" if slot is None else f"Slot.{slot}"
+    return tuple(
+        ProviderNic(
+            name=f"NIC.{kind}-{port}-1",
+            mac=mac,
+            speed_mbps=rng.choice((10_000, 25_000)),
+            link_state="UP" if port == 1 else rng.choice(("UP", "DOWN")),
+            location=f"{slot or 1}/{port}/1",
+        )
+        for port, mac in enumerate(macs, start=1)
+    )
+
+
 def generate_servers(
     *, seed: int, count: int, sites: SiteCatalog | None = None
 ) -> Iterator[ProviderServer]:
@@ -870,6 +929,7 @@ def generate_servers(
 
         nic_count = rng.randint(2, 4)
         nic_macs = tuple(_random_mac(rng) for _ in range(nic_count))
+        nics = _nics_for(rng, collector, nic_macs)
         bmc_mac = _random_mac(rng)
         bmc_ip = _fake_ip(site_index, index)
 
@@ -891,6 +951,11 @@ def generate_servers(
         # exact bug the `None`-means-unread contract exists to prevent.
         if collector is ManagerType.ONEVIEW and _is_ilo4(model):
             nic_macs = None
+            # `()` rather than `None`: `nics` has no unread state — it is
+            # the richer view of the interfaces `nic_macs` lists, so a
+            # server whose MACs went unread cannot coherently report
+            # per-port detail for them.
+            nics = ()
             storage_drives = None
             storage_total_bytes = None
             gpus = None
@@ -912,6 +977,7 @@ def generate_servers(
             serial=serial,
             system_uuid=system_uuid,
             nic_macs=nic_macs,
+            nics=nics,
             bmc_address_raw=_bmc_address(collector, bmc_ip),
             bmc_mac=bmc_mac,
             manager_id=manager_id_for(collector),

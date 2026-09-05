@@ -555,3 +555,51 @@ def test_every_readable_server_reports_power_supplies() -> None:
     # `power.failed_psu_count` is exercised by a local seed rather than
     # only ever reading zero.
     assert any(psu["health"] == "DOWN" for s in readable for psu in (s.psus or ()))
+
+
+def test_only_redfish_sourced_collectors_report_per_interface_nics() -> None:
+    """A UCS or Intersight server's networking is a fabric attachment, not
+    a NIC an OS would see, so those collectors leave `nics` empty exactly
+    as the real ones do.
+    """
+    fabric = {ManagerType.UCS_CENTRAL.value, ManagerType.INTERSIGHT.value}
+    by_collector: dict[str, list[bool]] = {}
+    for server in generate_servers(seed=42, count=400, sites=SITES):
+        # A server whose MACs went unread (an iLO 4) has nothing to report
+        # per port either, so it says nothing about its collector's shape.
+        if not server.nic_macs:
+            continue
+        by_collector.setdefault(provider_type_for(server), []).append(bool(server.nics))
+
+    assert by_collector, "the generator produced nothing to check"
+    for collector, has_nics in by_collector.items():
+        if collector in fabric:
+            assert not any(has_nics), f"{collector} should report attachments, not nics"
+        else:
+            assert all(has_nics), f"{collector} should report per-interface nics"
+
+
+def test_a_nics_mac_is_one_the_server_reports_for_identity() -> None:
+    """`nic_macs` is what identity correlation keys on and `nics` is the
+    richer view of the same interfaces — a NIC carrying a MAC absent from
+    `nic_macs` would describe a different server.
+    """
+    for server in generate_servers(seed=42, count=200, sites=SITES):
+        for nic in server.nics:
+            assert nic.mac in (server.nic_macs or ()), f"{server.name}: {nic.mac} is not its own"
+
+
+def test_redfish_nic_names_carry_the_fqdd_kind_an_os_name_derives_from() -> None:
+    """`NIC.Integrated.1` becomes an `eno...` name on a booted host and
+    `NIC.Slot.8` becomes `ens8...`, so a seeded fleet that only ever
+    produced one kind could not exercise that mapping at all.
+    """
+    kinds = {
+        nic.name.split("-")[0]
+        for server in generate_servers(seed=42, count=400, sites=SITES)
+        for nic in server.nics
+        if nic.name.startswith("NIC.")
+    }
+
+    assert any(k.startswith("NIC.Integrated") for k in kinds), kinds
+    assert any(k.startswith("NIC.Slot") for k in kinds), kinds
