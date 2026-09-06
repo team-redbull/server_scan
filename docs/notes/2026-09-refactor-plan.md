@@ -3,15 +3,15 @@
 Companion to `docs/notes/2026-09-audit.md` (findings, with IDs referenced
 here) and the seven `docs/notes/2026-09-research-*.md` files.
 
-**Status: approved 2026-09-06. Phases 1-6 done, committed, and pushed to
+**Status: approved 2026-09-06. Phases 1-8 done, committed, and pushed to
 `dev-refactor` (`686160f`, `453f47e`+`8dfed16`+`517cfce`, `c90968a`,
-`4806d21`+`6066cc5`+`2920510`, `b5d6702`, `37d1cce` respectively — Phase 2
-shipped as three commits and Phase 4 as three instead of one, see their
-own sections for why). Phase 6 also surfaced and fixed an unrelated dev-
-tooling bug (`d448822`): `scripts/dev-up.sh down` never removed Mongo's
-named volume, so `down && up` silently kept the previous run's data
-instead of the empty database the README documents that sequence as
-producing. Phase 7 next.**
+`4806d21`+`6066cc5`+`2920510`, `b5d6702`, `37d1cce`, `a669a97`, `8d463b8`
+respectively — Phase 2 shipped as three commits and Phase 4 as three
+instead of one, see their own sections for why). Phase 6 also surfaced
+and fixed an unrelated dev-tooling bug (`d448822`): `scripts/dev-up.sh
+down` never removed Mongo's named volume, so `down && up` silently kept
+the previous run's data instead of the empty database the README
+documents that sequence as producing. Phase 9 next.**
 
 Ordering follows the brief: contract and architecture first while the diff
 is still legible, mechanical sweeps last. One phase = one reviewable
@@ -425,34 +425,85 @@ Raising page size and moving to `useInfiniteQuery` is the real fix.
 
 ## Phase 8 — Tooling and CI
 
-**Commit:** `ci: enforce the layered architecture with import-linter`
+**Shipped as `ci: enforce the layered architecture with import-linter`.**
+Findings had drifted from this section's counts (written before this
+session's Phase 6/7 work landed) — re-measured rather than trusted:
 
-- **M4 first** — add `backend/app/infrastructure/__init__.py`. import-linter
-  cannot see the package until this exists.
-- `import-linter`, gating **the 4 contracts that already hold**. The 5th
-  (application never names a concrete adapter) is broken 8 ways — all
-  constructor params typed to Mongo repositories, with `ServerRepository`
-  already a Protocol that is bypassed and three repos having no port at
-  all. Record it as known debt with a `ponytail:` marker rather than
-  gating a red contract or doing a speculative ports sweep here.
-- `ruff --extend-select PTH,LOG,RET,PERF,FURB,TRY004,TRY300,TRY400,C901`
-  — 27 findings, all true positives, 3 autofixable. `TRY400` is losing
-  tracebacks in two collectors.
-- `deptry --known-first-party app` (5 findings).
-- Make `oxlint` actually gate — it currently exits 0 with a
-  `no-floating-promises` warning present.
-- Bump `ty` 0.0.76 → 0.0.78 (measured clean) and
-  `docker/setup-buildx-action` v4.2.0 → v4.3.0 (resolves).
-- **Documented local commands, not gates:** `vulture`, `knip`, ruff `D`.
-- **Explicitly not adding:** `bandit` (all 12 findings duplicate
-  already-selected ruff `S` codes carrying reasoned `# noqa`; its only
-  unique output is 2 false positives), `radon`/`xenon` (maintainability
-  index is flat-A across every file *because* MI rewards comment ratio and
-  this repo is comment-heavy by policy — the metric does not measure what
-  we care about), `deadcode`, bundle-size tooling (140 kB gzip against
-  Vite's own 500 kB warning).
-- `ruff` 0.14.0 → 0.16.6 passes `check` but **reformats 6 files** — its
-  own commit, or deferred.
+- **M4 first** — added `backend/app/infrastructure/__init__.py`.
+  import-linter cannot see the package until this exists. Side effect
+  worth knowing: `app.infrastructure` was previously an implicit
+  namespace package, and that alone was silently defeating ruff's isort
+  first-party detection for the *entire* `app.*` tree — adding this one
+  file surfaced two pre-existing, real `I001` violations
+  (`redis/client.py`, `redis/cache.py`) that `ruff check .` had never
+  actually been able to see. Fixed alongside.
+- `import-linter`, gating **the 4 contracts that hold** (re-derived as
+  5 `forbidden`-type contracts, not layers — domain independent of
+  application/infrastructure/api; infrastructure independent of
+  application and of api; application independent of api). The 5th —
+  application never naming a concrete adapter — is broken by exactly
+  5 imports across 4 files (`audit_service.py`, `bootstrap.py` ×2,
+  `classification_service.py`, `health_policy_service.py`, all reaching
+  past `ServerRepository`'s Protocol for a concrete `Mongo*Repository`,
+  three of which have no port at all). Recorded as known debt with a
+  `ponytail:` marker in `pyproject.toml`, not gated.
+- `ruff --extend-select PTH,LOG,RET,PERF,FURB,TRY004,TRY300,TRY400` —
+  19 findings (not 27; `PTH`/`LOG` were already clean), all fixed. 4
+  autofixable, 2 more via `--unsafe-fixes` (both `TRY400`, both genuine:
+  `logger.error` inside an `except` in the Redfish provider and
+  `run_collector.py`'s UCS_MANAGER-not-configured path were both losing
+  the traceback). One `PERF401` (`ucs_central/provider.py`) kept as
+  `# noqa` with a comment: the flagged loop's list is read mid-iteration
+  by the `except` clause for a partial-progress count, which a
+  comprehension has no way to expose.
+  **`C901` (complexity) deliberately NOT added**, unlike the original
+  plan: it hits `validate_condition` (ADR-0005's health-policy engine),
+  Intersight's join-table builder and OneView's PSU mapping — real
+  branching from a genuinely complex external contract, not sprawl.
+  Splitting those is its own reviewed change with real regression risk
+  (no live hardware to re-verify most of them against), not a mechanical
+  lint fix.
+- `deptry --known-first-party app` — 5 findings, all one root cause:
+  `starlette` imported directly in three files while resolving only as
+  fastapi's transitive dependency. Made direct and pinned to what
+  fastapi 0.141.1 actually resolves (`1.6.0`). Gated in CI as an
+  ephemeral `--with` install, matching `pip-audit`'s pattern.
+- `oxlint --deny-warnings` now gates — it was exiting 0 with
+  `no-floating-promises` enabled by `typeAware` but never denied.
+  Verified type-aware linting genuinely runs (a scratch floating-promise
+  file was caught); the real tree has zero warnings today, so this was
+  a pure config fix, no source change needed.
+- Bumped `ty` 0.0.76 → 0.0.78 (measured clean) and
+  `docker/setup-buildx-action` v4.2.0 → v4.3.0.
+- Documented, not gated (README's Tests section): `uvx vulture` (dead
+  code), `npx knip` (unused TS exports — currently the F-07 dead code
+  from the removed rule/policy editors), `ruff check --select D`
+  (docstring coverage).
+- **Still explicitly not adding**, unchanged from the original plan:
+  `bandit` (duplicates already-selected ruff `S`), `radon`/`xenon` (MI
+  rewards comment ratio, meaningless on a comment-heavy-by-policy repo),
+  `deadcode`, bundle-size tooling.
+- `ruff` 0.14.0 → 0.16.6 (reformats 6 files) still deferred — its own
+  commit, unchanged.
+
+**CI speed, done in the same phase since it touches the same file**
+(user request, not in the original plan): `actions/cache` for the
+chromium headless shell in the e2e job, keyed on the resolved
+`@playwright/test` version — was re-downloaded on every run, the
+slowest single step in that job. `uv sync --all-groups --locked`
+everywhere `uv sync` runs, so a `uv.lock` that drifted from
+`pyproject.toml` fails loudly instead of CI silently re-resolving a
+different dependency set than any developer's local one. Everything
+else was already right: `enable-cache: true` (uv) and `cache: npm`
+(node) are both already keyed on their lockfiles, the four top-level
+jobs already run concurrently with no artificial `needs` between them,
+and the Docker builds already use `cache-from/to: type=gha`.
+**Considered and deliberately not done:** `pytest-xdist` for the `test`
+job — real potential win, but that job's `mongo`/`redis` are fixed
+service containers shared by every test on `localhost`, not
+per-test-isolated `testcontainers`, so parallel workers risk real
+cross-test collisions rather than just flaking. Needs a look at the
+suite's isolation guarantees first, not a blind flag flip.
 
 ---
 
