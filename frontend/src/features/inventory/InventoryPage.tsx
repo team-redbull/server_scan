@@ -199,6 +199,42 @@ export function InventoryPage() {
   const servers = data?.items ?? [];
   const hasMore = data?.page.has_more ?? false;
 
+  // What's actually filtering the list right now, named the way an
+  // operator would say it — a facet count beside a control answers "what
+  // would this option show me", not "what am I looking at", and an empty
+  // table with no other explanation reads as "no servers" rather than
+  // "no servers match what you asked for".
+  const activeFilters: { key: string; label: string }[] = [];
+  if (debouncedSearch) activeFilters.push({ key: "search", label: `Search "${debouncedSearch}"` });
+  if (vendor) activeFilters.push({ key: "vendor", label: `Vendor ${vendor}` });
+  if (siteId) {
+    activeFilters.push({
+      key: "site_id",
+      label: `Site ${sites.find((s) => s.value === siteId)?.label ?? siteId}`,
+    });
+  }
+  if (sourceProvider) {
+    activeFilters.push({
+      key: "source_provider",
+      label: `Source ${SOURCE_PROVIDERS.find((s) => s.value === sourceProvider)?.label ?? sourceProvider}`,
+    });
+  }
+  if (installationType) activeFilters.push({ key: "installation_type", label: `Classification ${installationType}` });
+  if (healthOverall) activeFilters.push({ key: "health_overall", label: `Health ${healthOverall}` });
+  if (maintenanceOnly) activeFilters.push({ key: "maintenance", label: "Maintenance only" });
+
+  function clearFilters() {
+    updateFilters({
+      search: null,
+      vendor: null,
+      site_id: null,
+      source_provider: null,
+      installation_type: null,
+      health_overall: null,
+      maintenance: null,
+    });
+  }
+
   return (
     <main className="mx-auto max-w-7xl px-8 py-8">
       <h1 className="text-xl font-semibold tracking-tight text-[var(--text-primary)]">
@@ -344,6 +380,33 @@ export function InventoryPage() {
         </label>
       </form>
 
+      {activeFilters.length > 0 && (
+        <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-[var(--text-secondary)]">
+          <span>Filtered by:</span>
+          {activeFilters.map((f) => (
+            <button
+              key={f.key}
+              type="button"
+              onClick={() => {
+                updateFilters({ [f.key]: null });
+              }}
+              title="Remove this filter"
+              className="inline-flex items-center gap-1 rounded-full border border-[var(--border-subtle)] bg-[var(--surface-raised)] px-2.5 py-1 hover:border-[var(--border-strong)]"
+            >
+              {f.label}
+              <span aria-hidden="true">×</span>
+            </button>
+          ))}
+          <button
+            type="button"
+            onClick={clearFilters}
+            className="text-[var(--color-status-info)] hover:underline"
+          >
+            Clear filters
+          </button>
+        </div>
+      )}
+
       <div className="mt-4">
         {isPending && (
           <p className="py-12 text-center text-sm text-[var(--text-muted)]">
@@ -371,6 +434,11 @@ export function InventoryPage() {
               sortField={sortField}
               sortDesc={sortDesc}
               onSortChange={handleSortChange}
+              {...(activeFilters.length > 0
+                ? {
+                    emptyMessage: `No servers match: ${activeFilters.map((f) => f.label).join(", ")}.`,
+                  }
+                : {})}
             />
 
             <div className="mt-4 flex items-center gap-3">

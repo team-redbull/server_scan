@@ -53,6 +53,10 @@ interface InventoryTableProps {
   sortField: NonNullable<ServerListParams["sort"]>;
   sortDesc: boolean;
   onSortChange: (field: SortableField, desc: boolean) => void;
+  /** Shown in place of the generic empty state when no rows match — names
+   * the active filters rather than leaving an operator to guess whether
+   * "no servers" means an empty fleet or a too-narrow filter set. */
+  emptyMessage?: string;
 }
 
 const columnHelper = legacyCreateColumnHelper<ServerSummary>();
@@ -101,7 +105,13 @@ const columns: LegacyColumnDef<ServerSummary, any>[] = [
   }),
 ];
 
-export function InventoryTable({ servers, sortField, sortDesc, onSortChange }: InventoryTableProps) {
+export function InventoryTable({
+  servers,
+  sortField,
+  sortDesc,
+  onSortChange,
+  emptyMessage,
+}: InventoryTableProps) {
   const navigate = useNavigate();
   const sorting: SortingState = [{ id: sortField, desc: sortDesc }];
 
@@ -216,7 +226,7 @@ export function InventoryTable({ servers, sortField, sortDesc, onSortChange }: I
                 colSpan={columns.length + 1}
                 className="px-4 py-12 text-center text-sm text-[var(--text-muted)]"
               >
-                No servers match the current filters.
+                {emptyMessage ?? "No servers match the current filters."}
               </td>
             </tr>
           )}

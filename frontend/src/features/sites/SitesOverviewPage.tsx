@@ -1,4 +1,5 @@
-import { Link } from "react-router";
+import type { KeyboardEvent, MouseEvent, ReactNode } from "react";
+import { Link, useNavigate } from "react-router";
 
 import { UNASSIGNED_SITE_ID } from "@/api/sites";
 import type { Breakdown, SiteStats, VendorCount } from "@/api/sites";
@@ -184,6 +185,39 @@ function VendorBar({ stats }: { stats: Breakdown }) {
   );
 }
 
+/** A card's link filters to the site/installation-type alone; this adds
+ * `health_overall` on top, so "3 critical" goes straight to those 3
+ * servers instead of to all of them. */
+function withHealthFilter(to: string, severity: HealthSeverity): string {
+  return `${to}${to.includes("?") ? "&" : "?"}health_overall=${severity}`;
+}
+
+/** A count that drills into a filtered list, nested inside the card's own
+ * `<Link>` — real anchors cannot nest, so this is a `role="link"` span
+ * that navigates itself and stops the click from also firing the card's
+ * outer link. */
+function CountLink({ to, className, children }: { to: string; className: string; children: ReactNode }) {
+  const navigate = useNavigate();
+  function go(e: MouseEvent | KeyboardEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    void navigate(to);
+  }
+  return (
+    <span
+      role="link"
+      tabIndex={0}
+      className={className}
+      onClick={go}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") go(e);
+      }}
+    >
+      {children}
+    </span>
+  );
+}
+
 /** `emphasis` marks the fleet-wide row. It is a different kind of thing
  * from a site — a stronger border says so without a second card design. */
 function SiteCard({ card, emphasis }: { card: CardSpec; emphasis?: boolean }) {
@@ -217,16 +251,22 @@ function SiteCard({ card, emphasis }: { card: CardSpec; emphasis?: boolean }) {
        * across five cards is noise that trains people to skip the card. */}
       <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
         {critical > 0 && (
-          <span className="inline-flex items-center gap-1.5 font-medium text-[var(--text-on-critical)]">
+          <CountLink
+            to={withHealthFilter(card.to, "CRITICAL")}
+            className="inline-flex cursor-pointer items-center gap-1.5 font-medium text-[var(--text-on-critical)] underline-offset-2 hover:underline"
+          >
             <span aria-hidden="true">{SEVERITY_GLYPH.CRITICAL}</span>
             <span className="tabular">{critical}</span> critical
-          </span>
+          </CountLink>
         )}
         {warning > 0 && (
-          <span className="inline-flex items-center gap-1.5 font-medium text-[var(--text-on-warning)]">
+          <CountLink
+            to={withHealthFilter(card.to, "WARNING")}
+            className="inline-flex cursor-pointer items-center gap-1.5 font-medium text-[var(--text-on-warning)] underline-offset-2 hover:underline"
+          >
             <span aria-hidden="true">{SEVERITY_GLYPH.WARNING}</span>
             <span className="tabular">{warning}</span> warning
-          </span>
+          </CountLink>
         )}
         {stats.in_maintenance > 0 && (
           <span className="inline-flex items-center gap-1.5 text-[var(--text-on-maintenance)]">

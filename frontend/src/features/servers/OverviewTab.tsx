@@ -4,7 +4,7 @@ import { useState } from "react";
 import { ApiError } from "@/api/client";
 import { Badge } from "@/components/Badge";
 import { HealthBadge } from "@/components/HealthBadge";
-import type { OpenShiftState, ServerDetail } from "@/types/server";
+import type { HealthSummary, OpenShiftState, ServerDetail } from "@/types/server";
 
 interface OverviewTabProps {
   server: ServerDetail;
@@ -55,6 +55,7 @@ export function OverviewTab({
       <Field label="Classification" value={<Badge>{server.classification.installation_type}</Badge>} />
       <Field label="OpenShift" value={<OpenShiftValue server={server} />} />
       <Field label="Overall health" value={<HealthBadge severity={server.health.overall} />} />
+      <Field label="Health breakdown" value={<HealthBreakdown health={server.health} />} />
       <Field
         label="Maintenance"
         value={
@@ -153,6 +154,33 @@ function OpenShiftValue({ server }: { server: ServerDetail }) {
       <span className="text-xs text-[var(--text-secondary)]">
         {[mce_id && `MCE ${mce_id}`, role].filter(Boolean).join(" · ") || "—"}
       </span>
+    </div>
+  );
+}
+
+/** The six categories behind "Overall health" — `overall` is shown on its
+ * own field above and omitted here. Without this, the page opened to
+ * answer "why is this unhealthy" only ever said the overall verdict, never
+ * which subsystem earned it, even though the API sends all seven on every
+ * request. */
+const HEALTH_CATEGORIES: { key: keyof Omit<HealthSummary, "overall">; label: string }[] = [
+  { key: "cpu", label: "CPU" },
+  { key: "memory", label: "Memory" },
+  { key: "storage", label: "Storage" },
+  { key: "network", label: "Network" },
+  { key: "connectivity", label: "Connectivity" },
+  { key: "power", label: "Power" },
+];
+
+function HealthBreakdown({ health }: { health: HealthSummary }) {
+  return (
+    <div className="flex flex-wrap gap-x-4 gap-y-1.5">
+      {HEALTH_CATEGORIES.map(({ key, label }) => (
+        <span key={key} className="inline-flex items-center gap-1.5 text-xs">
+          <span className="text-gray-500">{label}</span>
+          <HealthBadge severity={health[key]} />
+        </span>
+      ))}
     </div>
   );
 }
