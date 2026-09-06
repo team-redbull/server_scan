@@ -1,18 +1,9 @@
-import type { ReactNode } from "react";
-
 import { HealthBadge } from "@/components/HealthBadge";
+import { NOT_READ_TITLE, Reported, STALE_TITLE, UnconfirmedMarker } from "@/components/Reported";
 import { isHealthSeverity } from "@/components/severity";
 import type { ComponentHealth, HardwareInfo } from "@/types/server";
 
 const BYTE_UNITS = ["B", "KB", "MB", "GB", "TB", "PB"] as const;
-
-/** A field the last collection could not read, with nothing stored from an
- * earlier one: the `0`/`[]` below it is the model's zero, not a reading. */
-const NOT_READ_TITLE = "The most recent collection could not read this.";
-
-/** Read on an earlier run and carried forward — real data, just not
- * confirmed by the latest collection. Shown, dimmed, never hidden. */
-const STALE_TITLE = "Not confirmed by the most recent collection.";
 
 function formatBytes(bytes: number): string {
   if (bytes <= 0) {
@@ -211,48 +202,6 @@ export function HardwareTab({
 }
 
 /**
- * Renders a block honestly when the last collection could not read it:
- * "Not reported" in place of the zero it would otherwise state as fact, or
- * the carried-forward value dimmed when there is one. A read field renders
- * its children untouched.
- */
-function Reported({
-  unread,
-  empty,
-  inline = false,
-  children,
-}: {
-  unread: boolean;
-  /** Whether the stored value is the model's zero (`0`, `[]`) — the case
-   * where showing it at all would be a claim no collector ever made. */
-  empty: boolean;
-  /** Render inside a line of text rather than as its own block. */
-  inline?: boolean;
-  children: ReactNode;
-}) {
-  if (!unread) {
-    return <>{children}</>;
-  }
-  if (empty) {
-    return inline ? (
-      <span className="text-gray-500" title={NOT_READ_TITLE}>
-        Not reported
-      </span>
-    ) : (
-      <p className="mt-2 text-sm text-gray-500" title={NOT_READ_TITLE}>
-        Not reported
-      </p>
-    );
-  }
-  const Tag = inline ? "span" : "div";
-  return (
-    <Tag className="opacity-50" title={STALE_TITLE}>
-      {children}
-    </Tag>
-  );
-}
-
-/**
  * One component's own reported condition. Badged when it is a severity
  * this UI can style, shown as the collector's raw word when it is not
  * (Cisco reports UP/DOWN here, not HEALTHY/CRITICAL), and dashed when the
@@ -280,13 +229,14 @@ function Stat({
   const className = unread
     ? empty
       ? "font-medium text-gray-500"
-      : "font-medium opacity-50"
+      : "font-medium opacity-70"
     : "font-medium";
   return (
     <div>
       <dt className="text-xs text-gray-500">{label}</dt>
       <dd className={className} title={unread ? (empty ? NOT_READ_TITLE : STALE_TITLE) : undefined}>
         {unread && empty ? "Not reported" : (value ?? "—")}
+        {unread && !empty && <UnconfirmedMarker />}
       </dd>
     </div>
   );

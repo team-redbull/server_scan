@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import { HardwareTab } from "@/features/servers/HardwareTab";
@@ -50,13 +50,16 @@ describe("HardwareTab unread fields", () => {
     };
     render(<HardwareTab hardware={hardware} unreadFields={UNREAD} />);
 
-    // Good data is never hidden — only dimmed and explained.
+    // Good data is never hidden — only dimmed and explained, and the
+    // explanation is visible text, not just a hover-only title.
     const drive = screen.getByText("MZ7LH3T8");
     expect(drive).toBeInTheDocument();
-    expect(drive.closest("div.opacity-50")).toHaveAttribute(
+    const wrapper = drive.closest("div.opacity-70");
+    expect(wrapper).toHaveAttribute(
       "title",
       "Not confirmed by the most recent collection.",
     );
+    expect(within(wrapper as HTMLElement).getAllByText("unconfirmed").length).toBeGreaterThan(0);
   });
 
   it("renders unchanged when nothing was unread", () => {

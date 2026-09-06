@@ -88,13 +88,20 @@ export function ServerDetailPage() {
                 maintenancePending={
                   enableMaintenanceMutation.isPending || disableMaintenanceMutation.isPending
                 }
+                maintenanceError={
+                  enableMaintenanceMutation.error ?? disableMaintenanceMutation.error
+                }
               />
             )}
             {activeTab === "hardware" && (
               <HardwareTab hardware={data.hardware} unreadFields={data.unread_fields} />
             )}
             {activeTab === "network" && (
-              <NetworkTab network={data.network} osNames={data.nic_os_names} />
+              <NetworkTab
+                network={data.network}
+                osNames={data.nic_os_names}
+                unreadFields={data.unread_fields}
+              />
             )}
             {activeTab === "connectivity" && <ConnectivityTab connectivity={data.connectivity} />}
           </div>

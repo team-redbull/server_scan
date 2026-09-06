@@ -190,6 +190,8 @@ function SiteCard({ card, emphasis }: { card: CardSpec; emphasis?: boolean }) {
   const { stats } = card;
   const critical = stats.by_health.CRITICAL;
   const warning = stats.by_health.WARNING;
+  const unknown = stats.by_health.UNKNOWN;
+  const info = stats.by_health.INFO;
 
   return (
     <Link
@@ -233,7 +235,23 @@ function SiteCard({ card, emphasis }: { card: CardSpec; emphasis?: boolean }) {
             maintenance
           </span>
         )}
-        {critical === 0 && warning === 0 && stats.total > 0 && (
+        {unknown > 0 && (
+          <span className="inline-flex items-center gap-1.5 text-[var(--text-on-unknown)]">
+            <span aria-hidden="true">{SEVERITY_GLYPH.UNKNOWN}</span>
+            <span className="tabular">{unknown}</span> unknown
+          </span>
+        )}
+        {info > 0 && (
+          <span className="inline-flex items-center gap-1.5 text-[var(--text-on-info)]">
+            <span aria-hidden="true">{SEVERITY_GLYPH.INFO}</span>
+            <span className="tabular">{info}</span> info
+          </span>
+        )}
+        {/* Only a site every server in which was actually evaluated
+         * HEALTHY earns this — never a byproduct of critical/warning
+         * both being zero, which is also true of a site nothing has
+         * evaluated yet. */}
+        {stats.total > 0 && stats.by_health.HEALTHY === stats.total && (
           <span className="inline-flex items-center gap-1.5 text-[var(--text-on-healthy)]">
             <span aria-hidden="true">{SEVERITY_GLYPH.HEALTHY}</span> all healthy
           </span>

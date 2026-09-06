@@ -1,6 +1,7 @@
 import type { FormEvent, ReactNode } from "react";
 import { useState } from "react";
 
+import { ApiError } from "@/api/client";
 import { Badge } from "@/components/Badge";
 import { HealthBadge } from "@/components/HealthBadge";
 import type { OpenShiftState, ServerDetail } from "@/types/server";
@@ -15,6 +16,17 @@ interface OverviewTabProps {
   onEnableMaintenance?: (reason: string) => void;
   onDisableMaintenance?: () => void;
   maintenancePending?: boolean;
+  /** The failed mutation's error, if the last enable/disable attempt
+   * failed — this is the app's only write path, and a failure here used
+   * to be completely silent (the button just re-enabled). */
+  maintenanceError?: unknown;
+}
+
+function maintenanceErrorMessage(error: unknown): string {
+  if (error instanceof ApiError) {
+    return error.problem.detail;
+  }
+  return error instanceof Error ? error.message : "Failed to update maintenance.";
 }
 
 export function OverviewTab({
@@ -22,6 +34,7 @@ export function OverviewTab({
   onEnableMaintenance,
   onDisableMaintenance,
   maintenancePending,
+  maintenanceError,
 }: OverviewTabProps) {
   const [reason, setReason] = useState("");
 
@@ -84,6 +97,11 @@ export function OverviewTab({
                   </form>
                 )}
               </>
+            )}
+            {maintenanceError != null && (
+              <p role="alert" className="text-xs text-red-600 dark:text-red-400">
+                {maintenanceErrorMessage(maintenanceError)}
+              </p>
             )}
           </div>
         }

@@ -123,18 +123,22 @@ export function InventoryTable({ servers, sortField, sortDesc, onSortChange }: I
   });
 
   return (
-    <div className="overflow-hidden rounded-[var(--radius-card)] border border-[var(--border-subtle)] bg-[var(--surface-raised)]">
+    // No `overflow-hidden` here: it would make this div the sticky
+    // header's containing scroll block, but the div itself never scrolls
+    // (the page does) — so the header would never actually stick. The
+    // rounded top corners are done on the header's own end cells instead.
+    <div className="rounded-[var(--radius-card)] border border-[var(--border-subtle)] bg-[var(--surface-raised)]">
       <table className="min-w-full text-sm">
         {/* Sticky header: at 100+ rows the column meaning otherwise
          * scrolls away exactly when you are deep enough to need it. */}
         <thead className="sticky top-0 z-10 bg-[var(--surface-sunken)]">
           {table.getHeaderGroups().map((headerGroup) => (
             <tr key={headerGroup.id}>
-              {headerGroup.headers.map((header) => (
+              {headerGroup.headers.map((header, index) => (
                 <th
                   key={header.id}
                   scope="col"
-                  className="border-b border-[var(--border-subtle)] px-4 py-2.5 text-left text-xs font-medium tracking-wide text-[var(--text-secondary)] uppercase"
+                  className={`border-b border-[var(--border-subtle)] px-4 py-2.5 text-left text-xs font-medium tracking-wide text-[var(--text-secondary)] uppercase ${index === 0 ? "rounded-tl-[var(--radius-card)]" : ""}`}
                 >
                   {header.column.getCanSort() ? (
                     <button
@@ -156,7 +160,10 @@ export function InventoryTable({ servers, sortField, sortDesc, onSortChange }: I
                   )}
                 </th>
               ))}
-              <th scope="col" className="w-6 border-b border-[var(--border-subtle)]">
+              <th
+                scope="col"
+                className="w-6 rounded-tr-[var(--radius-card)] border-b border-[var(--border-subtle)]"
+              >
                 <span className="sr-only">Open</span>
               </th>
             </tr>

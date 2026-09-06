@@ -1,4 +1,5 @@
 import { LinkStateBadge } from "@/components/LinkStateBadge";
+import { Reported } from "@/components/Reported";
 import type { NetworkInfo, NetworkInterface } from "@/types/server";
 
 /** `NIC.Slot.8-1-1` / `NIC.Integrated.1-2-1` -> the kind and its port. */
@@ -20,16 +21,22 @@ function describeLocation(iface: NetworkInterface): string | null {
 export function NetworkTab({
   network,
   osNames,
+  unreadFields = [],
 }: {
   network: NetworkInfo | undefined;
   /** FQDD -> OS-level name, for the interfaces a mapping is configured
    * for. Absent entries render as nothing at all, never as a guess. */
   osNames?: Record<string, string>;
+  /** `ServerDetail.unread_fields` — dotted paths the most recent collection
+   * could not read. Optional so the tab still renders for a caller with no
+   * such list (a document written before the field existed). */
+  unreadFields?: string[] | undefined;
 }) {
   if (!network) {
     return <p className="text-gray-500">No network data available.</p>;
   }
 
+  const unread = new Set(unreadFields);
   const { bmc, interfaces } = network;
 
   return (
@@ -56,57 +63,59 @@ export function NetworkTab({
         <h2 className="text-sm font-semibold uppercase tracking-wide text-gray-500">
           Interfaces
         </h2>
-        {interfaces.length > 0 ? (
-          <ul className="mt-2 divide-y divide-gray-100 dark:divide-gray-800">
-            {interfaces.map((iface, index) => {
-              const osName = osNames?.[iface.name];
-              const location = describeLocation(iface);
-              return (
-                <li key={`${iface.name}-${iface.mac}`} className="py-3">
-                  <div className="flex flex-wrap items-baseline justify-between gap-x-4">
-                    <span className="font-medium">{iface.name}</span>
-                    <span className="font-mono text-sm text-gray-600 dark:text-gray-300">
-                      {iface.mac ?? "—"}
-                    </span>
-                  </div>
-                  {/* Every field here dashes rather than disappearing
-                   * when it was not read. A missing row reads as "does
-                   * not apply"; a dash says the collector looked and got
-                   * nothing, which is the distinction this whole codebase
-                   * turns on. */}
-                  <div className="mt-1 flex flex-wrap items-center gap-x-2 text-sm text-gray-500">
-                    <span>{location ?? "—"}</span>
-                    <span aria-hidden>·</span>
-                    {/* The MAC's position in discovery order. Existing
-                     * tooling selects the pair to bond by this ("the
-                     * third and fourth MACs"), so it is worth showing
-                     * next to the location that supersedes it. */}
-                    <span>MAC #{index + 1}</span>
-                    <span aria-hidden>·</span>
-                    <span>
-                      {iface.speed_mbps != null ? `${iface.speed_mbps} Mbps` : "—"}
-                    </span>
-                    <span aria-hidden>·</span>
-                    <LinkStateBadge state={iface.link_state} />
-                  </div>
-                  {osName && (
-                    /* Labelled as derived on purpose: this one is
-                     * configuration, not something the BMC reported, and
-                     * an operator acting on it should know which. */
-                    <p className="mt-1 text-sm text-gray-500">
-                      OS name (derived):{" "}
-                      <span className="font-mono text-gray-700 dark:text-gray-300">
-                        {osName}
+        <Reported unread={unread.has("identity.nic_macs")} empty={interfaces.length === 0}>
+          {interfaces.length > 0 ? (
+            <ul className="mt-2 divide-y divide-gray-100 dark:divide-gray-800">
+              {interfaces.map((iface, index) => {
+                const osName = osNames?.[iface.name];
+                const location = describeLocation(iface);
+                return (
+                  <li key={`${iface.name}-${iface.mac}`} className="py-3">
+                    <div className="flex flex-wrap items-baseline justify-between gap-x-4">
+                      <span className="font-medium">{iface.name}</span>
+                      <span className="font-mono text-sm text-gray-600 dark:text-gray-300">
+                        {iface.mac ?? "—"}
                       </span>
-                    </p>
-                  )}
-                </li>
-              );
-            })}
-          </ul>
-        ) : (
-          <p className="mt-2 text-sm text-gray-500">No network interfaces.</p>
-        )}
+                    </div>
+                    {/* Every field here dashes rather than disappearing
+                     * when it was not read. A missing row reads as "does
+                     * not apply"; a dash says the collector looked and got
+                     * nothing, which is the distinction this whole codebase
+                     * turns on. */}
+                    <div className="mt-1 flex flex-wrap items-center gap-x-2 text-sm text-gray-500">
+                      <span>{location ?? "—"}</span>
+                      <span aria-hidden>·</span>
+                      {/* The MAC's position in discovery order. Existing
+                       * tooling selects the pair to bond by this ("the
+                       * third and fourth MACs"), so it is worth showing
+                       * next to the location that supersedes it. */}
+                      <span>MAC #{index + 1}</span>
+                      <span aria-hidden>·</span>
+                      <span>
+                        {iface.speed_mbps != null ? `${iface.speed_mbps} Mbps` : "—"}
+                      </span>
+                      <span aria-hidden>·</span>
+                      <LinkStateBadge state={iface.link_state} />
+                    </div>
+                    {osName && (
+                      /* Labelled as derived on purpose: this one is
+                       * configuration, not something the BMC reported, and
+                       * an operator acting on it should know which. */
+                      <p className="mt-1 text-sm text-gray-500">
+                        OS name (derived):{" "}
+                        <span className="font-mono text-gray-700 dark:text-gray-300">
+                          {osName}
+                        </span>
+                      </p>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          ) : (
+            <p className="mt-2 text-sm text-gray-500">No network interfaces.</p>
+          )}
+        </Reported>
       </section>
     </div>
   );

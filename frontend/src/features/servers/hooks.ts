@@ -18,6 +18,12 @@ export function useEnableMaintenanceMutation(id: string) {
     mutationFn: (body: MaintenanceEnableRequest) => enableMaintenance(id, body),
     onSuccess: (server) => {
       queryClient.setQueryData(queryKeys.servers.detail(id), server);
+      // Invalidate the whole `servers` branch — list AND facets, which is
+      // a sibling key under `servers`, not a child of `lists()` — plus
+      // every site card's `in_maintenance` count. This is the app's only
+      // write path, so nothing else invalidates any of them.
+      void queryClient.invalidateQueries({ queryKey: queryKeys.servers.all });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.sites.all });
     },
   });
 }
@@ -28,6 +34,8 @@ export function useDisableMaintenanceMutation(id: string) {
     mutationFn: () => disableMaintenance(id),
     onSuccess: (server) => {
       queryClient.setQueryData(queryKeys.servers.detail(id), server);
+      void queryClient.invalidateQueries({ queryKey: queryKeys.servers.lists() });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.sites.all });
     },
   });
 }

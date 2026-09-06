@@ -1,6 +1,7 @@
 import { createBrowserRouter } from "react-router";
 
 import { AppLayout } from "@/components/AppLayout";
+import { RouteErrorBoundary } from "@/components/RouteErrorBoundary";
 import { InventoryPage } from "@/features/inventory/InventoryPage";
 import { RulesPage } from "@/features/rules/RulesPage";
 import { ServerDetailPage } from "@/features/servers/ServerDetailPage";
@@ -10,6 +11,9 @@ import { StatusPage } from "@/routes/StatusPage";
 export const router = createBrowserRouter([
   {
     element: <AppLayout />,
+    // A render throw anywhere below here used to blank the entire app —
+    // no nav, no way back — rather than just the one broken page.
+    errorElement: <RouteErrorBoundary />,
     children: [
       {
         // The site overview is the landing page: at fleet scale a flat

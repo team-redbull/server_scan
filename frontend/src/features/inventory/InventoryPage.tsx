@@ -73,12 +73,20 @@ export function InventoryPage() {
   const sortDesc = searchParams.get("sort_desc") === "true";
   const cursor = searchParams.get("cursor") ?? undefined;
 
-  const queryParams: ServerListParams = useMemo(() => {
+  // The filter fields alone, with no pagination or sort — shared by the
+  // list request and the facets request. Kept separate from `queryParams`
+  // below because the facets endpoint deliberately ignores cursor/sort/
+  // page_size (a facet count describes the whole filtered set, not one
+  // page of it), and computing its own params here — rather than reusing
+  // `queryParams` — keeps its cache key from changing on every page turn
+  // or sort click, which used to fire a byte-identical facets request on
+  // each one.
+  const filterParams: ServerListParams = useMemo(() => {
     // Built incrementally (rather than `field: value || undefined`) because
     // `exactOptionalPropertyTypes` forbids assigning `undefined` to an
     // optional property outright — an omitted key and a key explicitly set
     // to `undefined` are distinct types under this tsconfig.
-    const params: ServerListParams = { sort: sortField, page_size: PAGE_SIZE };
+    const params: ServerListParams = {};
     if (debouncedSearch) params.search = debouncedSearch;
     if (vendor) params.vendor = vendor;
     if (siteId) params.site_id = siteId;
@@ -86,8 +94,6 @@ export function InventoryPage() {
     if (installationType) params.installation_type = installationType;
     if (healthOverall) params.health_overall = healthOverall;
     if (maintenanceOnly) params.maintenance = true;
-    if (sortDesc) params.sort_desc = true;
-    if (cursor) params.cursor = cursor;
     return params;
   }, [
     debouncedSearch,
@@ -97,14 +103,18 @@ export function InventoryPage() {
     installationType,
     healthOverall,
     maintenanceOnly,
-    sortField,
-    sortDesc,
-    cursor,
   ]);
+
+  const queryParams: ServerListParams = useMemo(() => {
+    const params: ServerListParams = { ...filterParams, sort: sortField, page_size: PAGE_SIZE };
+    if (sortDesc) params.sort_desc = true;
+    if (cursor) params.cursor = cursor;
+    return params;
+  }, [filterParams, sortField, sortDesc, cursor]);
 
   const { data, isPending, isError, error, isFetching } =
     useServersQuery(queryParams);
-  const { data: facets } = useServerFacetsQuery(queryParams);
+  const { data: facets } = useServerFacetsQuery(filterParams);
 
   /** Append a filter option's match count to its label.
    *
@@ -195,8 +205,8 @@ export function InventoryPage() {
         Servers
       </h1>
       <p className="mt-1 text-sm text-[var(--text-secondary)]">
-        {typeof data?.page.count === "number"
-          ? `${data.page.count} server${data.page.count === 1 ? "" : "s"}`
+        {facets
+          ? `${facets.total} server${facets.total === 1 ? "" : "s"}`
           : "Browse and filter discovered servers."}
       </p>
 
@@ -219,9 +229,10 @@ export function InventoryPage() {
           />
         </label>
 
-        <label className="flex flex-col text-xs font-medium text-[var(--text-secondary)]">
-          Vendor
+        <div className="flex flex-col text-xs font-medium text-[var(--text-secondary)]">
+          <label htmlFor="filter-vendor">Vendor</label>
           <select
+            id="filter-vendor"
             value={vendor}
             onChange={(e) => {
               updateFilters({ vendor: e.target.value });
@@ -235,14 +246,15 @@ export function InventoryPage() {
               </option>
             ))}
           </select>
-        </label>
+        </div>
 
         {/* How a server is reached, which is a different question from who
             built it. `REDFISH_STANDALONE` means the machine has no manager,
             so there is no point looking for it in OpenManage or UCS. */}
-        <label className="flex flex-col text-xs font-medium text-[var(--text-secondary)]">
-          Source
+        <div className="flex flex-col text-xs font-medium text-[var(--text-secondary)]">
+          <label htmlFor="filter-source">Source</label>
           <select
+            id="filter-source"
             value={sourceProvider}
             onChange={(e) => {
               updateFilters({ source_provider: e.target.value });
@@ -261,11 +273,12 @@ export function InventoryPage() {
               </option>
             ))}
           </select>
-        </label>
+        </div>
 
-        <label className="flex flex-col text-xs font-medium text-[var(--text-secondary)]">
-          Site
+        <div className="flex flex-col text-xs font-medium text-[var(--text-secondary)]">
+          <label htmlFor="filter-site">Site</label>
           <select
+            id="filter-site"
             value={siteId}
             onChange={(e) => {
               updateFilters({ site_id: e.target.value });
@@ -279,11 +292,12 @@ export function InventoryPage() {
               </option>
             ))}
           </select>
-        </label>
+        </div>
 
-        <label className="flex flex-col text-xs font-medium text-[var(--text-secondary)]">
-          Classification
+        <div className="flex flex-col text-xs font-medium text-[var(--text-secondary)]">
+          <label htmlFor="filter-classification">Classification</label>
           <select
+            id="filter-classification"
             value={installationType}
             onChange={(e) => {
               updateFilters({ installation_type: e.target.value });
@@ -297,11 +311,12 @@ export function InventoryPage() {
               </option>
             ))}
           </select>
-        </label>
+        </div>
 
-        <label className="flex flex-col text-xs font-medium text-[var(--text-secondary)]">
-          Health
+        <div className="flex flex-col text-xs font-medium text-[var(--text-secondary)]">
+          <label htmlFor="filter-health">Health</label>
           <select
+            id="filter-health"
             value={healthOverall}
             onChange={(e) => {
               updateFilters({ health_overall: e.target.value });
@@ -315,7 +330,7 @@ export function InventoryPage() {
               </option>
             ))}
           </select>
-        </label>
+        </div>
 
         <label className="flex items-center gap-2 pb-1.5 text-xs font-medium text-[var(--text-secondary)]">
           <input
