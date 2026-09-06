@@ -153,6 +153,39 @@ class TestTimeout:
         with pytest.raises(UcsCentralConnectionError, match="ucscsdk has no timeout of its own"):
             await client.login()
 
+    async def test_a_timed_out_client_refuses_every_further_call(self) -> None:
+        """`ucscsdk` has no way to cancel the abandoned thread, so it may
+        still be running against `self._handle` — a second call on the
+        same instance risks two threads touching one session at once.
+        Refusing every further call is the only way to stop that.
+        """
+        client = _client(StubHandle(block_seconds=0.5), timeout_seconds=0.05)
+        with pytest.raises(UcsCentralConnectionError, match="timed out"):
+            await client.login()
+
+        with pytest.raises(UcsCentralConnectionError, match="never returned within its"):
+            await client.query_classid("computeBlade")
+
+    async def test_a_timed_out_calls_thread_is_not_joined_at_interpreter_exit(self) -> None:
+        """The whole point: a daemon thread is never registered in
+        `concurrent.futures.thread`'s own join-at-exit bookkeeping, unlike
+        even a *dedicated* `ThreadPoolExecutor`'s workers — verified
+        against this project's own interpreter, not assumed. See
+        `app.infrastructure.blocking`'s module docstring.
+        """
+        import concurrent.futures.thread as cf_thread
+        import threading
+
+        before = set(threading.enumerate())
+        client = _client(StubHandle(block_seconds=0.5), timeout_seconds=0.05)
+        with pytest.raises(UcsCentralConnectionError, match="timed out"):
+            await client.login()
+
+        [spawned] = set(threading.enumerate()) - before
+        assert spawned.daemon
+        assert spawned.name.startswith("ucs-central-")
+        assert spawned not in cf_thread._threads_queues
+
 
 class TestQueryResults:
     async def test_returns_a_list(self) -> None:

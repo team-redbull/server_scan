@@ -119,6 +119,24 @@ is a short-lived CronJob process, with `activeDeadlineSeconds` as the
 outer backstop. The alternative is a collector that hangs until
 Kubernetes kills it with no logged reason.
 
+> **Updated 2026-09-06 (Phase 2 of the production-hardening pass).** The
+> leaked thread was a bigger problem than "acceptable" — `asyncio.to_thread`
+> routes through the event loop's default `ThreadPoolExecutor`, and an
+> abandoned worker there stalls `asyncio.run()`'s own shutdown for
+> `THREAD_JOIN_TIMEOUT` (300s), *then* hangs **unboundedly** at interpreter
+> exit regardless (`concurrent.futures.thread._python_exit()` joins every
+> `ThreadPoolExecutor` worker, from any executor, with no timeout — a
+> dedicated executor does not avoid this, only daemon threads do, since
+> they alone are never registered there). Verified against this project's
+> own installed CPython 3.13.15, not assumed. Fixed by replacing
+> `asyncio.to_thread` with `app.infrastructure.blocking.run_abandonable`
+> (a manually created daemon thread), and by poisoning the client instance
+> once its own deadline fires — since a wedged call's thread may still be
+> mutating the SDK handle, a second call on the same instance risks two
+> threads touching one session at once. See `docs/cisco-collectors.md`'s
+> "Timeouts, abandoned threads and poisoned clients" for the full
+> mechanism, shared with `UcsManagerClient`.
+
 ## What is still unproven
 
 > Narrowed by the 2026-08-17 update at the end of this file, which moved

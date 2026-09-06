@@ -670,8 +670,16 @@ server with a GPU whose actual temperature is known.
 
 ADR-0009 covers the async-wrapper decision: `ucsmsdk` has no async
 support, so every `login`/`logout`/`query_classid` is dispatched through
-`asyncio.to_thread`, with one `UcsManagerClient` (and `UcsHandle`) per
-domain per run, never shared across concurrent tasks.
+`app.infrastructure.blocking.run_abandonable` — a daemon thread, not
+`asyncio.to_thread` — with one `UcsManagerClient` (and `UcsHandle`) per
+domain per run, never shared across concurrent tasks. **Updated
+2026-09-06 (Phase 2 of the production-hardening pass):** `UcsHandle`'s own
+`timeout=` bounds one socket operation, not the whole call (see below), so
+`_with_timeout` now also imposes a whole-call deadline via
+`asyncio.timeout()` — `login()` previously had no deadline at all beyond
+that per-socket one. See "Timeouts, abandoned threads and poisoned
+clients" below for the mechanism and its consequences, shared with UCS
+Central.
 
 Confirmed against the installed `ucsmsdk==0.9.27` source, not
 documentation:
@@ -721,14 +729,14 @@ master at `6c9a34f` (ADR-0014).
   and a wedged Central blocks forever. ADR-0014 records this and the
   decision to impose a deadline in the wrapper;
   `UcsCentralClient._with_timeout` is that control.
-- **The imposed timeout leaks a thread, deliberately.**
-  `asyncio.wait_for` cancels the *await*, not the worker thread — a
-  timed-out call leaves its thread blocked in `urlopen` until the OS
-  gives up. Acceptable only because a collector run is a short-lived
-  CronJob process, with the CronJob's `activeDeadlineSeconds` as the
-  outer backstop. The alternative is a collector that hangs until
-  Kubernetes kills it with no logged reason. ADR-0014 records the
-  tradeoff.
+- **The imposed timeout leaks a thread, deliberately.** See "Timeouts,
+  abandoned threads and poisoned clients" below — this bullet originally
+  described `asyncio.wait_for(asyncio.to_thread(...))`, which was itself
+  the bug Phase 2 fixed: the abandoned thread stalled interpreter
+  shutdown for 300 seconds and then hung *unboundedly*, not merely until
+  "the OS gives up". ADR-0014 records the original tradeoff; the
+  mechanism it describes is superseded, not the decision to accept a
+  leaked thread at all.
 - **`port` must be 443.** `__create_uri` raises for any other value, so
   unlike `ucsmsdk` there is nothing to configure and an endpoint with an
   embedded port is always wrong.
@@ -747,6 +755,44 @@ master at `6c9a34f` (ADR-0014).
   and this set is written down nowhere else.
 - **Network failures are not in either tree**, and **`logout()` before a
   successful login is a no-op** — both exactly as for `ucsmsdk` above.
+
+### Timeouts, abandoned threads and poisoned clients
+
+Added 2026-09-06 (Phase 2 of the production-hardening pass), shared by
+both clients via `app.infrastructure.blocking.run_abandonable` — read its
+module docstring first for the full mechanism, confirmed against this
+project's own installed CPython 3.13.15, not assumed:
+
+- **Neither SDK's blocking call can be cancelled once started**, and
+  `asyncio.wait_for`/`asyncio.timeout` only ever abandon the *await* —
+  the underlying OS thread keeps running regardless of which executor it
+  came from.
+- **A dedicated `ThreadPoolExecutor` does not fix this**, and this was
+  measured, not assumed — see `docs/notes/2026-09-refactor-plan.md`'s
+  correction. `ThreadPoolExecutor` workers are non-daemon with no way to
+  make them otherwise, and land in the same interpreter-wide join-at-exit
+  registry the *default* executor's workers do. Only a manually created
+  **daemon thread** is never joined at all, by either mechanism.
+- **A client is poisoned once its own deadline fires.** `_with_timeout`
+  sets `self._poisoned_since` and every further call on that same
+  instance is refused — the abandoned thread may still be mutating
+  `self._handle`, and a second thread touching the same SDK session
+  concurrently is worse than refusing to proceed. Build a fresh client
+  (a fresh domain/run already does this) rather than reusing a poisoned
+  one.
+- **A poisoned instance's `logout()` is also refused**, and that refusal
+  is swallowed by `logout()`'s own `except Exception` (it "never
+  raises") — so a poisoned client's session is never explicitly closed.
+  Whatever remote-side session the abandoned call was mid-request for —
+  most concerning for `login()` — may leak until UCS Central/Manager
+  times it out on its own. There is no way to avoid this without a
+  cancellable SDK call, which neither vendor's SDK offers.
+- **`asyncio.timeout()`'s `.expired()`** distinguishes "our own deadline
+  fired" from "the awaited call itself raised a `TimeoutError` before the
+  deadline" — meaningfully different only for `ucsmsdk`, whose own
+  socket-level timeout can genuinely raise one; `ucscsdk` has no timeout
+  of its own to raise, so that branch is unreached there in practice, and
+  is kept as a correctness boundary rather than folded away.
 
 ### Sessions
 

@@ -14,6 +14,8 @@ import structlog
 from ucscsdk.ucscexception import UcscError, UcscWrapperException
 from ucscsdk.ucschandle import UcscHandle
 
+from app.infrastructure.blocking import run_abandonable
+
 logger = structlog.get_logger(__name__)
 
 
@@ -86,12 +88,15 @@ class UcsCentralClient:
         """
         self._handle = UcscHandle(_validate_endpoint(endpoint), username, password)
         self._timeout_seconds = timeout_seconds
+        # Set once a call's deadline fires while `ucscsdk`'s own thread may
+        # still be running against `self._handle` — see `_with_timeout`.
+        self._poisoned_since: str | None = None
         if os.environ.get("INVENTORY_UCS_DUMP_XML") == "1":
             self._handle.set_dump_xml()
 
     async def _with_timeout(self, func: Any, *args: Any, what: str) -> Any:
         """
-        Run a blocking SDK call in a worker thread under a deadline.
+        Run a blocking SDK call on an abandonable thread under a deadline.
 
         See docs/cisco-collectors.md, "SDK behaviour, sessions and timeouts".
 
@@ -105,18 +110,44 @@ class UcsCentralClient:
             Any: Whatever `func` returned.
 
         Raises:
-            UcsCentralConnectionError: On timeout, any SDK exception, or any
-                network-level `OSError`.
+            UcsCentralConnectionError: On timeout, any SDK exception, a
+                network-level `OSError`, or if this client is already
+                poisoned by an earlier abandoned call.
         """
-        try:
-            return await asyncio.wait_for(
-                asyncio.to_thread(func, *args), timeout=self._timeout_seconds
-            )
-        except TimeoutError as exc:
+        if self._poisoned_since is not None:
             raise UcsCentralConnectionError(
-                f"{what} timed out after {self._timeout_seconds}s "
-                f"(ucscsdk has no timeout of its own; this deadline is imposed by the collector)."
-            ) from exc
+                f"{what} refused: {self._poisoned_since!r} never returned within its "
+                "deadline, and ucscsdk gives no way to cancel it — its thread may still "
+                "be running against this handle. Reusing the handle risks two threads "
+                "touching the same ucscsdk session at once, so this client instance is "
+                "done; build a fresh one."
+            )
+        try:
+            async with asyncio.timeout(self._timeout_seconds) as deadline:
+                return await run_abandonable(func, *args, name=f"ucs-central-{what}")
+        except TimeoutError as exc:
+            if deadline.expired():
+                # Our own deadline fired. `run_abandonable`'s thread keeps
+                # running `func` against `self._handle` regardless — there
+                # is nothing in `ucscsdk` to cancel it — so every further
+                # call on this instance is refused from here on. Whatever
+                # remote-side session `func` was mid-request for (most
+                # concerning for `login`) may now leak until UCS Central
+                # times it out on its own; there is no way to avoid that
+                # without a cancellable SDK.
+                self._poisoned_since = what
+                raise UcsCentralConnectionError(
+                    f"{what} timed out after {self._timeout_seconds}s "
+                    "(ucscsdk has no timeout of its own; this deadline is imposed by "
+                    "the collector, and its thread is abandoned, not stopped)."
+                ) from exc
+            # `ucscsdk` raises no such thing itself (confirmed: neither
+            # `UcscHandle` nor `UcscSession` accept a timeout anywhere), so
+            # this branch is unreached in practice — kept as a correctness
+            # boundary rather than folded into the branch above, so a
+            # future SDK change that *does* raise its own TimeoutError
+            # is not misreported as this collector's own deadline.
+            raise UcsCentralConnectionError(f"{what} failed: {exc}") from exc
         except (UcscError, UcscWrapperException) as exc:
             raise UcsCentralConnectionError(f"{what} failed: {exc}") from exc
         except OSError as exc:

@@ -235,6 +235,36 @@ the full gate.
 
 ---
 
+**Correction, 2026-09-06, before implementation.** The "give the client
+its own `ThreadPoolExecutor`" fix above is **factually wrong**, confirmed
+by reading `concurrent.futures.thread` source directly and by running it,
+not by re-reasoning about it: a dedicated `ThreadPoolExecutor`'s worker
+threads are still non-daemon (`ThreadPoolExecutor.__init__` has no
+argument to make them otherwise) and still register in the *same*
+module-global `_threads_queues` every executor's workers do — joined with
+**no timeout at all** by `_python_exit()` (hooked via
+`threading._register_atexit`, which runs during interpreter shutdown,
+*after* `asyncio.run()` has already returned). So this fix does not
+remove the 300-second stall — it removes the 300-second *bound*, turning
+a five-minute stall into an unconditional hang. Measured directly: both
+the default executor and a dedicated one hang indefinitely once a call
+wedges; only a manually created **daemon thread** (`threading.Thread`,
+never through any `Executor`) exits promptly, since daemon threads are
+never registered in `_threads_queues` and the interpreter does not wait
+for them at all.
+
+The actual fix shipped in `backend/app/infrastructure/blocking.py`
+(`run_abandonable`): a daemon thread bridged back to the event loop via
+the public `asyncio.wrap_future`. It also adds a "poisoned client" policy
+neither this plan nor the original audit anticipated — see
+`docs/cisco-collectors.md`'s "Timeouts, abandoned threads and poisoned
+clients" for why a client whose deadline has fired must refuse every
+further call rather than risk a second thread touching the same SDK
+session. See the commit `fix: run the blocking Cisco SDK calls on
+abandonable daemon threads` and its full reasoning there.
+
+---
+
 ## Phase 3 — Security and supply chain
 
 **Commit:** `fix: allow INVENTORY_CURSOR_SECRET to be set in Helm and refuse the dev default in production`

@@ -14,6 +14,8 @@ import structlog
 from ucsmsdk.ucsexception import UcsError, UcsWrapperException
 from ucsmsdk.ucshandle import UcsHandle
 
+from app.infrastructure.blocking import run_abandonable
+
 logger = structlog.get_logger(__name__)
 
 
@@ -80,8 +82,10 @@ class UcsManagerClient:
             endpoint (str): Bare hostname or IP of the domain.
             username (str): Login user.
             password (str): Login password.
-            timeout_seconds (float): Per-socket-operation timeout, not a
-                total-request or total-run deadline.
+            timeout_seconds (float): Also imposed as a whole-call deadline
+                by `_with_timeout` — see its docstring for why the
+                per-socket-operation timeout `UcsHandle` itself takes is
+                not enough on its own.
 
         Raises:
             ValueError: If `endpoint` is not a bare hostname or IP.
@@ -89,8 +93,85 @@ class UcsManagerClient:
         self._handle = UcsHandle(
             _validate_endpoint(endpoint), username, password, timeout=timeout_seconds
         )
+        self._timeout_seconds = timeout_seconds
+        # Set once a call's deadline fires while `ucsmsdk`'s own thread may
+        # still be running against `self._handle` — see `_with_timeout`.
+        self._poisoned_since: str | None = None
         if os.environ.get("INVENTORY_UCS_DUMP_XML") == "1":
             self._handle.set_dump_xml()
+
+    async def _with_timeout(self, func: Any, *args: Any, what: str) -> Any:
+        """
+        Run a blocking SDK call on an abandonable thread under a deadline.
+
+        `UcsHandle(timeout=...)` alone is not a whole-call deadline: reading
+        the installed `ucsmsdk` source, that timeout reaches only
+        `urllib`'s per-*socket-operation* deadline (one `connect`/`recv`) —
+        `socket.create_connection` resolves DNS *before* applying it at
+        all, one `post()` can retry up to three times internally (a
+        TLSv1 fallback, a redirect), and a fresh `login()` issues up to
+        three `post_elem` calls of its own. `login()` alone is therefore
+        unbounded in the DNS-hang case and only loosely bounded otherwise.
+        See docs/cisco-collectors.md, "SDK behaviour, sessions and timeouts".
+
+        Args:
+            func (Any): The blocking SDK callable to dispatch.
+            *args (Any): Positional arguments forwarded to `func`.
+            what (str): Human-readable description of the call, used in
+                error messages.
+
+        Returns:
+            Any: Whatever `func` returned.
+
+        Raises:
+            UcsManagerConnectionError: On timeout, any SDK exception, a
+                network-level `OSError`, or if this client is already
+                poisoned by an earlier abandoned call.
+        """
+        if self._poisoned_since is not None:
+            raise UcsManagerConnectionError(
+                f"{what} refused: {self._poisoned_since!r} never returned within its "
+                "deadline, and ucsmsdk gives no way to cancel it — its thread may still "
+                "be running against this handle. Reusing the handle risks two threads "
+                "touching the same ucsmsdk session at once, so this client instance is "
+                "done; build a fresh one."
+            )
+        try:
+            async with asyncio.timeout(self._timeout_seconds) as deadline:
+                return await run_abandonable(func, *args, name=f"ucs-manager-{what}")
+        except TimeoutError as exc:
+            if deadline.expired():
+                # Our own deadline fired. `run_abandonable`'s thread keeps
+                # running `func` against `self._handle` regardless — there
+                # is nothing in `ucsmsdk` to cancel it — so every further
+                # call on this instance is refused from here on. Whatever
+                # remote-side session `func` was mid-request for (most
+                # concerning for `login`) may now leak until UCS Manager
+                # times it out on its own; there is no way to avoid that
+                # without a cancellable SDK.
+                self._poisoned_since = what
+                raise UcsManagerConnectionError(
+                    f"{what} timed out after {self._timeout_seconds}s "
+                    "(the socket-level timeout UcsHandle was built with does not bound the "
+                    "whole call; this deadline is imposed by the collector, and its thread "
+                    "is abandoned, not stopped)."
+                ) from exc
+            # Unlike UCS Central's ucscsdk, ucsmsdk's own socket-level
+            # timeout genuinely can raise a bare `TimeoutError` here — one
+            # `connect`/`recv` timing out on its own, with the thread
+            # already finished by the time this is caught. `TimeoutError`
+            # is itself an `OSError`, so it is reported the same way as
+            # any other network failure below, not as this collector's
+            # own deadline (the branch above).
+            raise UcsManagerConnectionError(
+                f"{what} could not reach {self._handle.ip}: {exc}"
+            ) from exc
+        except (UcsError, UcsWrapperException) as exc:
+            raise UcsManagerConnectionError(f"{what} failed: {exc}") from exc
+        except OSError as exc:
+            raise UcsManagerConnectionError(
+                f"{what} could not reach {self._handle.ip}: {exc}"
+            ) from exc
 
     async def login(self) -> None:
         """
@@ -98,16 +179,10 @@ class UcsManagerClient:
 
         Raises:
             UcsManagerConnectionError: If the credentials are rejected, the
-                XML API returns an error, or the host is unreachable.
+                XML API returns an error, the host is unreachable, or the
+                call exceeded its deadline.
         """
-        try:
-            await asyncio.to_thread(self._handle.login)
-        except (UcsError, UcsWrapperException) as exc:
-            raise UcsManagerConnectionError(f"Login to {self._handle.ip} failed: {exc}") from exc
-        except OSError as exc:
-            raise UcsManagerConnectionError(
-                f"Could not reach UCS Manager at {self._handle.ip}: {exc}"
-            ) from exc
+        await self._with_timeout(self._handle.login, what="login")
 
     async def logout(self) -> None:
         """
@@ -119,7 +194,7 @@ class UcsManagerClient:
         See docs/cisco-collectors.md, "SDK behaviour, sessions and timeouts".
         """
         try:
-            await asyncio.to_thread(self._handle.logout)
+            await self._with_timeout(self._handle.logout, what="logout")
         except Exception as exc:
             logger.warning("ucs_manager.logout_failed", endpoint=self._handle.ip, error=str(exc))
 
@@ -134,17 +209,12 @@ class UcsManagerClient:
             list[Any]: The matching `ucsmsdk` MOs, empty when none match.
 
         Raises:
-            UcsManagerConnectionError: On an XML API error or a network
-                failure.
+            UcsManagerConnectionError: On an XML API error, a network
+                failure, or the call exceeding its deadline.
 
         See docs/cisco-collectors.md, "Shared object model and DN joins".
         """
-        try:
-            result = await asyncio.to_thread(self._handle.query_classid, class_id)
-        except (UcsError, UcsWrapperException) as exc:
-            raise UcsManagerConnectionError(f"query_classid({class_id!r}) failed: {exc}") from exc
-        except OSError as exc:
-            raise UcsManagerConnectionError(
-                f"query_classid({class_id!r}) could not reach {self._handle.ip}: {exc}"
-            ) from exc
+        result = await self._with_timeout(
+            self._handle.query_classid, class_id, what=f"query_classid({class_id!r})"
+        )
         return list(result) if result else []
