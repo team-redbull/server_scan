@@ -30,11 +30,56 @@ from app.domain.models.server import Server
 # counted nothing (see the dated comments below).
 _FAILED = frozenset({"CRITICAL", "DOWN"})
 
+# "Not good": degraded or dead. The OS-disk and data-disk checks both count
+# these together rather than splitting failed from degraded, because on a
+# two-disk OS mirror the distinction does not change what an operator does
+# — one bad disk means the mirror is running unprotected either way.
+_NOT_GOOD = frozenset({"CRITICAL", "WARNING", "DOWN"})
+
+# A server whose name says it carries the large local-storage build. The
+# name is the only place this is recorded — there is no field on the
+# document saying "this is a 10TB box" — which is the same reason a
+# server's site is parsed from its name (`parse_site_code`). Matched
+# case-insensitively on the bare token, so `ocp4-nyc-10tb-01` and
+# `OCP4-NYC-10TB-01` both count.
+_LARGE_STORAGE_TOKEN = "10tb"
+
+
+def _os_disk_capacities(drives: list[Any]) -> tuple[int, ...]:
+    """
+    Capacities that identify a server's OS disks.
+
+    The OS disks are the smallest in the machine — a pair of small boot
+    SSDs beside much larger data drives. So "smallest capacity present" is
+    the rule, and every drive at that capacity is an OS disk.
+
+    A server whose drives are all the same size has no basis for the split
+    at all, and gets **no** OS disks rather than all of them: calling
+    twenty-four identical NVMe drives "OS disks" would turn one degraded
+    data drive into a MAJOR finding on every storage node in the fleet.
+    Such a server is covered by the data-disk checks instead.
+
+    Args:
+        drives (list[Any]): The server's `StorageDrive`s.
+
+    Returns:
+        tuple[int, ...]: The single smallest capacity, or empty when the
+            drives carry no capacity or are all one size.
+    """
+    capacities = {d.capacity_bytes for d in drives if d.capacity_bytes}
+    if len(capacities) < 2:
+        return ()
+    return (min(capacities),)
+
 
 def extract_facts(server: Server) -> dict[str, Any]:
     drive_healths = [d.health for d in server.hardware.storage.drives if d.health is not None]
     link_states = [i.link_state.value for i in server.network.interfaces]
     psu_healths = [p.health for p in server.hardware.power.psus if p.health is not None]
+    drives = server.hardware.storage.drives
+    os_capacities = _os_disk_capacities(drives)
+    os_disks = [d for d in drives if d.capacity_bytes in os_capacities]
+    data_disks = [d for d in drives if d.capacity_bytes not in os_capacities]
     gpus = server.hardware.gpus
     gpu_healths = [g.health for g in gpus if g.health is not None]
     uncorrectable = [
@@ -59,6 +104,14 @@ def extract_facts(server: Server) -> dict[str, Any]:
         "storage.warning_drive_count": sum(
             1 for h in drive_healths if h == HealthSeverity.WARNING.value
         ),
+        "storage.total_bytes": server.hardware.storage.total_bytes,
+        "storage.os_disk_count": len(os_disks),
+        "storage.os_bad_disk_count": sum(1 for d in os_disks if d.health in _NOT_GOOD),
+        "storage.data_disk_count": len(data_disks),
+        "storage.data_bad_disk_count": sum(1 for d in data_disks if d.health in _NOT_GOOD),
+        # From the server's own name, the only place the large-storage
+        # build is recorded. False for a server whose name says nothing.
+        "server.has_large_storage_name": _LARGE_STORAGE_TOKEN in (server.name or "").lower(),
         "network.interface_link_states": link_states,
         "network.interface_count": len(link_states),
         # Counted UP rather than counting DOWN: a server with unused NICs

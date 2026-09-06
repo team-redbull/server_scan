@@ -80,15 +80,26 @@ class HealthSeverity(StrEnum):
     HEALTHY = "HEALTHY"
     INFO = "INFO"
     WARNING = "WARNING"
+    # Between WARNING and CRITICAL: redundancy is gone but the server is
+    # still serving. A single remaining network link and one bad OS disk
+    # are the cases it exists for — both mean the next failure takes the
+    # machine down, which is worth waking someone for in a way a degraded
+    # data disk is not, and is not the same as being down already.
+    MAJOR = "MAJOR"
     CRITICAL = "CRITICAL"
 
 
+# Declaration order above is already low-to-high, but the ranks stay
+# explicit: `HealthSeverity` is a `StrEnum`, so a future alphabetical
+# reorder would silently reverse CRITICAL and MAJOR everywhere that
+# aggregates a worst-of.
 HEALTH_SEVERITY_RANK: dict[HealthSeverity, int] = {
     HealthSeverity.UNKNOWN: 0,
     HealthSeverity.HEALTHY: 1,
     HealthSeverity.INFO: 2,
     HealthSeverity.WARNING: 3,
-    HealthSeverity.CRITICAL: 4,
+    HealthSeverity.MAJOR: 4,
+    HealthSeverity.CRITICAL: 5,
 }
 
 

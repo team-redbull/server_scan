@@ -190,6 +190,60 @@ def build_default_registry() -> MetricRegistry:
     )
     registry.register(
         MetricDef(
+            name="storage.total_bytes",
+            type=MetricType.INT,
+            category="storage",
+            description="Total storage capacity across all drives, in bytes",
+            resolver=lambda f: _get(f, "storage.total_bytes", 0),
+        )
+    )
+    registry.register(
+        MetricDef(
+            name="storage.os_disk_count",
+            type=MetricType.INT,
+            category="storage",
+            description="Drives identified as OS disks (the smallest capacity present)",
+            resolver=lambda f: _get(f, "storage.os_disk_count", 0),
+        )
+    )
+    registry.register(
+        MetricDef(
+            name="storage.os_bad_disk_count",
+            type=MetricType.INT,
+            category="storage",
+            description="OS disks reporting WARNING or CRITICAL health",
+            resolver=lambda f: _get(f, "storage.os_bad_disk_count", 0),
+        )
+    )
+    registry.register(
+        MetricDef(
+            name="storage.data_disk_count",
+            type=MetricType.INT,
+            category="storage",
+            description="Drives that are not OS disks",
+            resolver=lambda f: _get(f, "storage.data_disk_count", 0),
+        )
+    )
+    registry.register(
+        MetricDef(
+            name="storage.data_bad_disk_count",
+            type=MetricType.INT,
+            category="storage",
+            description="Non-OS drives reporting WARNING or CRITICAL health",
+            resolver=lambda f: _get(f, "storage.data_bad_disk_count", 0),
+        )
+    )
+    registry.register(
+        MetricDef(
+            name="server.has_large_storage_name",
+            type=MetricType.BOOL,
+            category="storage",
+            description="Whether the server's name carries the 10TB large-storage token",
+            resolver=lambda f: _get(f, "server.has_large_storage_name", False),
+        )
+    )
+    registry.register(
+        MetricDef(
             name="network.interface_count",
             type=MetricType.INT,
             category="network",

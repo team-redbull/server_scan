@@ -71,23 +71,17 @@ def default_system_policies() -> list[HealthPolicy]:
         updated_at=now,
     )
 
-    failed_drive = HealthPolicy(
-        id=new_id("health_policy"),
-        name="Failed drive present",
-        description="Fires when one or more storage drives report a CRITICAL health state.",
-        policy_key="storage.failed_drive",
-        category="storage",
-        severity=HealthSeverity.CRITICAL,
-        condition=Condition(metric="storage.failed_drive_count", operator="GTE", value=1),
-        evidence=[EvidenceField(key="count", metric="storage.failed_drive_count")],
-        message_template="{count} drive(s) failed",
-        scope=PolicyScope(),
-        source="SYSTEM_DEFAULT",
-        priority=100,
-        system=True,
-        created_at=now,
-        updated_at=now,
-    )
+    # There is deliberately no longer a blanket "any failed drive is
+    # CRITICAL" default. It was replaced by the OS/data split below, and
+    # keeping both would make a failed OS disk fire MAJOR *and* CRITICAL at
+    # once — the worst-of rollup would take CRITICAL and the MAJOR tier
+    # would never be reachable for the case it was added for.
+    #
+    # `storage.failed_drive_count` and `storage.warning_drive_count` are
+    # still registered metrics: an operator who wants the old blanket rule
+    # back can build it in the admin UI. Note that seeding never deletes,
+    # so a deployment deployed before this change keeps its existing
+    # "Failed drive present" policy until someone disables it.
 
     # Everything below is vendor-neutral by construction: each condition
     # reads a fact derived from the normalized `Server` document, never a
@@ -120,20 +114,170 @@ def default_system_policies() -> list[HealthPolicy]:
         updated_at=now,
     )
 
-    warning_drive = HealthPolicy(
+    # --- OS disks -------------------------------------------------------
+    #
+    # The OS disks are the smallest drives in the machine (see
+    # `facts._os_disk_capacities`). One bad disk in a boot mirror means the
+    # mirror is running unprotected — the server is still up, and the next
+    # failure takes it down, which is exactly what MAJOR is for. Two bad is
+    # CRITICAL: on the usual two-disk mirror there is nothing left.
+    #
+    # "Bad" is degraded OR failed, counted together: on a boot mirror the
+    # distinction does not change what an operator does about it.
+    os_disk_major = HealthPolicy(
         id=new_id("health_policy"),
-        name="Drive degraded",
+        name="OS disk degraded or failed",
         description=(
-            "Fires when a drive reports WARNING — degraded or predictive "
-            "failure, but not yet failed. Distinct from storage.failed_drive, "
-            "which stays CRITICAL and fires only on a dead drive."
+            "Fires when exactly one OS disk (the smallest capacity present) "
+            "reports WARNING or CRITICAL. The boot mirror is unprotected."
         ),
-        policy_key="storage.warning_drive",
+        policy_key="storage.os_disk_bad_major",
+        category="storage",
+        severity=HealthSeverity.MAJOR,
+        condition=Condition(metric="storage.os_bad_disk_count", operator="EQ", value=1),
+        evidence=[
+            EvidenceField(key="bad", metric="storage.os_bad_disk_count"),
+            EvidenceField(key="total", metric="storage.os_disk_count"),
+        ],
+        message_template="{bad} of {total} OS disks degraded or failed",
+        scope=PolicyScope(),
+        source="SYSTEM_DEFAULT",
+        priority=100,
+        system=True,
+        created_at=now,
+        updated_at=now,
+    )
+
+    os_disk_critical = HealthPolicy(
+        id=new_id("health_policy"),
+        name="Multiple OS disks degraded or failed",
+        description=(
+            "Fires when two or more OS disks report WARNING or CRITICAL. On "
+            "the usual two-disk boot mirror, nothing healthy is left."
+        ),
+        policy_key="storage.os_disk_bad_critical",
+        category="storage",
+        severity=HealthSeverity.CRITICAL,
+        condition=Condition(metric="storage.os_bad_disk_count", operator="GTE", value=2),
+        evidence=[
+            EvidenceField(key="bad", metric="storage.os_bad_disk_count"),
+            EvidenceField(key="total", metric="storage.os_disk_count"),
+        ],
+        message_template="{bad} of {total} OS disks degraded or failed",
+        scope=PolicyScope(),
+        source="SYSTEM_DEFAULT",
+        priority=100,
+        system=True,
+        created_at=now,
+        updated_at=now,
+    )
+
+    # --- Data disks -----------------------------------------------------
+    #
+    # Split by what the server is *for*, which only its name records. A
+    # large-storage node exists to hold data, so a bad data disk there
+    # escalates at two; on every other server the local disks are
+    # incidental and one bad disk is a warning.
+    large_storage_data_warning = HealthPolicy(
+        id=new_id("health_policy"),
+        name="Data disk degraded (large-storage server)",
+        description=(
+            "Fires when exactly one non-OS disk is degraded or failed on a "
+            "server whose name carries the 10TB token."
+        ),
+        policy_key="storage.data_disk_bad_large_warning",
         category="storage",
         severity=HealthSeverity.WARNING,
-        condition=Condition(metric="storage.warning_drive_count", operator="GTE", value=1),
-        evidence=[EvidenceField(key="count", metric="storage.warning_drive_count")],
-        message_template="{count} drive(s) degraded",
+        condition=Condition(
+            all_of=[
+                Condition(metric="server.has_large_storage_name", operator="EQ", value=True),
+                Condition(metric="storage.data_bad_disk_count", operator="EQ", value=1),
+            ]
+        ),
+        evidence=[EvidenceField(key="bad", metric="storage.data_bad_disk_count")],
+        message_template="{bad} data disk degraded or failed",
+        scope=PolicyScope(),
+        source="SYSTEM_DEFAULT",
+        priority=100,
+        system=True,
+        created_at=now,
+        updated_at=now,
+    )
+
+    large_storage_data_critical = HealthPolicy(
+        id=new_id("health_policy"),
+        name="Multiple data disks degraded (large-storage server)",
+        description=(
+            "Fires when two or more non-OS disks are degraded or failed on a "
+            "server whose name carries the 10TB token."
+        ),
+        policy_key="storage.data_disk_bad_large_critical",
+        category="storage",
+        severity=HealthSeverity.CRITICAL,
+        condition=Condition(
+            all_of=[
+                Condition(metric="server.has_large_storage_name", operator="EQ", value=True),
+                Condition(metric="storage.data_bad_disk_count", operator="GTE", value=2),
+            ]
+        ),
+        evidence=[EvidenceField(key="bad", metric="storage.data_bad_disk_count")],
+        message_template="{bad} data disks degraded or failed",
+        scope=PolicyScope(),
+        source="SYSTEM_DEFAULT",
+        priority=100,
+        system=True,
+        created_at=now,
+        updated_at=now,
+    )
+
+    data_disk_warning = HealthPolicy(
+        id=new_id("health_policy"),
+        name="Data disk degraded",
+        description=(
+            "Fires when any non-OS disk is degraded or failed on a server "
+            "that is not a large-storage node."
+        ),
+        policy_key="storage.data_disk_bad_warning",
+        category="storage",
+        severity=HealthSeverity.WARNING,
+        condition=Condition(
+            all_of=[
+                Condition(metric="server.has_large_storage_name", operator="EQ", value=False),
+                Condition(metric="storage.data_bad_disk_count", operator="GTE", value=1),
+            ]
+        ),
+        evidence=[EvidenceField(key="bad", metric="storage.data_bad_disk_count")],
+        message_template="{bad} data disk(s) degraded or failed",
+        scope=PolicyScope(),
+        source="SYSTEM_DEFAULT",
+        priority=100,
+        system=True,
+        created_at=now,
+        updated_at=now,
+    )
+
+    # 8 TB decimal, matching how the collectors measure and the dry run
+    # renders capacity. A 10TB-named node reporting less than this has lost
+    # drives or was built wrong — either way it is not the machine its name
+    # promises, and a workload placed by name will not fit.
+    large_storage_undersized = HealthPolicy(
+        id=new_id("health_policy"),
+        name="Large-storage server below expected capacity",
+        description=(
+            "Fires when a server whose name carries the 10TB token reports "
+            "less than 8 TB of total storage."
+        ),
+        policy_key="storage.large_storage_undersized",
+        category="storage",
+        severity=HealthSeverity.CRITICAL,
+        condition=Condition(
+            all_of=[
+                Condition(metric="server.has_large_storage_name", operator="EQ", value=True),
+                Condition(metric="storage.total_bytes", operator="LT", value=8_000_000_000_000),
+            ]
+        ),
+        evidence=[EvidenceField(key="total", metric="storage.total_bytes")],
+        message_template="only {total} bytes of storage on a 10TB server",
         scope=PolicyScope(),
         source="SYSTEM_DEFAULT",
         priority=100,
@@ -165,6 +309,40 @@ def default_system_policies() -> list[HealthPolicy]:
         ),
         evidence=[EvidenceField(key="interfaces", metric="network.interface_count")],
         message_template="no network link is up across {interfaces} interface(s)",
+        scope=PolicyScope(),
+        source="SYSTEM_DEFAULT",
+        priority=100,
+        system=True,
+        created_at=now,
+        updated_at=now,
+    )
+
+    # MAJOR, between the two: the server is reachable on one link, and the
+    # next failure disconnects it. Deliberately EQ 1 rather than LTE 1 —
+    # zero links up is `network.all_links_down` above, and a server must
+    # not report both.
+    single_link_up = HealthPolicy(
+        id=new_id("health_policy"),
+        name="Only one network link up",
+        description=(
+            "Fires when exactly one interface is up. Network redundancy is "
+            "gone: the server is still reachable, and one more failure "
+            "disconnects it."
+        ),
+        policy_key="network.single_link_up",
+        category="network",
+        severity=HealthSeverity.MAJOR,
+        condition=Condition(
+            all_of=[
+                Condition(metric="network.interface_count", operator="GTE", value=2),
+                Condition(metric="network.links_up_count", operator="EQ", value=1),
+            ]
+        ),
+        evidence=[
+            EvidenceField(key="up", metric="network.links_up_count"),
+            EvidenceField(key="interfaces", metric="network.interface_count"),
+        ],
+        message_template="only {up} of {interfaces} network links is up",
         scope=PolicyScope(),
         source="SYSTEM_DEFAULT",
         priority=100,
@@ -228,10 +406,15 @@ def default_system_policies() -> list[HealthPolicy]:
     return [
         fabric_warning,
         fabric_critical,
-        failed_drive,
         failed_psu,
-        warning_drive,
+        os_disk_major,
+        os_disk_critical,
+        large_storage_data_warning,
+        large_storage_data_critical,
+        data_disk_warning,
+        large_storage_undersized,
         all_links_down,
+        single_link_up,
         failed_gpu,
         gpu_ecc,
     ]

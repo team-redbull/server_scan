@@ -106,6 +106,7 @@ function VendorBar({ site }: { site: SiteStats }) {
 
 function SiteCard({ site }: { site: SiteStats }) {
   const critical = site.by_health.CRITICAL;
+  const major = site.by_health.MAJOR;
   const warning = site.by_health.WARNING;
   const isUnassigned = site.site_id === UNASSIGNED_SITE_ID;
   const isAcrossSites = site.site_id === ACROSS_SITES_ID;
@@ -139,6 +140,12 @@ function SiteCard({ site }: { site: SiteStats }) {
           <span className="inline-flex items-center gap-1.5 font-medium text-[var(--text-on-critical)]">
             <span aria-hidden="true">{SEVERITY_GLYPH.CRITICAL}</span>
             <span className="tabular">{critical}</span> critical
+          </span>
+        )}
+        {major > 0 && (
+          <span className="inline-flex items-center gap-1.5 font-medium text-[var(--text-on-major)]">
+            <span aria-hidden="true">{SEVERITY_GLYPH.MAJOR}</span>
+            <span className="tabular">{major}</span> major
           </span>
         )}
         {warning > 0 && (

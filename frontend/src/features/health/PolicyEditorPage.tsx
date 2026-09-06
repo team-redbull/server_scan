@@ -41,6 +41,7 @@ const SEVERITIES: HealthSeverity[] = [
   "HEALTHY",
   "INFO",
   "WARNING",
+  "MAJOR",
   "CRITICAL",
 ];
 const MODES: PolicyMode[] = ["EVALUATE", "SUPPRESS"];
