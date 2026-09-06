@@ -43,6 +43,7 @@ from app.infrastructure.mongodb.classification_rule_repository import (
 from app.infrastructure.mongodb.health_policy_repository import MongoHealthPolicyRepository
 from app.infrastructure.mongodb.indexes import ensure_indexes
 from app.infrastructure.redis import RedisClientHolder
+from app.infrastructure.singleflight import drain as drain_singleflight
 from app.middleware.request_context import RequestContextMiddleware
 from app.observability.metrics import http_request_duration_seconds, http_requests_total
 
@@ -79,6 +80,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         yield
     finally:
         logger.info("app.stopping")
+        # Before the clients a still-running coalesced computation might
+        # be using disappear — see `singleflight.drain`'s docstring.
+        await drain_singleflight()
         await redis.close()
         await mongo.close()
 

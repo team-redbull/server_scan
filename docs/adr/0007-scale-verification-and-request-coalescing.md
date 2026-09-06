@@ -147,6 +147,16 @@ absorbed into "performance pass: done."
   dependency-free primitive — any future endpoint with the same
   cache-aside-plus-expensive-recompute shape (not just `GET /servers`)
   should consider it, not just this one call site.
+- **Updated 2026-09-06 (Phase 2 of the production-hardening pass):**
+  the computation is owned by its own `asyncio.Task`, created once per
+  key, rather than run directly inside whichever caller happened to
+  arrive first. The original design let a cancelled *waiter* cancel the
+  shared `Future` (crashing the leader) and let a cancelled *leader*
+  poison the shared `Future` for every waiter — both reachable from one
+  disconnecting client, `asyncio.shield()` alone only fixes the first.
+  See `backend/app/infrastructure/singleflight.py`'s module docstring for
+  the mechanism, and the app lifespan's new `drain()` call, which cancels
+  any computation nobody is waiting on any more before Mongo/Redis close.
 - The zero/near-zero-match search tail latency is accepted, quantified,
   and documented, not fixed, in this slice. It should be revisited once
   there's real production search-term distribution to reason about the
