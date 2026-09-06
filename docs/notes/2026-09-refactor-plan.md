@@ -490,7 +490,13 @@ session's Phase 6/7 work landed) — re-measured rather than trusted:
 (user request, not in the original plan): `actions/cache` for the
 chromium headless shell in the e2e job, keyed on the resolved
 `@playwright/test` version — was re-downloaded on every run, the
-slowest single step in that job. `uv sync --all-groups --locked`
+slowest single step in that job. Measured on the next push: the browser
+install step dropped from ~10s to skipped entirely on a cache hit.
+`actions/cache`'s first pin (v4.3.0) declared `node20`; CI's own
+annotation flagged the deprecation on the very next run, bumped to
+v6.1.0 (`node24`) immediately — left in as a reminder that a brand-new
+pin is not exempt from the same staleness this phase's "Keeping CI
+current" pass exists to catch. `uv sync --all-groups --locked`
 everywhere `uv sync` runs, so a `uv.lock` that drifted from
 `pyproject.toml` fails loudly instead of CI silently re-resolving a
 different dependency set than any developer's local one. Everything
