@@ -23,6 +23,7 @@ from pymongo.asynchronous.database import AsyncDatabase
 from pymongo.errors import PyMongoError
 
 from app.config import Settings
+from app.observability.metrics import mongo_ping_failures_total
 
 logger = structlog.get_logger(__name__)
 
@@ -79,6 +80,7 @@ class MongoClientHolder:
         try:
             await self._client.admin.command("ping")
             return True
-        except PyMongoError:
-            logger.warning("mongo.ping_failed")
+        except PyMongoError as exc:
+            mongo_ping_failures_total.inc()
+            logger.warning("mongo.ping_failed", error=str(exc), exc_info=exc)
             return False

@@ -15,19 +15,12 @@ throttling that a blocking client forces. See docs/dell-collectors.md,
 
 from __future__ import annotations
 
-import os
 from typing import Any
 
 import httpx
 import structlog
 
 logger = structlog.get_logger(__name__)
-
-# When set, `get_inventory` logs the raw first entry (and its keys) of every
-# section it fetches. A field-discovery aid: OME's inventory field names
-# vary by version, and this is how the real ones are confirmed rather than
-# guessed. Off by default; noisy when on, so pair it with --limit 1.
-_DUMP_INVENTORY_ENV = "INVENTORY_OME_DUMP_INVENTORY"
 
 
 class OmeConnectionError(Exception):
@@ -199,44 +192,6 @@ class OmeClient:
             link = body.get("@odata.nextLink")
             next_path = _relative_path(link) if isinstance(link, str) and link else None
         return items
-
-    async def get_inventory(self, device_id: object, section: str) -> list[dict[str, Any]]:
-        """
-        Fetch one inventory section for one device.
-
-        OME exposes per-device hardware detail — originally read from the
-        server's iDRAC — under
-        `/DeviceService/Devices({id})/InventoryDetails('<section>')`,
-        returning it in an `InventoryInfo` array.
-
-        Args:
-            device_id (object): The OME `Device.Id`.
-            section (str): The OME inventory section name, e.g.
-                `"serverProcessors"`, `"serverMemoryDevices"`,
-                `"serverStorage"`, `"serverNetworkInterfaces"`.
-
-        Returns:
-            list[dict[str, Any]]: The section's `InventoryInfo` entries,
-                empty if the device reports none.
-
-        Raises:
-            OmeConnectionError: On any non-2xx response or network failure.
-        """
-        path = f"/DeviceService/Devices({device_id})/InventoryDetails('{section}')"
-        body = await self._get_json(path)
-        info = body.get("InventoryInfo")
-        if not isinstance(info, list):
-            return []
-        entries = [entry for entry in info if isinstance(entry, dict)]
-        if entries and os.environ.get(_DUMP_INVENTORY_ENV):
-            logger.info(
-                "ome.inventory_raw",
-                section=section,
-                device_id=str(device_id),
-                keys=sorted(entries[0].keys()),
-                first_entry=entries[0],
-            )
-        return entries
 
     async def _get_json(self, path: str) -> dict[str, Any]:
         """

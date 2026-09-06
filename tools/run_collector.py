@@ -921,11 +921,14 @@ async def _run(
         service_name=settings.service_name,
         environment=settings.environment,
     )
+    # Bound once for the whole run so every log line from here down —
+    # including `ingest.completed`, deep inside `IngestService.ingest`,
+    # which has no `manager_type` field of its own to log — carries which
+    # collector produced it, without threading the value through every
+    # intervening call.
+    structlog.contextvars.bind_contextvars(manager_type=manager_type.value)
 
-    mongo = MongoClientHolder(settings)
-    await mongo.connect()
     try:
-        manager_repo = MongoManagerRepository(mongo)
         credential_resolver = EnvConnectionResolver(settings)
 
         # One manager per type, straight from configuration — nothing is
@@ -979,64 +982,78 @@ async def _run(
                 return 1
             return 0
 
-        await ensure_indexes(mongo.db)
+        # Everything above needs no MongoDB connection at all: `--dry-run`
+        # only talks to the vendor manager, never to the database, and
+        # connecting here unconditionally used to mean a misconfigured or
+        # unreachable Mongo could fail a dry run that was never going to
+        # touch it.
+        mongo = MongoClientHolder(settings)
+        await mongo.connect()
+        try:
+            manager_repo = MongoManagerRepository(mongo)
+            await ensure_indexes(mongo.db)
 
-        rule_repo = MongoClassificationRuleRepository(mongo)
-        policy_repo = MongoHealthPolicyRepository(mongo)
-        regex_engine = RegexModuleEngine(
-            max_pattern_length=settings.regex_max_pattern_length,
-            match_timeout_seconds=settings.regex_match_timeout_seconds,
-        )
-        server_repo = MongoServerRepository(mongo, cursor_secret=settings.cursor_secret)
-        ingest_service = IngestService(
-            server_repo=server_repo,
-            site_repo=MongoSiteRepository(mongo),
-            manager_repo=manager_repo,
-            sites=site_catalog(settings.sites),
-            gpu_catalog=gpu_catalog(settings.gpu_models),
-            classification_service=ClassificationService(rule_repo=rule_repo, engine=regex_engine),
-            health_service=HealthPolicyService(
-                policy_repo=policy_repo, registry=build_default_registry()
-            ),
-            audit=AuditService(repo=MongoAuditEventRepository(mongo)),
-        )
-        outcome = await _run_one_manager(
-            manager,
-            ingest_service=ingest_service,
-            credential_resolver=credential_resolver,
-            timeout_seconds=settings.collector_connect_timeout_seconds,
-            name_pattern=name_pattern,
-            settings=settings,
-        )
-        if outcome is None:
-            print(f"manager={manager.name} FAILED (see logs)")
-            return 1
-
-        summary = outcome.summary
-        print(
-            f"manager={manager.name} fetched={summary.fetched} "
-            f"created={summary.created} updated={summary.updated} errors={summary.errors}"
-        )
-        if outcome.collection_errors or summary.errors:
-            # Exit 3, not 0: some servers were written, but this run did not
-            # see the whole fleet. Reported as success it is indistinguishable
-            # from a healthy run against a smaller estate, which is how a bad
-            # credential on one domain stays invisible for weeks.
-            logger.error(
-                "collector.partial_run",
-                manager_id=manager.id,
-                unreachable=len(outcome.collection_errors),
-                ingest_errors=summary.errors,
+            rule_repo = MongoClassificationRuleRepository(mongo)
+            policy_repo = MongoHealthPolicyRepository(mongo)
+            regex_engine = RegexModuleEngine(
+                max_pattern_length=settings.regex_max_pattern_length,
+                match_timeout_seconds=settings.regex_match_timeout_seconds,
             )
-            print(f"manager={manager.name} PARTIAL — this run did not see the whole fleet:")
-            for message in outcome.collection_errors:
-                print(f"  - {message}")
-            if summary.errors:
-                print(f"  - {summary.errors} server(s) failed to ingest (see logs)")
-            return 3
-        return 0
+            server_repo = MongoServerRepository(mongo, cursor_secret=settings.cursor_secret)
+            ingest_service = IngestService(
+                server_repo=server_repo,
+                site_repo=MongoSiteRepository(mongo),
+                manager_repo=manager_repo,
+                sites=site_catalog(settings.sites),
+                gpu_catalog=gpu_catalog(settings.gpu_models),
+                classification_service=ClassificationService(
+                    rule_repo=rule_repo, engine=regex_engine
+                ),
+                health_service=HealthPolicyService(
+                    policy_repo=policy_repo, registry=build_default_registry()
+                ),
+                audit=AuditService(repo=MongoAuditEventRepository(mongo)),
+            )
+            outcome = await _run_one_manager(
+                manager,
+                ingest_service=ingest_service,
+                credential_resolver=credential_resolver,
+                timeout_seconds=settings.collector_connect_timeout_seconds,
+                name_pattern=name_pattern,
+                settings=settings,
+            )
+            if outcome is None:
+                print(f"manager={manager.name} FAILED (see logs)")
+                return 1
+
+            summary = outcome.summary
+            print(
+                f"manager={manager.name} fetched={summary.fetched} "
+                f"created={summary.created} updated={summary.updated} errors={summary.errors}"
+            )
+            if outcome.collection_errors or summary.errors:
+                # Exit 3, not 0: some servers were written, but this run did
+                # not see the whole fleet. Reported as success it is
+                # indistinguishable from a healthy run against a smaller
+                # estate, which is how a bad credential on one domain stays
+                # invisible for weeks.
+                logger.error(
+                    "collector.partial_run",
+                    manager_id=manager.id,
+                    unreachable=len(outcome.collection_errors),
+                    ingest_errors=summary.errors,
+                )
+                print(f"manager={manager.name} PARTIAL — this run did not see the whole fleet:")
+                for message in outcome.collection_errors:
+                    print(f"  - {message}")
+                if summary.errors:
+                    print(f"  - {summary.errors} server(s) failed to ingest (see logs)")
+                return 3
+            return 0
+        finally:
+            await mongo.close()
     finally:
-        await mongo.close()
+        structlog.contextvars.unbind_contextvars("manager_type")
 
 
 def main(argv: list[str] | None = None) -> None:

@@ -52,3 +52,17 @@ mirror.
 - Frontend error handling has one shape to parse everywhere, including for
   errors FastAPI/Starlette raise internally (404 route-not-found, 422
   validation) — those are also normalized into the same envelope.
+
+**Addendum, 2026-09-06:** `GET /health/ready` (`app.api.health`) is a
+deliberate exception to "every error funnels through one renderer" — its
+body is a plain `dict[str, object]` (`{"status": ..., "dependencies":
+{...}}`), never a problem-details envelope, even on its 503. This is
+intentional, not an oversight: it's consumed by infrastructure (container
+orchestrator readiness probes), not this platform's own API clients, and
+`/health/live`/`/health/ready` are already deliberately unversioned and
+outside `/api/v1` for the same reason (see that module's own docstring).
+An orchestrator probe reads an HTTP status code and, at most, a `status`
+field — never `type`/`code`/`details` — so there is no client this ADR's
+consistency goal is protecting here, and shaping the body as problem
+details would add nothing a probe reads while still needing bespoke
+handling to build (it isn't raised as an `AppError`).

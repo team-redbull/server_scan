@@ -893,8 +893,9 @@ class TestNameFilteredProviderCollectionErrors:
 
 class FakeMongo:
     """Stands in for `MongoClientHolder` so the exit-code decision can be
-    tested without a database — `_run` connects before it does anything
-    else, including on the dry-run path.
+    tested without a database. Only exercised by `TestRunExitCodes` below,
+    which never passes `dry_run=True` — `_run` no longer connects to Mongo
+    at all on the dry-run path (see `TestDryRunNeverTouchesMongo`).
     """
 
     def __init__(self, _settings: Any) -> None:
@@ -994,6 +995,68 @@ class TestRunExitCodes:
         monkeypatch.setattr(run_collector, "get_settings", lambda: _settings())
 
         assert await _run(manager_type=ManagerType.UCS_CENTRAL) == 2
+
+
+class TestDryRunNeverTouchesMongo:
+    """`--dry-run` only talks to the vendor manager, never to MongoDB.
+
+    `_run` used to connect unconditionally before checking `dry_run`, so a
+    misconfigured or unreachable Mongo could fail a dry run that was never
+    going to touch it. `MongoClientHolder` is stubbed to raise on
+    `connect()` — if the fix regresses, this test fails loudly rather than
+    just running slower against a real database.
+    """
+
+    async def test_dry_run_never_connects_to_mongo(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        class _ExplodingMongo:
+            def __init__(self, _settings: Any) -> None:
+                pass
+
+            async def connect(self) -> None:
+                raise AssertionError("dry run must never connect to MongoDB")
+
+        async def _fake_dry_run(*_args: Any, **_kwargs: Any) -> None:
+            return None
+
+        monkeypatch.setattr(run_collector, "MongoClientHolder", _ExplodingMongo)
+        monkeypatch.setattr(run_collector, "_dry_run_one_manager", _fake_dry_run)
+        monkeypatch.setattr(run_collector, "get_settings", _central_settings_for_run)
+
+        assert await _run(manager_type=ManagerType.UCS_CENTRAL, dry_run=True) == 0
+
+
+class TestManagerTypeInLogContext:
+    """`ingest.completed` (`app.application.services.ingest`) has no
+    `manager_type` field of its own to log, so it needs to reach the log
+    line some other way — asserted here on the actual structlog
+    contextvars rather than `capture_logs()`, which has a documented
+    `cache_logger_on_first_use` interaction that makes it order-dependent
+    across the full suite (see CLAUDE.md's dev-loop notes); reading the
+    contextvar state directly has no such dependency.
+    """
+
+    async def test_manager_type_is_bound_for_the_run_and_unbound_after(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import structlog
+
+        seen: dict[str, Any] = {}
+
+        async def _fake_dry_run(*_args: Any, **_kwargs: Any) -> None:
+            seen.update(structlog.contextvars.get_contextvars())
+            return None
+
+        monkeypatch.setattr(run_collector, "_dry_run_one_manager", _fake_dry_run)
+        monkeypatch.setattr(run_collector, "get_settings", _central_settings_for_run)
+
+        assert "manager_type" not in structlog.contextvars.get_contextvars()
+        await _run(manager_type=ManagerType.UCS_CENTRAL, dry_run=True)
+
+        assert seen.get("manager_type") == "UCS_CENTRAL"
+        # Unbound in `_run`'s own `finally`, not left to leak into whatever
+        # this process logs next (the CronJob pod's own exit, or — in the
+        # test process — the next test).
+        assert "manager_type" not in structlog.contextvars.get_contextvars()
 
 
 class TestParseArgs:

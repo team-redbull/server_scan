@@ -131,14 +131,16 @@ async def _run(*, show_names: int, sample: int) -> int:
         sample (int): How many servers to inspect.
 
     Returns:
-        int: 0 for GOOD, 1 for anything an operator must act on.
+        int: 0 for GOOD, 2 if Intersight isn't configured at all (matching
+            `verify_oneview.py`/`verify_ucs_central.py`), 1 for anything
+            else an operator must act on.
     """
     settings = get_settings()
     try:
         connection = EnvConnectionResolver(settings).resolve(ManagerType.INTERSIGHT)
     except ManagerNotConfiguredError as exc:
         _p(str(exc))
-        return 1
+        return 2
 
     _header("1. CONNECTION")
     api_key_id, api_key_pem = connection.username, connection.password
@@ -220,11 +222,15 @@ async def _inspect(client: IntersightClient, *, show_names: int, sample: int) ->
             note = "  <- owned by the UCS Central collector; not collected here by default"
         _p(f"  ManagementMode {mode:<22} {count:>6}{note}")
 
-    collected = [
-        s
-        for s in summaries
-        if mapping.management_mode(s) in settings.intersight_management_modes.split(",")
-    ]
+    # Same parsing `tools/run_collector.py` uses to build the real
+    # collector's `management_modes` tuple — a bare `.split(",")` leaves
+    # whitespace on every token after the first, so "Intersight,
+    # IntersightStandalone" (a space after the comma, easy to type) would
+    # never match anything and silently collect zero servers.
+    configured_modes = {
+        mode.strip() for mode in settings.intersight_management_modes.split(",") if mode.strip()
+    }
+    collected = [s for s in summaries if mapping.management_mode(s) in configured_modes]
     _p(f"\nservers this collector would ingest: {len(collected)} of {len(summaries)}")
 
     profiles: dict[str, Any] = {}
