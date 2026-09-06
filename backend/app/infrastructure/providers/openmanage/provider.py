@@ -26,6 +26,7 @@ docs/dell-collectors.md for the OME field/endpoint facts.
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import re
 from collections.abc import AsyncGenerator, Callable
@@ -191,10 +192,20 @@ class OpenManageProvider(ServerInventoryProvider):
         )
 
         redfish = self._redfish_provider_factory(targets)
-        async for server in redfish.collect():
-            yield self._merged(server, identities)
-        for message in redfish.collection_errors:
-            self._record_error(message)
+        try:
+            async with contextlib.aclosing(redfish.collect()) as servers:
+                async for server in servers:
+                    yield self._merged(server, identities)
+        finally:
+            # In a `finally`, and behind `aclosing`: a consumer that stops
+            # early (`--limit`, a killed run) throws `GeneratorExit` in at
+            # the `yield` above, which used to skip this merge entirely —
+            # every per-host Redfish failure silently dropped, and the
+            # nested Redfish pass's own tasks/sessions left to the
+            # asyncgen finalizer instead of closing promptly. Same shape
+            # as `..ucs_central.provider.UcsCentralProvider._collect_domain`.
+            for message in redfish.collection_errors:
+                self._record_error(message)
 
     async def _discover(self) -> dict[str, OmeIdentity]:
         """

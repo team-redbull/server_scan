@@ -237,21 +237,35 @@ class RedfishClient:
         tb: TracebackType | None,
     ) -> None:
         """
-        Delete the session and close the transport. Never raises.
+        Delete the session and close the transport.
 
         Shielded from cancellation: without that, a cancelled task's
         `await` on the logout raises immediately, the DELETE is never
         sent, and the leaked session counts against a BMC session cap that
         is often as low as 16.
+
+        Raises:
+            asyncio.CancelledError: Re-raised after logging and closing the
+                transport, never swallowed. This method runs inside every
+                caller's own task — including, since Phase 2, one about to
+                be cancelled and drained by `redfish/provider.py`'s
+                `finally: task.cancel(); await asyncio.gather(...)` when a
+                run stops early. Catching this here without re-raising
+                would consume that cancellation, leaving the task appearing
+                to finish normally instead of actually stopping — exactly
+                the failure class that drain exists to prevent.
         """
         try:
             if self._session_uri is not None:
                 await asyncio.shield(asyncio.wait_for(self._logout(), timeout=10.0))
-        # Teardown must never mask the error that caused it.
+        # Logout failing must never mask the error that caused teardown, so
+        # it's only ever logged here, not re-raised — `asyncio.CancelledError`
+        # is the one exception that's the opposite: it must always propagate.
         except Exception as exc_info:
             logger.warning("redfish.logout_failed", host=self._target.host, error=str(exc_info))
         except asyncio.CancelledError:
             logger.warning("redfish.logout_cancelled", host=self._target.host)
+            raise
         finally:
             await self._client.aclose()
 
@@ -485,7 +499,7 @@ class RedfishClient:
                 if response.status_code in _RETRY_STATUSES and attempt < _MAX_ATTEMPTS:
                     await self._backoff(attempt, response.headers.get("Retry-After"))
                     continue
-                await self._guard_size(response, path)
+                self._guard_size(response, path)
                 return response
             except httpx.ConnectError as exc:
                 if isinstance(exc.__cause__, ssl.SSLError):
@@ -501,7 +515,7 @@ class RedfishClient:
                 await self._backoff(attempt, None)
         raise RedfishUnreachableError(f"Could not reach {self._target.host}: {last}")
 
-    async def _guard_size(self, response: httpx.Response, path: str) -> None:
+    def _guard_size(self, response: httpx.Response, path: str) -> None:
         """
         Refuse a response too large to hold in memory.
 

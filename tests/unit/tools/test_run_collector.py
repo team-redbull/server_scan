@@ -8,6 +8,7 @@ a vendor endpoint.
 
 from __future__ import annotations
 
+import contextlib
 from collections.abc import AsyncGenerator
 from types import SimpleNamespace
 from typing import Any
@@ -106,7 +107,7 @@ class TestBuildProvider:
         docs/adr/0022-oneview-only-hpe-collector.md.
         """
         resolver = FakeCredentialResolver()
-        provider = await _build_provider(
+        provider = _build_provider(
             _manager(type=ManagerType.ONEVIEW, endpoint="ov-1.example.net"),
             credential_resolver=resolver,
             timeout_seconds=5.0,
@@ -124,7 +125,7 @@ class TestBuildProvider:
         (docs/adr/0020-dell-identity-from-ome-hardware-from-redfish.md).
         """
         resolver = FakeCredentialResolver()
-        provider = await _build_provider(
+        provider = _build_provider(
             _manager(type=ManagerType.OPENMANAGE),
             credential_resolver=resolver,
             timeout_seconds=5.0,
@@ -139,7 +140,7 @@ class TestBuildProvider:
         a per-BMC 401 that reads like a fleet of bad passwords.
         """
         with pytest.raises(ManagerNotConfiguredError) as excinfo:
-            await _build_provider(
+            _build_provider(
                 _manager(type=ManagerType.OPENMANAGE),
                 credential_resolver=FakeCredentialResolver(),
                 timeout_seconds=5.0,
@@ -159,7 +160,7 @@ class TestBuildProvider:
         the ambient environment happened to configure.
         """
         resolver = FakeCredentialResolver()
-        provider = await _build_provider(
+        provider = _build_provider(
             _manager(),
             credential_resolver=resolver,
             timeout_seconds=5.0,
@@ -175,7 +176,7 @@ class TestBuildProvider:
         The message has to name the replacement instead.
         """
         with pytest.raises(NotImplementedError) as excinfo:
-            await _build_provider(
+            _build_provider(
                 _manager(type=ManagerType.UCS_MANAGER),
                 credential_resolver=FakeCredentialResolver(),
                 timeout_seconds=5.0,
@@ -193,7 +194,7 @@ class TestBuildProvider:
         connection, so it costs no round trip.
         """
         with pytest.raises(ManagerNotConfiguredError) as excinfo:
-            await _build_provider(
+            _build_provider(
                 _manager(),
                 credential_resolver=FakeCredentialResolver(),
                 timeout_seconds=5.0,
@@ -209,11 +210,11 @@ class TestBuildProvider:
     async def test_unconfigured_manager_type_is_rejected_before_connecting(self) -> None:
         resolver = FakeCredentialResolver(error=ManagerNotConfiguredError("not configured"))
         with pytest.raises(ManagerNotConfiguredError):
-            await _build_provider(_manager(), credential_resolver=resolver, timeout_seconds=5.0)
+            _build_provider(_manager(), credential_resolver=resolver, timeout_seconds=5.0)
 
     async def test_missing_endpoint_is_rejected(self) -> None:
         with pytest.raises(ValueError, match="no endpoint"):
-            await _build_provider(
+            _build_provider(
                 _manager(endpoint=None),
                 credential_resolver=FakeCredentialResolver(),
                 timeout_seconds=5.0,
@@ -322,7 +323,7 @@ class TestRunOneManager:
         ingest = RecordingIngest()
         manager = _manager()
         resolver = FakeCredentialResolver()
-        provider = await _build_provider(
+        provider = _build_provider(
             manager,
             credential_resolver=resolver,
             timeout_seconds=5.0,
@@ -375,7 +376,7 @@ def _factory(provider: Any) -> Any:
     """A stand-in for `_build_provider` that hands back a ready-made
     provider, so the dry-run path can be tested without a UCS domain."""
 
-    async def build(_manager: Any, **_kwargs: Any) -> Any:
+    def build(_manager: Any, **_kwargs: Any) -> Any:
         return provider
 
     return build
@@ -661,6 +662,99 @@ class TestDryRun:
         assert count == 3
         assert "stopped at --limit 3" in capsys.readouterr().out
 
+    async def test_dry_run_limit_does_not_pull_one_past_it(self, capsys: Any) -> None:
+        """A plain `async for` fetches its *next* item before the loop body
+        checks anything — so a limit check that runs *before* processing
+        the item it just received always requests one server past the
+        limit before discovering it should have stopped already. Checking
+        after processing the Nth item — so the (N+1)th is never asked
+        for at all — is what this asserts, via a provider that records
+        every item it was actually asked to produce.
+        """
+        requested: list[int] = []
+
+        class FakeProvider(ServerInventoryProvider):
+            provider_type = "UCS_MANAGER"
+
+            async def health_check(self) -> None:
+                return None
+
+            async def _list_servers(self) -> Any:
+                for i in range(10):
+                    requested.append(i)
+                    yield ProviderServer(external_id=f"dn/{i}", vendor="cisco", name=f"srv-{i}")
+
+        count = await _dry_run_one_manager(
+            _manager(),
+            credential_resolver=FakeCredentialResolver(),
+            timeout_seconds=5.0,
+            limit=3,
+            provider_factory=_factory(FakeProvider()),
+        )
+        assert count == 3
+        assert requested == [0, 1, 2]
+
+    async def test_dry_run_limit_zero_collects_nothing(self, capsys: Any) -> None:
+        """The one shape the "check after processing" fix above cannot
+        cover on its own — `limit=0` means never entering the loop, and
+        therefore the provider, at all.
+        """
+        requested: list[int] = []
+
+        class FakeProvider(ServerInventoryProvider):
+            provider_type = "UCS_MANAGER"
+
+            async def health_check(self) -> None:
+                return None
+
+            async def _list_servers(self) -> Any:
+                requested.append(0)
+                yield ProviderServer(external_id="dn/0", vendor="cisco", name="srv-0")
+
+        count = await _dry_run_one_manager(
+            _manager(),
+            credential_resolver=FakeCredentialResolver(),
+            timeout_seconds=5.0,
+            limit=0,
+            provider_factory=_factory(FakeProvider()),
+        )
+        assert count == 0
+        assert requested == []
+        assert "stopped at --limit 0" in capsys.readouterr().out
+
+    async def test_dry_run_limit_still_closes_the_inner_provider(self) -> None:
+        """Same shape as `TestNameFilter`'s equivalent, one layer up: the
+        limit stopping the loop early must not leave the provider's own
+        teardown to the asyncgen finalizer.
+        """
+
+        class FakeProvider(ServerInventoryProvider):
+            provider_type = "UCS_MANAGER"
+
+            def __init__(self) -> None:
+                super().__init__()
+                self.torn_down = False
+
+            async def health_check(self) -> None:
+                return None
+
+            async def _list_servers(self) -> Any:
+                try:
+                    for i in range(3):
+                        yield ProviderServer(external_id=f"dn/{i}", vendor="cisco", name=f"srv-{i}")
+                finally:
+                    self.torn_down = True
+
+        provider = FakeProvider()
+        await _dry_run_one_manager(
+            _manager(),
+            credential_resolver=FakeCredentialResolver(),
+            timeout_seconds=5.0,
+            limit=1,
+            provider_factory=_factory(provider),
+        )
+        assert provider.torn_down
+
 
 class TestNameFilter:
     """`INVENTORY_COLLECTOR_NAME_PATTERN` — a vendor manager holds the
@@ -676,15 +770,23 @@ class TestNameFilter:
             self._names = names
             self._error = error
             self.health_checked = 0
+            # Set in `_list_servers`'s own `finally`, so a test can tell a
+            # closed-and-drained provider apart from one abandoned
+            # mid-collection — the real providers' equivalent is a
+            # session logout / task cancellation.
+            self.torn_down = False
 
         async def health_check(self) -> None:
             self.health_checked += 1
 
         async def _list_servers(self) -> AsyncGenerator[ProviderServer, None]:
-            for name in self._names:
-                yield ProviderServer(external_id=f"dn/{name}", vendor="cisco", name=name)
-            if self._error is not None:
-                self._record_error(self._error)
+            try:
+                for name in self._names:
+                    yield ProviderServer(external_id=f"dn/{name}", vendor="cisco", name=name)
+                if self._error is not None:
+                    self._record_error(self._error)
+            finally:
+                self.torn_down = True
 
     async def _names_through(self, pattern: str, *names: str) -> list[str]:
         provider = _filtered(self._Fake(*names), pattern)
@@ -726,6 +828,21 @@ class TestNameFilter:
         fake = self._Fake()
         await _filtered(fake, "^ocp").health_check()
         assert fake.health_checked == 1
+
+    async def test_stopping_early_still_closes_the_inner_provider(self) -> None:
+        """A consumer stopping early (`--limit`, a killed run) throws
+        `GeneratorExit` in at this wrapper's own `yield`, which used to
+        leave the inner provider's generator to the asyncgen finalizer
+        instead of closing it now — the inner provider's own teardown
+        (a session logout, cancelling its own tasks) only runs once that
+        finalizer eventually gets to it, which is not "now".
+        """
+        fake = self._Fake("ocp-1", "ocp-2", "ocp-3")
+        async with contextlib.aclosing(_filtered(fake, "^ocp").collect()) as servers:
+            async for _ in servers:
+                break
+
+        assert fake.torn_down
 
     async def test_dry_run_shows_only_what_a_real_run_would_write(self, capsys: Any) -> None:
         """--dry-run bypasses `IngestService` on purpose, so the filter

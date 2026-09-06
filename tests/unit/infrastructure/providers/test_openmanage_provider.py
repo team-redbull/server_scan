@@ -10,6 +10,7 @@ See docs/adr/0020-dell-identity-from-ome-hardware-from-redfish.md.
 
 from __future__ import annotations
 
+import contextlib
 from collections.abc import AsyncIterator
 from typing import Any, Self
 
@@ -381,3 +382,34 @@ class TestPartialRuns:
             recorded["redfish"].collection_errors = ("10.0.0.2: unreachable",)
             servers.append(server)
         assert provider.collection_errors == ("10.0.0.2: unreachable",)
+
+    async def test_redfish_errors_survive_a_consumer_that_stops_early(self) -> None:
+        """The merge used to run only after the `async for` below exhausted
+        naturally. A consumer that stops early (`--limit`, a killed run)
+        throws `GeneratorExit` in at this provider's own `yield`, which
+        used to skip the merge entirely — every per-host Redfish failure
+        silently dropped, reporting a complete run over a fleet that was
+        only half collected.
+        """
+        provider, recorded = _provider(
+            profiles=[
+                _profile("ocp4-nyc-prod-worker-03", "10.0.0.1"),
+                _profile("ocp4-nyc-prod-worker-04", "10.0.0.2"),
+            ],
+            devices=[
+                _device("10.0.0.1", service_tag="7XKD9P3"),
+                _device("10.0.0.2", service_tag="7XKD9P4"),
+            ],
+            servers=[_collected("10.0.0.1"), _collected("10.0.0.2")],
+        )
+
+        # `aclosing`, not a bare `async for ... break`: a `break` alone
+        # never calls `.aclose()` on the generator (that's the very gap
+        # this fix closes production-side too), so it wouldn't actually
+        # exercise the `GeneratorExit` path this test is about.
+        async with contextlib.aclosing(provider.collect()) as servers:
+            async for _server in servers:
+                recorded["redfish"].collection_errors = ("10.0.0.3: unreachable",)
+                break  # stop before the Redfish pass's own generator exhausts
+
+        assert provider.collection_errors == ("10.0.0.3: unreachable",)

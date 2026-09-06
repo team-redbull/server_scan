@@ -14,6 +14,7 @@ cleanup on both success and failure.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import pytest
@@ -505,6 +506,44 @@ class TestPartialFleetAndTheBreaker:
             servers = await _collect(provider)
 
         assert servers == []
+        assert any("run budget" in e for e in provider.collection_errors)
+
+    async def test_the_run_budget_reports_even_when_the_deadline_lands_between_yields(
+        self,
+    ) -> None:
+        """The shape `_collect`'s tight `async for` above never exercises,
+        and the one the old `asyncio.timeout()`-wrapped loop got wrong:
+        `asyncio.timeout()` captures whichever task drives it *once*, at
+        entry — the *consumer's* task, since a generator suspended at
+        `yield` has no task of its own. The real consumer
+        (`IngestService.ingest`) awaits a Mongo upsert per server, so the
+        deadline landing while it's doing that — not while this generator
+        itself is running — is the normal case, not an edge case. The old
+        code's `except TimeoutError` never ran when that happened; it
+        instead let a bare `CancelledError` escape into the consumer.
+        """
+        with (
+            RedfishFixture(resources=minimal_service()) as fast,
+            RedfishFixture(
+                resources=minimal_service(), delays={"/redfish/v1/Systems": 10.0}
+            ) as slow,
+        ):
+            provider = _provider(
+                fast.port,
+                _target(fast.port),
+                _target(slow.port),
+                run_budget_seconds=0.2,
+            )
+            servers = []
+            async for server in provider.collect():
+                servers.append(server)
+                # Longer than the run budget, and — unlike `_collect`'s
+                # bare `async for` — an actual `await` between yields, so
+                # the deadline has a chance to land here rather than
+                # inside the generator.
+                await asyncio.sleep(0.3)
+
+        assert len(servers) == 1
         assert any("run budget" in e for e in provider.collection_errors)
 
 

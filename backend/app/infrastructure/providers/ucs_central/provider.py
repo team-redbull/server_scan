@@ -492,11 +492,26 @@ class UcsCentralProvider(ServerInventoryProvider):
         tasks = [
             asyncio.create_task(self._collect_domain_result(target, sem)) for target in targets
         ]
-        for finished in asyncio.as_completed(tasks):
-            target, servers = await finished
-            self._log_one_domain(domain_mo_by_id.get(target.domain_id), collected=len(servers))
-            for provider_server in servers:
-                yield provider_server
+        try:
+            for finished in asyncio.as_completed(tasks):
+                target, servers = await finished
+                self._log_one_domain(domain_mo_by_id.get(target.domain_id), collected=len(servers))
+                for provider_server in servers:
+                    yield provider_server
+        finally:
+            # A consumer that stops early (`--limit`, a killed run) throws
+            # `GeneratorExit` in at the `yield` above, which unwinds this
+            # frame but not the domain tasks still running — each of which
+            # holds a `UcsManagerProvider`, i.e. a live `UcsHandle` session
+            # against a per-user session cap. Cancelled *and* drained, so
+            # every domain still reaches `UcsManagerProvider._list_servers`'
+            # `finally: await client.logout()`. No `except TimeoutError`
+            # here, unlike Redfish's version of this same pattern — UCS
+            # Central has no run budget (ADR-0014:496-504 defers it
+            # deliberately), so this only guards early close.
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     def _log_one_domain(self, mo: Any | None, *, collected: int | None) -> None:
         """

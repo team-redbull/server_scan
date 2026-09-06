@@ -232,31 +232,67 @@ class RedfishStandaloneProvider(ServerInventoryProvider):
 
         semaphore = asyncio.Semaphore(self._concurrency)
         tasks = [asyncio.create_task(self._collect_host(t, semaphore)) for t in order]
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + self._run_budget
         collected = 0
+        hosts_done = 0
+        budget_expired = False
         try:
-            async with asyncio.timeout(self._run_budget):
-                for finished in asyncio.as_completed(tasks):
-                    for provider_server in await finished:
-                        collected += 1
-                        yield provider_server
-        except TimeoutError:
-            unfinished = sum(1 for task in tasks if not task.done())
-            logger.error(
-                "redfish.run_budget_exceeded",
-                budget_seconds=self._run_budget,
-                hosts_total=len(order),
-                hosts_unfinished=unfinished,
-                hint=(
-                    "The run stopped itself before the CronJob's activeDeadlineSeconds could "
-                    "kill it, so this summary exists. Raise "
-                    "INVENTORY_REDFISH_RUN_BUDGET_SECONDS, lower the fleet size per CronJob, "
-                    "or raise INVENTORY_REDFISH_FLEET_CONCURRENCY."
-                ),
-            )
-            self._record_error(
-                f"run budget of {self._run_budget:.0f}s expired with {unfinished} host(s) "
-                "not yet collected"
-            )
+            # The budget lives on `as_completed`'s own `timeout=`, not on an
+            # `asyncio.timeout()` wrapped around this loop, on purpose:
+            # this is a generator, and `asyncio.timeout()` captures
+            # `current_task()` once, at `__aenter__` — which here is
+            # whichever task is driving us via `asend`/`athrow`. When the
+            # deadline lands while we're suspended at the `yield` below —
+            # the normal case, since the real consumer awaits a Mongo
+            # upsert per server — that cancellation is raised in the
+            # *consumer's* frame, not ours, and the `except TimeoutError`
+            # below never ran. `as_completed(timeout=...)` instead raises
+            # `TimeoutError` from `await finished` itself, always inside
+            # this frame, regardless of who's driving the generator.
+            #
+            # That alone only bounds waiting for host tasks that haven't
+            # finished yet: if every host finishes quickly but *this*
+            # generator is kept waiting a long time between yields (a slow
+            # consumer), `as_completed` cancels its own timeout the moment
+            # the last host task completes, and it would never fire. The
+            # `loop.time() >= deadline` check below is what still bounds
+            # the whole run in that case — checked every time we're given
+            # control back, which is the most a generator can do without
+            # an external supervisor.
+            for finished in asyncio.as_completed(tasks, timeout=self._run_budget):
+                try:
+                    batch = await finished
+                except TimeoutError:
+                    budget_expired = True
+                    break
+                hosts_done += 1
+                for provider_server in batch:
+                    if loop.time() >= deadline:
+                        budget_expired = True
+                        break
+                    collected += 1
+                    yield provider_server
+                if budget_expired:
+                    break
+            if budget_expired:
+                unfinished = len(tasks) - hosts_done
+                logger.error(
+                    "redfish.run_budget_exceeded",
+                    budget_seconds=self._run_budget,
+                    hosts_total=len(order),
+                    hosts_unfinished=unfinished,
+                    hint=(
+                        "The run stopped itself before the CronJob's activeDeadlineSeconds could "
+                        "kill it, so this summary exists. Raise "
+                        "INVENTORY_REDFISH_RUN_BUDGET_SECONDS, lower the fleet size per CronJob, "
+                        "or raise INVENTORY_REDFISH_FLEET_CONCURRENCY."
+                    ),
+                )
+                self._record_error(
+                    f"run budget of {self._run_budget:.0f}s expired with {unfinished} host(s) "
+                    "not yet collected"
+                )
         finally:
             for task in tasks:
                 task.cancel()

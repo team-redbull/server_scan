@@ -361,19 +361,36 @@ class OneViewProvider(ServerInventoryProvider):
                     rows, or `None` if the call failed or reported a
                     state other than `Collected`.
             """
-            async with semaphore:
-                try:
+            try:
+                async with semaphore:
                     body = await client.get_json(f"{uri}/powerSupplies")
-                except Exception:
+                data = body.get("data")
+                rows = data.get("Members") if isinstance(data, dict) else data
+                if body.get("collectionState") != "Collected" or not isinstance(rows, list):
                     return uri, None
-            data = body.get("data")
-            rows = data.get("Members") if isinstance(data, dict) else data
-            if body.get("collectionState") != "Collected" or not isinstance(rows, list):
+                return uri, [row for row in rows if isinstance(row, dict)]
+            except Exception:
+                # The parse (`body.get(...)` etc.) is inside this `try` as
+                # well as the call: this function's whole job is to turn
+                # one server's failure into `None`, and leaving the
+                # shape-reading outside meant that held only because
+                # `OneViewClient._request_json` happens to coerce a
+                # non-object body to `{}` — a coercion two files away,
+                # not a guarantee this function's own contract should
+                # rest on.
                 return uri, None
-            return uri, [row for row in rows if isinstance(row, dict)]
 
         failures = 0
-        for uri, rows in await asyncio.gather(*(fetch(uri) for uri in to_fetch)):
+        results = await asyncio.gather(*(fetch(uri) for uri in to_fetch), return_exceptions=True)
+        for result in results:
+            if isinstance(result, BaseException):
+                # One bad PSU must not fail the whole appliance. Without
+                # `return_exceptions=True` above, one escaping exception
+                # aborted `gather` immediately and abandoned every other
+                # still-in-flight fetch mid-request.
+                failures += 1
+                continue
+            uri, rows = result
             if rows is None:
                 failures += 1
             else:

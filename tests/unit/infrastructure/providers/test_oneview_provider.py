@@ -493,6 +493,59 @@ class TestPowerSupplies:
         assert not [r for r in seen if r.url.path.endswith("/powerSupplies")]
         assert servers[0].psus is None
 
+    async def test_a_psu_fetch_that_raises_does_not_abort_the_appliance(self) -> None:
+        """One malformed `/powerSupplies` response must not cost every
+        other server its PSU data, or the run itself.
+
+        `client.get_json` is monkeypatched directly (returning `None`, a
+        contract violation `OneViewClient` itself cannot actually produce
+        — `_request_json` always coerces to a dict) rather than routed
+        through the real HTTP transport: the real client's own coercion
+        already makes this unreachable in production, so this is a
+        defense-in-depth test of `_power_supplies`'s own contract, not a
+        reproduction of a live crash. It still matters — the two bugs it
+        exercises (a bare `gather()` aborting on the first exception, and
+        the parse running outside the `try` that was supposed to contain
+        server failures) are both real changes in this function, just not
+        both independently triggerable through today's real client.
+        """
+        hardware_ok = _hardware(_HARDWARE_A, profile_uri="/rest/server-profiles/a")
+        hardware_bad = _hardware(_HARDWARE_B, profile_uri="/rest/server-profiles/b")
+        appliance = _appliance(
+            profiles=[_PROFILE_A, _PROFILE_B],
+            hardware=[hardware_ok, hardware_bad],
+            power_supplies=_psu_response(),
+        )
+
+        def client_factory() -> OneViewClient:
+            client = OneViewClient(
+                endpoint=_ENDPOINT,
+                username="collector",
+                password="secret",
+                timeout_seconds=5.0,
+                transport=httpx.MockTransport(appliance),
+            )
+            real_get_json = client.get_json
+
+            async def flaky_get_json(path: str, **kwargs: Any) -> Any:
+                if path == f"{_HARDWARE_B}/powerSupplies":
+                    return None  # violates the real client's own return type
+                return await real_get_json(path, **kwargs)
+
+            client.get_json = flaky_get_json  # ty: ignore[invalid-assignment]
+            return client
+
+        provider = _provider(appliance, collect_psus=True, client_factory=client_factory)
+
+        with capture_logs() as events:
+            servers = await _collect(provider)
+
+        by_uri = {s.external_id: s for s in servers}
+        assert by_uri[_HARDWARE_A].psus is not None
+        assert by_uri[_HARDWARE_B].psus is None
+        unreadable = [e for e in events if e["event"] == "oneview.power_supplies_unreadable"]
+        assert unreadable and unreadable[0]["servers"] == 1
+
     async def test_only_matched_servers_cost_a_call(self) -> None:
         """The name filter runs before the per-server pass, so a
         datacenter of non-`ocp` HPE servers costs nothing.

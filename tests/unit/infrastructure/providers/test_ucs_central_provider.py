@@ -30,6 +30,7 @@ multi-domain orchestration layered on top of them.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from collections.abc import AsyncGenerator
 from types import SimpleNamespace
 from typing import Any
@@ -139,17 +140,25 @@ class FakeDomainProvider(ServerInventoryProvider):
         # `test_domains_stream_as_they_finish_not_after_the_whole_fleet` —
         # every other test leaves this at 0.
         self._delay = delay
+        # Set in `_list_servers`'s own `finally`, so a test can tell a
+        # cancelled-and-drained domain (the real `UcsManagerProvider`'s
+        # equivalent would be `await client.logout()`) apart from one
+        # abandoned mid-collection.
+        self.torn_down = False
 
     async def health_check(self) -> None:
         return None
 
     async def _list_servers(self) -> AsyncGenerator[ProviderServer, None]:
-        if self._delay:
-            await asyncio.sleep(self._delay)
-        if self._error is not None:
-            raise self._error
-        for server in self._servers:
-            yield server
+        try:
+            if self._delay:
+                await asyncio.sleep(self._delay)
+            if self._error is not None:
+                raise self._error
+            for server in self._servers:
+                yield server
+        finally:
+            self.torn_down = True
 
 
 def _server(external_id: str, name: str) -> ProviderServer:
@@ -461,6 +470,34 @@ class TestListServers:
         arrival_order = [server.name async for server in provider.collect()]
 
         assert arrival_order == ["ocp4-fast-01", "ocp4-slow-01"]
+
+    async def test_stopping_early_cancels_and_drains_every_domain(self) -> None:
+        """A consumer that stops early (`--limit`, a killed run) throws
+        `GeneratorExit` in at the `yield` in `_list_servers` — which must
+        not leave a still-running domain's task, and the `UcsManagerProvider`
+        session it holds, abandoned. Proven with one domain slow enough to
+        still be in flight when the consumer stops.
+        """
+        client = FakeCentralClient(
+            {
+                "computeSystem": [_domain("1", "slow-domain"), _domain("2", "fast-domain")],
+                "lsServer": [],
+            }
+        )
+        slow = FakeDomainProvider([_server("sys/rack-unit-1", "ocp4-slow-01")], delay=5.0)
+        fast = FakeDomainProvider([_server("sys/rack-unit-2", "ocp4-fast-01")])
+        provider = _provider(
+            client,
+            {"10.0.0.1": slow, "10.0.0.2": fast},
+            name_pattern="",
+        )
+
+        async with contextlib.aclosing(provider.collect()) as servers:
+            async for _ in servers:
+                break
+
+        assert slow.torn_down
+        assert fast.torn_down
 
     async def test_collects_every_domain_and_reroots_external_ids(self) -> None:
         client = FakeCentralClient(
