@@ -9,7 +9,7 @@ refuse to guess.
 from __future__ import annotations
 
 from app.domain.enums import HEALTH_SEVERITY_RANK, HealthSeverity, LinkState
-from app.domain.models.hardware import Hardware, Storage, StorageDrive
+from app.domain.models.hardware import Hardware, Memory, MemoryModule, Storage, StorageDrive
 from app.domain.models.network import NetworkInfo, NetworkInterface
 from app.domain.models.server import Server
 from app.domain.services.health.facts import extract_facts
@@ -45,10 +45,14 @@ def _server(name: str = "ocp4-nyc-prod-worker-01", **kwargs: object) -> Server:
     """
     drives = kwargs.get("drives") or []
     interfaces = kwargs.get("interfaces") or []
+    dimms = kwargs.get("dimms") or []
     total = sum(d.capacity_bytes or 0 for d in drives)  # type: ignore[union-attr]
     return Server.model_construct(
         name=name,
-        hardware=Hardware(storage=Storage(drives=drives, total_bytes=total)),  # type: ignore[arg-type]
+        hardware=Hardware(
+            storage=Storage(drives=drives, total_bytes=total),  # type: ignore[arg-type]
+            memory=Memory(modules=dimms),  # type: ignore[arg-type]
+        ),
         network=NetworkInfo(interfaces=interfaces),  # type: ignore[arg-type]
     )
 
@@ -151,18 +155,66 @@ class TestLargeStorageName:
 
     def test_the_token_is_matched_case_insensitively(self) -> None:
         """Names arrive in whatever case the vendor reports."""
-        assert extract_facts(_server(name="ocp4-nyc-10tb-01"))["server.has_large_storage_name"]
-        assert extract_facts(_server(name="OCP4-NYC-10TB-01"))["server.has_large_storage_name"]
+        assert extract_facts(_server(name="ocp4-nyc-10tb-01"))["server.name_has_10tb"]
+        assert extract_facts(_server(name="OCP4-NYC-10TB-01"))["server.name_has_10tb"]
 
     def test_an_ordinary_server_does_not_match(self) -> None:
         """Otherwise every server would take the large-storage thresholds."""
         facts = extract_facts(_server(name="ocp4-nyc-prod-worker-01"))
-        assert facts["server.has_large_storage_name"] is False
+        assert facts["server.name_has_10tb"] is False
 
     def test_total_capacity_is_exposed_for_the_undersized_check(self) -> None:
         """The CRITICAL rule compares this against 8 TB decimal."""
         facts = extract_facts(_server(name="ocp4-nyc-10tb-01", drives=[_drive(4 * _TB)]))
         assert facts["storage.total_bytes"] == 4 * _TB
+
+    def test_the_two_build_tokens_are_independent(self) -> None:
+        """A 5TB node must not take the 10TB thresholds, or an ordinary
+        5 TB machine would read as a wildly undersized 10TB one.
+        """
+        facts = extract_facts(_server(name="ocp4-nyc-5tb-01"))
+        assert facts["server.name_has_5tb"] is True
+        assert facts["server.name_has_10tb"] is False
+
+    def test_a_10tb_name_does_not_also_match_5tb(self) -> None:
+        """"10tb" contains no "5tb", but this pins it: if the tokens ever
+        overlap, a 10TB node would take both rules and contradict itself.
+        """
+        facts = extract_facts(_server(name="ocp4-nyc-10tb-01"))
+        assert facts["server.name_has_10tb"] is True
+        assert facts["server.name_has_5tb"] is False
+
+
+class TestDegradedDimms:
+    """DIMM health, which nothing populated before."""
+
+    def test_a_degraded_dimm_is_counted(self) -> None:
+        """The check the WARNING policy reads."""
+        facts = extract_facts(
+            _server(
+                dimms=[
+                    MemoryModule(slot="A1", health=HealthSeverity.HEALTHY.value),
+                    MemoryModule(slot="A2", health=HealthSeverity.WARNING.value),
+                ]
+            )
+        )
+        assert facts["memory.dimm_count"] == 2
+        assert facts["memory.degraded_dimm_count"] == 1
+
+    def test_a_failed_dimm_counts_too(self) -> None:
+        """Both states mean the same thing to whoever schedules the swap."""
+        facts = extract_facts(
+            _server(dimms=[MemoryModule(slot="A1", health=HealthSeverity.CRITICAL.value)])
+        )
+        assert facts["memory.degraded_dimm_count"] == 1
+
+    def test_a_provider_that_reports_no_dimms_never_fires(self) -> None:
+        """UCS and Intersight do not read per-DIMM health, so their servers
+        must stay silent rather than reporting zero DIMMs as a fault.
+        """
+        facts = extract_facts(_server())
+        assert facts["memory.dimm_count"] == 0
+        assert facts["memory.degraded_dimm_count"] == 0
 
 
 class TestSingleLinkUp:

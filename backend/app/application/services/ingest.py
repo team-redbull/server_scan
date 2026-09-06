@@ -55,6 +55,7 @@ from app.domain.models.hardware import (
     Gpu,
     Hardware,
     Memory,
+    MemoryModule,
     Power,
     Psu,
     Storage,
@@ -206,6 +207,30 @@ def _gpu_from_dict(data: dict[str, object]) -> Gpu:
         uncorrectable_error_count=_opt_int(data.get("uncorrectable_error_count")),
         temperature_celsius=_opt_float(data.get("temperature_celsius")),
         power_watts=_opt_float(data.get("power_watts")),
+    )
+
+
+def _memory_module_from_dict(data: dict[str, object]) -> MemoryModule:
+    """
+    Build a `MemoryModule` from the untyped dict a provider reports.
+
+    Args:
+        data (dict[str, object]): One entry from
+            `ProviderServer.memory_modules`.
+
+    Returns:
+        MemoryModule: The domain model. `health` is a `HealthSeverity`
+            value, the same vocabulary drives use — not the UP/DOWN one
+            PSUs use, because a DIMM's condition is reported as a health
+            rollup by every source, never as an operational state.
+    """
+    return MemoryModule(
+        slot=_opt_str(data.get("slot")),
+        size_bytes=_opt_int(data.get("size_bytes")),
+        type=_opt_str(data.get("type")),
+        speed_mhz=_opt_int(data.get("speed_mhz")),
+        serial=_opt_str(data.get("serial")),
+        health=_opt_str(data.get("health")),
     )
 
 
@@ -559,7 +584,13 @@ class IngestService:
                     existing_hardware.memory.total_bytes if existing_hardware else None,
                     default=0,
                 ),
-                modules=[],
+                modules=_carry_forward(
+                    [_memory_module_from_dict(m) for m in ps.memory_modules]
+                    if ps.memory_modules is not None
+                    else None,
+                    existing_hardware.memory.modules if existing_hardware else None,
+                    default=[],
+                ),
             ),
             storage=Storage(
                 total_bytes=_carry_forward(

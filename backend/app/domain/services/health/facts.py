@@ -36,13 +36,17 @@ _FAILED = frozenset({"CRITICAL", "DOWN"})
 # — one bad disk means the mirror is running unprotected either way.
 _NOT_GOOD = frozenset({"CRITICAL", "WARNING", "DOWN"})
 
-# A server whose name says it carries the large local-storage build. The
-# name is the only place this is recorded — there is no field on the
-# document saying "this is a 10TB box" — which is the same reason a
-# server's site is parsed from its name (`parse_site_code`). Matched
-# case-insensitively on the bare token, so `ocp4-nyc-10tb-01` and
-# `OCP4-NYC-10TB-01` both count.
-_LARGE_STORAGE_TOKEN = "10tb"
+# Storage builds a server's name declares. The name is the only place
+# this is recorded — there is no field on the document saying "this is a
+# 10TB box" — which is the same reason a server's site is parsed from its
+# name (`parse_site_code`). Matched case-insensitively, so
+# `ocp4-nyc-10tb-01` and `OCP4-NYC-10TB-01` both count.
+#
+# Each build gets its own fact rather than one "storage class" string,
+# because the condition grammar has no regex operator: a policy can only
+# compare a metric to a value, so "the name says 10TB" has to already be
+# a boolean by the time a policy sees it.
+_STORAGE_NAME_TOKENS = {"server.name_has_10tb": "10tb", "server.name_has_5tb": "5tb"}
 
 
 def _os_disk_capacities(drives: list[Any]) -> tuple[int, ...]:
@@ -76,6 +80,7 @@ def extract_facts(server: Server) -> dict[str, Any]:
     drive_healths = [d.health for d in server.hardware.storage.drives if d.health is not None]
     link_states = [i.link_state.value for i in server.network.interfaces]
     psu_healths = [p.health for p in server.hardware.power.psus if p.health is not None]
+    dimms = server.hardware.memory.modules
     drives = server.hardware.storage.drives
     os_capacities = _os_disk_capacities(drives)
     os_disks = [d for d in drives if d.capacity_bytes in os_capacities]
@@ -109,9 +114,15 @@ def extract_facts(server: Server) -> dict[str, Any]:
         "storage.os_bad_disk_count": sum(1 for d in os_disks if d.health in _NOT_GOOD),
         "storage.data_disk_count": len(data_disks),
         "storage.data_bad_disk_count": sum(1 for d in data_disks if d.health in _NOT_GOOD),
-        # From the server's own name, the only place the large-storage
-        # build is recorded. False for a server whose name says nothing.
-        "server.has_large_storage_name": _LARGE_STORAGE_TOKEN in (server.name or "").lower(),
+        **{
+            fact: token in (server.name or "").lower()
+            for fact, token in _STORAGE_NAME_TOKENS.items()
+        },
+        "memory.dimm_count": len(dimms),
+        # Degraded or failed, counted together like the disk checks: a DIMM
+        # is reported as a health rollup by every source, and both states
+        # mean the same thing to whoever has to schedule the swap.
+        "memory.degraded_dimm_count": sum(1 for d in dimms if d.health in _NOT_GOOD),
         "network.interface_link_states": link_states,
         "network.interface_count": len(link_states),
         # Counted UP rather than counting DOWN: a server with unused NICs

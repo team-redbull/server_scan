@@ -190,7 +190,7 @@ def default_system_policies() -> list[HealthPolicy]:
         severity=HealthSeverity.WARNING,
         condition=Condition(
             all_of=[
-                Condition(metric="server.has_large_storage_name", operator="EQ", value=True),
+                Condition(metric="server.name_has_10tb", operator="EQ", value=True),
                 Condition(metric="storage.data_bad_disk_count", operator="EQ", value=1),
             ]
         ),
@@ -216,7 +216,7 @@ def default_system_policies() -> list[HealthPolicy]:
         severity=HealthSeverity.CRITICAL,
         condition=Condition(
             all_of=[
-                Condition(metric="server.has_large_storage_name", operator="EQ", value=True),
+                Condition(metric="server.name_has_10tb", operator="EQ", value=True),
                 Condition(metric="storage.data_bad_disk_count", operator="GTE", value=2),
             ]
         ),
@@ -242,7 +242,7 @@ def default_system_policies() -> list[HealthPolicy]:
         severity=HealthSeverity.WARNING,
         condition=Condition(
             all_of=[
-                Condition(metric="server.has_large_storage_name", operator="EQ", value=False),
+                Condition(metric="server.name_has_10tb", operator="EQ", value=False),
                 Condition(metric="storage.data_bad_disk_count", operator="GTE", value=1),
             ]
         ),
@@ -272,7 +272,7 @@ def default_system_policies() -> list[HealthPolicy]:
         severity=HealthSeverity.CRITICAL,
         condition=Condition(
             all_of=[
-                Condition(metric="server.has_large_storage_name", operator="EQ", value=True),
+                Condition(metric="server.name_has_10tb", operator="EQ", value=True),
                 Condition(metric="storage.total_bytes", operator="LT", value=8_000_000_000_000),
             ]
         ),
@@ -309,6 +309,68 @@ def default_system_policies() -> list[HealthPolicy]:
         ),
         evidence=[EvidenceField(key="interfaces", metric="network.interface_count")],
         message_template="no network link is up across {interfaces} interface(s)",
+        scope=PolicyScope(),
+        source="SYSTEM_DEFAULT",
+        priority=100,
+        system=True,
+        created_at=now,
+        updated_at=now,
+    )
+
+    # The mirror of the 10TB rule, in the other direction: a 5TB-named node
+    # carrying more than 6 TB is not the machine its name promises either.
+    # Both are the same failure — capacity that does not match the name a
+    # workload is placed by — and both are CRITICAL for that reason.
+    #
+    # 6 TB (not 5) leaves headroom for how a "5TB" build is actually
+    # assembled and measured, the same way the 10TB rule allows down to
+    # 8 TB. Both bounds are decimal.
+    name_5tb_oversized = HealthPolicy(
+        id=new_id("health_policy"),
+        name="5TB server above expected capacity",
+        description=(
+            "Fires when a server whose name carries the 5TB token reports "
+            "more than 6 TB of total storage."
+        ),
+        policy_key="storage.name_5tb_oversized",
+        category="storage",
+        severity=HealthSeverity.CRITICAL,
+        condition=Condition(
+            all_of=[
+                Condition(metric="server.name_has_5tb", operator="EQ", value=True),
+                Condition(metric="storage.total_bytes", operator="GT", value=6_000_000_000_000),
+            ]
+        ),
+        evidence=[EvidenceField(key="total", metric="storage.total_bytes")],
+        message_template="{total} bytes of storage on a 5TB server",
+        scope=PolicyScope(),
+        source="SYSTEM_DEFAULT",
+        priority=100,
+        system=True,
+        created_at=now,
+        updated_at=now,
+    )
+
+    # WARNING, not MAJOR: a degraded DIMM is a scheduled swap, not lost
+    # redundancy — the server keeps running on the memory it has, and ECC
+    # is doing its job until it cannot.
+    degraded_dimm = HealthPolicy(
+        id=new_id("health_policy"),
+        name="Memory module degraded",
+        description=(
+            "Fires when one or more DIMMs report WARNING or CRITICAL. Only "
+            "providers that read per-DIMM health populate this; one that "
+            "does not leaves the count at zero and this never fires."
+        ),
+        policy_key="memory.degraded_dimm",
+        category="memory",
+        severity=HealthSeverity.WARNING,
+        condition=Condition(metric="memory.degraded_dimm_count", operator="GTE", value=1),
+        evidence=[
+            EvidenceField(key="bad", metric="memory.degraded_dimm_count"),
+            EvidenceField(key="total", metric="memory.dimm_count"),
+        ],
+        message_template="{bad} of {total} memory modules degraded",
         scope=PolicyScope(),
         source="SYSTEM_DEFAULT",
         priority=100,
@@ -413,6 +475,8 @@ def default_system_policies() -> list[HealthPolicy]:
         large_storage_data_critical,
         data_disk_warning,
         large_storage_undersized,
+        name_5tb_oversized,
+        degraded_dimm,
         all_links_down,
         single_link_up,
         failed_gpu,

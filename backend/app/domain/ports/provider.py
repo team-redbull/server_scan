@@ -165,6 +165,13 @@ class ProviderServer:
     # power the same way a server with two good PSUs did.
     psus: tuple[dict[str, object], ...] | None = None
 
+    # Keys mirror `app.domain.models.hardware.MemoryModule`. The same shape
+    # of gap `psus` was: the domain model has had `Memory.modules` since
+    # the first slice and `IngestService` hardcoded `modules=[]`, so a
+    # degraded DIMM was unrepresentable. Redfish already reads the `Memory`
+    # collection for the total, so populating this costs no extra request.
+    memory_modules: tuple[dict[str, object], ...] | None = None
+
     attachments: tuple[ProviderAttachment, ...] = ()
 
     tags: tuple[str, ...] = field(default_factory=tuple)

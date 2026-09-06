@@ -235,11 +235,38 @@ def build_default_registry() -> MetricRegistry:
     )
     registry.register(
         MetricDef(
-            name="server.has_large_storage_name",
+            name="server.name_has_10tb",
             type=MetricType.BOOL,
             category="storage",
-            description="Whether the server's name carries the 10TB large-storage token",
-            resolver=lambda f: _get(f, "server.has_large_storage_name", False),
+            description="Whether the server's name carries the 10TB token",
+            resolver=lambda f: _get(f, "server.name_has_10tb", False),
+        )
+    )
+    registry.register(
+        MetricDef(
+            name="server.name_has_5tb",
+            type=MetricType.BOOL,
+            category="storage",
+            description="Whether the server's name carries the 5TB token",
+            resolver=lambda f: _get(f, "server.name_has_5tb", False),
+        )
+    )
+    registry.register(
+        MetricDef(
+            name="memory.dimm_count",
+            type=MetricType.INT,
+            category="memory",
+            description="Number of fitted DIMMs reported",
+            resolver=lambda f: _get(f, "memory.dimm_count", 0),
+        )
+    )
+    registry.register(
+        MetricDef(
+            name="memory.degraded_dimm_count",
+            type=MetricType.INT,
+            category="memory",
+            description="DIMMs reporting WARNING or CRITICAL health",
+            resolver=lambda f: _get(f, "memory.degraded_dimm_count", 0),
         )
     )
     registry.register(

@@ -650,6 +650,50 @@ def psus_from_supplies(supplies: list[dict[str, Any]] | None) -> tuple[dict[str,
     return tuple(psus)
 
 
+def memory_modules_from_dimms(
+    dimms: list[dict[str, Any]] | None,
+) -> tuple[dict[str, object], ...] | None:
+    """
+    Map the `Memory` collection onto the platform's DIMM shape.
+
+    The same members `memory_bytes` already sums, so this costs no extra
+    request — only the health, slot and speed it was throwing away.
+
+    An **absent** slot is dropped, the rule every other component mapping
+    here follows: an empty DIMM socket is not a degraded DIMM, and a
+    half-populated board would otherwise report a dozen bad modules.
+
+    Args:
+        dimms (list[dict[str, Any]] | None): `Memory` members, or None
+            when the collection could not be read.
+
+    Returns:
+        tuple[dict[str, object], ...] | None: One entry per fitted DIMM,
+            keys mirroring `app.domain.models.hardware.MemoryModule`, or
+            None when unread. `health` is a `HealthSeverity` value, the
+            vocabulary drives use — a DIMM is reported as a health rollup
+            everywhere, never as an operational state.
+    """
+    if dimms is None:
+        return None
+    modules: list[dict[str, object]] = []
+    for dimm in dimms:
+        if is_absent(dimm):
+            continue
+        capacity_mib = _as_int(dimm.get("CapacityMiB"))
+        modules.append(
+            {
+                "slot": dimm.get("DeviceLocator") or dimm.get("Id") or dimm.get("Name") or None,
+                "size_bytes": capacity_mib * _MIB if capacity_mib is not None else None,
+                "type": dimm.get("MemoryDeviceType") or dimm.get("MemoryType") or None,
+                "speed_mhz": _as_int(dimm.get("OperatingSpeedMhz")),
+                "serial": dimm.get("SerialNumber") or None,
+                "health": health_of(dimm),
+            }
+        )
+    return tuple(modules)
+
+
 def nics_from_interfaces(interfaces: list[dict[str, Any]] | None) -> tuple[ProviderNic, ...]:
     """
     Build the per-interface view from a server's `EthernetInterfaces`.
@@ -823,6 +867,7 @@ def system_to_provider_server(
         memory_total_bytes=memory_bytes(system, dimms),
         storage_total_bytes=storage_total,
         storage_drives=storage_drives,
+        memory_modules=memory_modules_from_dimms(dimms),
         psus=psus,
         gpus=gpus,
         # A standalone server has no fabric interconnect, so there is
