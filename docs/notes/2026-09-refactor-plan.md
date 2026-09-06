@@ -3,10 +3,11 @@
 Companion to `docs/notes/2026-09-audit.md` (findings, with IDs referenced
 here) and the seven `docs/notes/2026-09-research-*.md` files.
 
-**Status: approved 2026-09-06. Phases 1-3 done, committed, and pushed to
-`dev-refactor` (`686160f`, `453f47e`+`8dfed16`+`517cfce`, `c90968a`
-respectively — Phase 2 shipped as three commits instead of one, see its
-own section for why). Phase 4 next.**
+**Status: approved 2026-09-06. Phases 1-4 done, committed, and pushed to
+`dev-refactor` (`686160f`, `453f47e`+`8dfed16`+`517cfce`, `c90968a`,
+`4806d21`+`6066cc5`+`2920510` respectively — Phase 2 shipped as three
+commits and Phase 4 as three instead of one, see their own sections for
+why). Phase 5 next.**
 
 Ordering follows the brief: contract and architecture first while the diff
 is still legible, mechanical sweeps last. One phase = one reviewable
@@ -290,7 +291,18 @@ commit or an upgrade wedges.
 
 ## Phase 4 — API and domain correctness
 
-**Commit:** `fix: validate the shipped classification rules and health policies at startup`
+**Shipped as three commits, not one** (`4806d21`, `6066cc5`, `2920510`):
+the dead-code deletion/bootstrap-validation change, the compare-and-set
+change, and the small mongo/collector/docs fixes each stood on their own
+enough to review separately, the same reasoning Phase 2 gives for its own
+three-commit split.
+
+- `4806d21` — `feat: validate shipped classification rules and health
+  policies at startup` (M1, C12, C11)
+- `6066cc5` — `fix: reject a concurrent server edit instead of silently
+  overwriting it` (C13)
+- `2920510` — `fix: log and count MongoDB ping failures, and keep
+  --dry-run off the database` (M6, M7, M8, M9, M10, M3, Q5)
 
 The Q1 decision makes this phase bigger and better than drafted.
 
