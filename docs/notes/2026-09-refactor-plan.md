@@ -11,7 +11,15 @@ instead of one, see their own sections for why). Phase 6 also surfaced
 and fixed an unrelated dev-tooling bug (`d448822`): `scripts/dev-up.sh
 down` never removed Mongo's named volume, so `down && up` silently kept
 the previous run's data instead of the empty database the README
-documents that sequence as producing. Phase 9 next.**
+documents that sequence as producing. Two small follow-ups landed after
+Phase 8 (`27ca909` — the `actions/cache` pin Phase 8 itself added
+declared node20, CI's own deprecation annotation caught it on the very
+next run; `e38de2a` — docs only) plus one out-of-band, user-requested
+feature between Phase 8 and 9 (`734717e`, its own section below,
+"Between Phase 8 and 9"): all five collectors now log/print a
+`took=`/`collector.run_complete` run duration. **Phase 9 next — see
+"Picking this up in a new session" at the end of this file before
+starting.**
 
 Ordering follows the brief: contract and architecture first while the diff
 is still legible, mechanical sweeps last. One phase = one reviewable
@@ -733,3 +741,44 @@ under the real per-user session cap, before this ships.
   and only a `(connect, read)` timeout pair. Worth recording that
   `httpx`'s `retries=` reaches only connection setup — it never retries a
   read timeout, a 429 or a 503.
+
+---
+
+## Picking this up in a new session (2026-09-07)
+
+Handed off deliberately clean — verified before ending this session, not
+assumed:
+
+- `git status` on `dev-refactor` is clean and fully pushed (`734717e` is
+  `HEAD`, `origin/dev-refactor` matches). No stash, no uncommitted work,
+  no open worktree besides the main one.
+- The dev stack is down (`podman ps -a` empty) and no `uvicorn`/`vite`
+  process is running — nothing to tear down before starting.
+- The only untracked files are `.claude/.proven-config-version` and
+  `.claude/proven-config.json` — pre-existing debris from some other
+  tool's own state-caching (not from this refactor, not written by any
+  work in this plan), present since before Phase 6. Not a decision to
+  make on this plan's behalf; leave them alone unless the user asks.
+- **Phase 9's premise was re-verified today, not just re-read**: pointed
+  the tool at `tests/api/` with the dev stack down and it genuinely hung
+  well past a normal test run (confirming T1's "3 errors in 21.23s"
+  finding is still real, not stale from when this plan was written) —
+  stopped deliberately rather than let it finish, since fixing it *is*
+  Phase 9's job, not this handoff's.
+- Read `docs/notes/2026-09-audit-tools-tests.md` for T1/T3/C4's full
+  detail before starting — this plan's Phase 9 section is only the
+  summary, and (per this session's experience with Phase 8's stale
+  counts) re-measure rather than trust any number in it that a command
+  can re-check in seconds.
+- The standing gate before calling any phase done is still: `uv run
+  ruff check . && uv run ruff format --check . && uv run ty check
+  backend/app tools tests && uv run pytest -q`, plus the frontend
+  equivalent for any frontend change, plus a real Playwright run if the
+  change touches anything E2E covers. This WSL environment has a few
+  gotchas that are not this repo's problem but will look like one if
+  re-discovered from scratch: `podman ps` before assuming a stuck
+  command is a regression (a timed-out command can reap the dev stack's
+  containers); Playwright's chromium needs `LD_LIBRARY_PATH` pointed at
+  a hand-extracted lib bundle to launch at all in this sandbox. Claude
+  Code's own persistent memory for this project already has both, in
+  more detail, if the assistant picking this up is Claude.
