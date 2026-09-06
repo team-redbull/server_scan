@@ -75,6 +75,11 @@ down() {
   else
     echo "Pod '$POD_NAME' does not exist; nothing to do."
   fi
+  # Mongo's data lives in a named volume, which `pod rm` does not touch —
+  # without this, "down && up" silently keeps every server from the last
+  # run instead of the empty database the README documents that sequence
+  # as producing, and the orphaned volume accumulates disk on every cycle.
+  "$RUNTIME" volume rm "${POD_NAME}-mongo-data" >/dev/null 2>&1 || true
 }
 
 status() {
