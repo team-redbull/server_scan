@@ -3,7 +3,10 @@
 Companion to `docs/notes/2026-09-audit.md` (findings, with IDs referenced
 here) and the seven `docs/notes/2026-09-research-*.md` files.
 
-**Status: approved 2026-09-06. Phase 1 in progress.**
+**Status: approved 2026-09-06. Phases 1-3 done, committed, and pushed to
+`dev-refactor` (`686160f`, `453f47e`+`8dfed16`+`517cfce`, `c90968a`
+respectively — Phase 2 shipped as three commits instead of one, see its
+own section for why). Phase 4 next.**
 
 Ordering follows the brief: contract and architecture first while the diff
 is still legible, mechanical sweeps last. One phase = one reviewable
