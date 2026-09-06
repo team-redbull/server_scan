@@ -3,11 +3,11 @@
 Companion to `docs/notes/2026-09-audit.md` (findings, with IDs referenced
 here) and the seven `docs/notes/2026-09-research-*.md` files.
 
-**Status: approved 2026-09-06. Phases 1-4 done, committed, and pushed to
+**Status: approved 2026-09-06. Phases 1-5 done, committed, and pushed to
 `dev-refactor` (`686160f`, `453f47e`+`8dfed16`+`517cfce`, `c90968a`,
-`4806d21`+`6066cc5`+`2920510` respectively — Phase 2 shipped as three
-commits and Phase 4 as three instead of one, see their own sections for
-why). Phase 5 next.**
+`4806d21`+`6066cc5`+`2920510`, `b5d6702` respectively — Phase 2 shipped
+as three commits and Phase 4 as three instead of one, see their own
+sections for why). Phase 6 next.**
 
 Ordering follows the brief: contract and architecture first while the diff
 is still legible, mechanical sweeps last. One phase = one reviewable
@@ -336,11 +336,23 @@ The Q1 decision makes this phase bigger and better than drafted.
 
 ## Phase 5 — Performance, measured only
 
-**Commit:** `perf: stop re-reading classification rules and health policies once per server`
+**Shipped as `b5d6702`:** `perf: stop re-reading classification rules and
+health policies once per server`.
 
-P1 (~20,000 collection reads per 10k run → load once per run), P2 (async
-dependency functions, +0.42 ms/request measured; return cached bytes
-without the decode/re-validate/re-encode round trip, 0.919 ms).
+P1 (~20,000 collection reads per 10k run → load once per run;
+`ClassificationService`/`HealthPolicyService` each gained a
+`load_ruleset`/`load_policies` + `classify_with_ruleset`/
+`evaluate_with_policies` pair alongside the unchanged
+`classify_server`/`evaluate_server`, and `IngestService.ingest` calls the
+load-once pair exactly once per run — verified with a counting-repo test
+that fails against the pre-fix code, 25 calls for 25 servers, and passes
+after, one call per collector's own `ingest()` invocation), P2 (async
+dependency functions, +0.42 ms/request measured — every provider in
+`app.dependencies` and every router's private `_xxx` dependency function
+is now `async def`; return cached bytes without the decode/re-validate/
+re-encode round trip, 0.919 ms — `CacheClient.get_raw` plus a raw
+`Response(media_type="application/json")` on a cache hit for
+`GET /servers`, `GET /servers/facets` and `GET /servers/{id}`).
 
 **The rule for this phase:** every change carries a before/after number in
 the commit body, from the method in
