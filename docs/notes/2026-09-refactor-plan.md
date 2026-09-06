@@ -3,11 +3,15 @@
 Companion to `docs/notes/2026-09-audit.md` (findings, with IDs referenced
 here) and the seven `docs/notes/2026-09-research-*.md` files.
 
-**Status: approved 2026-09-06. Phases 1-5 done, committed, and pushed to
+**Status: approved 2026-09-06. Phases 1-6 done, committed, and pushed to
 `dev-refactor` (`686160f`, `453f47e`+`8dfed16`+`517cfce`, `c90968a`,
-`4806d21`+`6066cc5`+`2920510`, `b5d6702` respectively — Phase 2 shipped
-as three commits and Phase 4 as three instead of one, see their own
-sections for why). Phase 6 next.**
+`4806d21`+`6066cc5`+`2920510`, `b5d6702`, `37d1cce` respectively — Phase 2
+shipped as three commits and Phase 4 as three instead of one, see their
+own sections for why). Phase 6 also surfaced and fixed an unrelated dev-
+tooling bug (`d448822`): `scripts/dev-up.sh down` never removed Mongo's
+named volume, so `down && up` silently kept the previous run's data
+instead of the empty database the README documents that sequence as
+producing. Phase 7 next.**
 
 Ordering follows the brief: contract and architecture first while the diff
 is still legible, mechanical sweeps last. One phase = one reviewable
@@ -366,23 +370,20 @@ cumulative is an artefact).
 
 ## Phase 6 — Frontend correctness
 
-**Not started — pick up here.** A prior session read the files below to
-plan this phase and made zero edits (confirmed clean working tree), so
-nothing here is half-done; this note only saves the next session the
-file-location lookup. Files already located and worth reading first:
-`src/features/sites/SitesOverviewPage.tsx` (C2, the "all healthy" branch
-at `:236`), `src/features/servers/NetworkTab.tsx` and `HardwareTab.tsx`
-(C3 — copy `HardwareTab`'s `Reported`/`Stat` treatment into `NetworkTab`,
-which has neither), `src/features/servers/ServerDetailPage.tsx` and
-`OverviewTab.tsx` (C14, the silent maintenance-write failure),
-`src/features/servers/hooks.ts` (C15, missing `invalidateQueries`),
-`src/features/inventory/InventoryPage.tsx` and `InventoryTable.tsx` (C16
-dead result-count header, the sticky-header defect, and the `<select>`
-accessible-name defect), `src/api/queryKeys.ts` and `src/api/servers.ts`
-(P3, the facets query-key mismatch), `src/main.tsx`/`src/router.tsx` (the
-missing error boundary).
+**Shipped as `37d1cce`:** `fix: stop showing "all healthy" for a site
+whose servers were never evaluated`. All of C2, C3, C14, C15, C16, P3,
+the missing error boundary, the sticky-header defect and the `<select>`
+accessible-name defect landed in one commit, plus the `unread_fields`
+legibility fix (a shared `Reported`/`UnconfirmedMarker` component used by
+both `HardwareTab` and `NetworkTab` now). Verified: unit tests (64
+passed), `tsc -b`, `oxlint`, `vite build`, and the full Playwright E2E
+suite (9 passed) against a freshly wiped and reseeded dev database.
 
-**Commit:** `fix: stop showing "all healthy" for a site whose servers were never evaluated`
+Also fixed, found while reseeding for the E2E run rather than planned:
+`scripts/dev-up.sh down` never removed Mongo's named volume, so a
+"wiped" dev database was actually 50,000 servers left over from an
+earlier performance run — shipped separately as `d448822` since it is
+dev tooling, not frontend.
 
 C2 (all-healthy), C3 (`NetworkTab` unread — copy `HardwareTab`'s
 treatment, which is already right), C14 (silent maintenance-write
@@ -495,6 +496,17 @@ move it to `docs/` with provenance intact. Flagged as move-not-delete:
 the `INVENTORY_GPU_MODELS` field-name bug, OneView's `count=-1` meaning
 64, the UCS-login-without-endpoint rationale, the Dell two-login
 exception, and `ProfileTemplate`'s four-vendor comparison.
+
+**Docstring length, decided 2026-09-07 (user directive, applies to this
+sweep and to every function written after it):** the summary before
+`Args:`/`Returns:`/`Raises:` is **1-3 lines**, not more, unless the
+function genuinely needs more to avoid a real misuse — most functions
+already say what they do in their name and signature, and a long prose
+summary on top of that is exactly the "wall of prose between statements"
+convention 8 was written to stop. `Args:`/`Returns:`/`Raises:` stay full
+and typed regardless of summary length — this rule is about the prose
+above them, not about dropping the structured part. A summary that
+already fits 1-3 lines needs no change in this sweep.
 
 ---
 
