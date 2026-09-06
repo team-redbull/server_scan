@@ -11,8 +11,10 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Annotated, Literal
 
-from pydantic import Field, field_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+
+_INSECURE_DEV_CURSOR_SECRET = "dev-insecure-cursor-secret-change-in-production"  # noqa: S105 - dev default, not a real secret
 
 
 class Settings(BaseSettings):
@@ -71,7 +73,7 @@ class Settings(BaseSettings):
     # so a client can never forge one that skips the filter/sort binding
     # check. Insecure default is fine for dev/test; production deployments
     # must override via INVENTORY_CURSOR_SECRET.
-    cursor_secret: str = "dev-insecure-cursor-secret-change-in-production"  # noqa: S105 - dev default, not a real secret
+    cursor_secret: str = _INSECURE_DEV_CURSOR_SECRET
 
     # --- Sites ---
     #
@@ -175,11 +177,11 @@ class Settings(BaseSettings):
     # plausible. `ip` is `intersight.com` for the SaaS tenant, or the
     # appliance FQDN for an on-prem appliance.
     ucs_manager_username: str = ""
-    ucs_manager_password: str = ""
+    ucs_manager_password: SecretStr = SecretStr("")
 
     ucs_central_ip: str = ""
     ucs_central_username: str = ""
-    ucs_central_password: str = ""
+    ucs_central_password: SecretStr = SecretStr("")
 
     # One appliance, exactly like every other vendor here. HPE caps an
     # appliance at 2500 servers (1024 off ESXi), which this estate is
@@ -188,7 +190,7 @@ class Settings(BaseSettings):
     # anticipating it.
     oneview_ip: str = ""
     oneview_username: str = ""
-    oneview_password: str = ""
+    oneview_password: SecretStr = SecretStr("")
 
     # `X-Api-Version`, which OneView requires on every call. 0 discovers
     # it from each appliance's unauthenticated `GET /rest/version` and
@@ -229,7 +231,7 @@ class Settings(BaseSettings):
 
     ome_ip: str = ""
     ome_username: str = ""
-    ome_password: str = ""
+    ome_password: SecretStr = SecretStr("")
 
     # The Dell collector needs TWO logins, and that is a deliberate
     # exception to "one endpoint and one login per manager type": OME is
@@ -238,7 +240,7 @@ class Settings(BaseSettings):
     # `INVENTORY_OME_BMC_USERNAME`/`_PASSWORD`. See
     # docs/adr/0020-dell-identity-from-ome-hardware-from-redfish.md.
     ome_bmc_username: str = ""
-    ome_bmc_password: str = ""
+    ome_bmc_password: SecretStr = SecretStr("")
     ome_bmc_port: int = 443
 
     # iDRACs ship a factory self-signed certificate, so verification is off
@@ -264,7 +266,7 @@ class Settings(BaseSettings):
     # in the environment like any other value — there is no key file to
     # mount, because the signer accepts the key as a string. See
     # docs/adr/0017-intersight-collector.md, "Decision 2".
-    intersight_api_key_pem: str = ""
+    intersight_api_key_pem: SecretStr = SecretStr("")
 
     # Which `ManagementMode` values the Intersight collector ingests, as
     # a comma-separated list. `UCSM` is excluded by default and that is
@@ -305,7 +307,7 @@ class Settings(BaseSettings):
     # per-host credential names are the normal path and these two are the
     # fallback. See docs/adr/0016-redfish-standalone-collector.md.
     redfish_username: str = ""
-    redfish_password: str = ""
+    redfish_password: SecretStr = SecretStr("")
 
     # TOML, mounted read-only from a ConfigMap. Accepts a file or a
     # directory of `*.toml` — a directory is what lets a large estate be
@@ -402,6 +404,52 @@ class Settings(BaseSettings):
         if isinstance(value, str):
             return [origin.strip() for origin in value.split(",") if origin.strip()]
         return value
+
+    @model_validator(mode="after")
+    def _refuse_the_dev_cursor_secret_in_production(self) -> Settings:
+        """
+        Fail startup rather than sign every cursor with a secret anyone
+        can read out of this file.
+
+        `cursor_secret` was previously "only a code comment, not enforced
+        at startup" (see CLAUDE.md's own correction of that claim) — an
+        install that forgot to set `INVENTORY_CURSOR_SECRET` started up
+        looking healthy and stayed on the committed default forever. A
+        forged cursor is not a real information-disclosure risk yet (every
+        endpoint is already open by design, convention 6), but it becomes
+        one the moment authentication lands, and fixing it after that
+        would mean rotating a secret every deployed cursor already
+        depends on.
+
+        Returns:
+            Settings: `self`, unchanged, once the check passes.
+
+        Raises:
+            ValueError: If `environment` is `"production"` and
+                `cursor_secret` is still the committed insecure default,
+                or blank.
+        """
+        if self.environment != "production":
+            return self
+        if not self.cursor_secret.strip():
+            # Reachable if a deployment wires `INVENTORY_CURSOR_SECRET` to
+            # an empty `secretKeyRef` value (blank `stringData` still
+            # counts as "set" to pydantic-settings, unlike leaving the env
+            # var out entirely) — a different mistake from never setting
+            # it at all, and one that must fail exactly the same way.
+            raise ValueError(
+                "INVENTORY_CURSOR_SECRET is blank with INVENTORY_ENVIRONMENT=production. "
+                "Set INVENTORY_CURSOR_SECRET to a real, deployment-specific secret — "
+                "see deploy/helm/server-inventory's cursorSecret value."
+            )
+        if self.cursor_secret == _INSECURE_DEV_CURSOR_SECRET:
+            raise ValueError(
+                "INVENTORY_CURSOR_SECRET is still the committed dev default "
+                f"({_INSECURE_DEV_CURSOR_SECRET!r}) with INVENTORY_ENVIRONMENT=production. "
+                "Set INVENTORY_CURSOR_SECRET to a real, deployment-specific secret — "
+                "see deploy/helm/server-inventory's cursorSecret value."
+            )
+        return self
 
 
 @lru_cache

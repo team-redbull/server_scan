@@ -38,6 +38,7 @@ spec:
       template:
         spec:
           restartPolicy: Never
+          automountServiceAccountToken: false
           containers:
             - name: collector
               image: "{{ .Values.backend.image.repository }}:{{ .Values.backend.image.tag }}"
@@ -88,4 +89,6 @@ spec:
                   drop: ["ALL"]
                 readOnlyRootFilesystem: true
                 runAsNonRoot: true
+                seccompProfile:
+                  type: RuntimeDefault
 {{- end }}

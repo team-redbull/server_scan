@@ -16,7 +16,10 @@ for any field this pins.
 
 from __future__ import annotations
 
+from typing import Literal
+
 import pytest
+from pydantic import ValidationError
 
 from app.config.settings import Settings
 
@@ -62,3 +65,48 @@ class TestSitesStillMatchesTheSameConvention:
         """
         monkeypatch.setenv("INVENTORY_SITES", "tlv:Tel Aviv")
         assert _settings().sites == "tlv:Tel Aviv"
+
+
+class TestCursorSecretProductionFailFast:
+    """`INVENTORY_CURSOR_SECRET` was previously "only a code comment, not
+    enforced at startup" — an install that forgot to set it started up
+    looking healthy and stayed on the committed default forever.
+    """
+
+    def test_the_dev_default_in_production_refuses_to_start(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("INVENTORY_CURSOR_SECRET", raising=False)
+        with pytest.raises(ValidationError, match="INVENTORY_CURSOR_SECRET"):
+            Settings(_env_file=None, environment="production")
+
+    def test_a_blank_secret_in_production_also_refuses_to_start(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A different mistake from never setting it at all — a deployment
+        wiring `INVENTORY_CURSOR_SECRET` to an empty `secretKeyRef` value —
+        but one that must fail exactly the same way, not fall through to
+        the dev default silently.
+        """
+        monkeypatch.setenv("INVENTORY_CURSOR_SECRET", "")
+        with pytest.raises(ValidationError, match="INVENTORY_CURSOR_SECRET"):
+            Settings(_env_file=None, environment="production")
+
+    def test_a_real_secret_in_production_starts_fine(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("INVENTORY_CURSOR_SECRET", "a-real-deployment-specific-secret")
+        settings = Settings(_env_file=None, environment="production")
+        assert settings.cursor_secret == "a-real-deployment-specific-secret"
+
+    @pytest.mark.parametrize("environment", ["development", "test", "staging"])
+    def test_the_dev_default_is_fine_outside_production(
+        self,
+        environment: Literal["development", "test", "staging"],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Dev/test/staging must not be forced to set a real secret just
+        to boot — only a `production` install signs cursors an attacker
+        might ever have reason to forge.
+        """
+        monkeypatch.delenv("INVENTORY_CURSOR_SECRET", raising=False)
+        settings = Settings(_env_file=None, environment=environment)
+        assert settings.cursor_secret == "dev-insecure-cursor-secret-change-in-production"

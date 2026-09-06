@@ -443,9 +443,8 @@ per request or per query, because the *name* comes from the profile.
    update). No Kubernetes manifests exist for the frontend
    (only the backend API has a Deployment/Route, despite the frontend
    having a solid Containerfile since slice 1 — see `deploy/README.md`);
-   the `INVENTORY_CURSOR_SECRET` insecure default is only a code
-   comment, not enforced at startup; no rate-limiting middleware
-   anywhere; Mongo HA/backup and Redis persistence are explicitly
+   no rate-limiting middleware anywhere; Mongo HA/backup and Redis
+   persistence are explicitly
    documented as "the platform's problem" but nobody has actually stood
    either up; no alerting rules or dashboards on top of the Prometheus
    metrics that already exist.

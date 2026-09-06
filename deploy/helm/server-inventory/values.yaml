@@ -15,6 +15,18 @@ backend:
       memory: 256Mi
     limits:
       memory: 512Mi
+  # Signs opaque keyset-pagination cursors (see docs/adr/0006 and
+  # `app.domain.services.cursor`). Blank here means the API falls back to
+  # its own committed dev-insecure default — fine for local/dev, and
+  # `Settings` itself refuses to start with that default once
+  # `INVENTORY_ENVIRONMENT=production` (see backend-configmap.yaml). Set a
+  # real, deployment-specific value with `--set backend.cursorSecret=...`
+  # or a `-f secrets.yaml` not in git — same pattern as
+  # `collectors.existingSecret` below — or point `existingCursorSecret` at
+  # a Secret (key `cursor-secret`) managed elsewhere (Vault, External
+  # Secrets, sealed-secrets) to skip this chart's own Secret entirely.
+  cursorSecret: ""
+  existingCursorSecret: ""
 
 # Name of a pre-existing Secret with keys `mongo-uri` and `redis-uri`.
 # This chart does not create it — see deploy/README.md for why MongoDB

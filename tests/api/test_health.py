@@ -44,3 +44,18 @@ async def test_not_found_is_problem_json(client: AsyncClient) -> None:
     assert body["code"] == "NOT_FOUND"
     assert body["status"] == 404
     assert "request_id" in body
+
+
+async def test_an_unmatched_path_does_not_become_a_metrics_label(client: AsyncClient) -> None:
+    """`route` is `None` on a 404 — no matched path — so without a fixed
+    sentinel, the raw caller-supplied URL becomes a Prometheus label on
+    both a Counter and a Histogram: any unauthenticated caller could mint
+    unbounded label series (`GET /a1`, `/a2`, ...).
+    """
+    unmatched_path = "/this-path-does-not-exist-4f8a1c9e"
+    resp = await client.get(unmatched_path)
+    assert resp.status_code == 404
+
+    metrics = (await client.get("/metrics")).text
+    assert unmatched_path not in metrics
+    assert 'path="<unmatched>"' in metrics

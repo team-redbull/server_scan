@@ -420,7 +420,6 @@ go stale — treat its date as load-bearing.
 |---|---|
 | The Redfish collector does not reach 10k | ~25 round trips per BMC; supported range ~400–1000 hosts per CronJob, sharded beyond that. Stated in ADR-0016 rather than hidden. |
 | Intersight requires an on-prem appliance | A licensed Cisco product this platform does not control — a deployment dependency no other collector carries. |
-| `INVENTORY_CURSOR_SECRET` has an insecure default | Documented in a code comment; **not enforced at startup**. A production deployment that forgets it gets forgeable cursors. |
 | No rate limiting anywhere | |
 | Mongo HA/backup and Redis persistence | Documented as "the platform's problem"; nobody has actually stood either up. |
 | Manual dependency maintenance | Dependabot was deliberately removed (ADR-0013), making pin currency and CVE checks a standing quarterly chore. |

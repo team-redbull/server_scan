@@ -26,6 +26,8 @@ fact of the type instead of a runtime surprise.
 
 from __future__ import annotations
 
+from pydantic import SecretStr
+
 from app.config.settings import Settings
 from app.domain.enums import ManagerType
 from app.domain.ports.credentials import (
@@ -81,6 +83,36 @@ def _env_var(field: str) -> str:
     return f"INVENTORY_{field.upper()}"
 
 
+def _read(settings: Settings, name: str) -> str:
+    """
+    Read one settings field as a plain string, unwrapping `SecretStr`.
+
+    Every password/PEM field on `Settings` is a `SecretStr` so it never
+    prints its real value in a log line or a `repr()` of the settings
+    object; `str(a_secret_str)` deliberately returns the masked
+    `"**********"`, not the value — so a naive `str(getattr(...))` here
+    would sign every collector connection with the literal string
+    `"**********"` instead of the real password. This is the one place
+    that unwraps it, for the one place downstream (`ManagerConnection`,
+    `RedfishCredential`) that genuinely needs the raw string to build an
+    SDK handle or an HTTP request body.
+
+    Args:
+        settings (Settings): The settings instance to read from.
+        name (str): The field name (an endpoint, username, password, or
+            PEM field — this function works for both plain `str` and
+            `SecretStr` fields).
+
+    Returns:
+        str: The field's value, stripped of surrounding whitespace, or
+            `""` if the field is unset or absent.
+    """
+    value = getattr(settings, name, "")
+    if isinstance(value, SecretStr):
+        value = value.get_secret_value()
+    return str(value or "").strip()
+
+
 class EnvConnectionResolver:
     """Implements `app.domain.ports.credentials.CredentialResolver`."""
 
@@ -113,7 +145,7 @@ class EnvConnectionResolver:
 
         username_field, password_field = login_fields
         fields = (endpoint_field, username_field, password_field)
-        values = {name: str(getattr(self._settings, name, "") or "").strip() for name in fields}
+        values = {name: _read(self._settings, name) for name in fields}
 
         missing = [_env_var(name) for name, value in values.items() if not value]
         if missing:
@@ -147,8 +179,8 @@ def resolve_login(settings: Settings, manager_type: ManagerType) -> tuple[str, s
             f"{manager_type.value} has no connection configuration defined."
         )
     username_field, password_field = login_fields
-    username = str(getattr(settings, username_field, "") or "").strip()
-    password = str(getattr(settings, password_field, "") or "").strip()
+    username = _read(settings, username_field)
+    password = _read(settings, password_field)
 
     missing = [
         _env_var(field)

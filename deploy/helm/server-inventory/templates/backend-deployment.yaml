@@ -18,6 +18,7 @@ spec:
         app.kubernetes.io/component: backend
         app.kubernetes.io/part-of: server-inventory
     spec:
+      automountServiceAccountToken: false
       containers:
         - name: api
           image: "{{ .Values.backend.image.repository }}:{{ .Values.backend.image.tag }}"
@@ -39,6 +40,13 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.db.secretName }}
                   key: redis-uri
+            {{- if or .Values.backend.cursorSecret .Values.backend.existingCursorSecret }}
+            - name: INVENTORY_CURSOR_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.backend.existingCursorSecret | default (printf "%s-cursor-secret" .Release.Name) }}
+                  key: cursor-secret
+            {{- end }}
           envFrom:
             - configMapRef:
                 name: {{ .Release.Name }}-api-config
@@ -63,3 +71,5 @@ spec:
               drop: ["ALL"]
             readOnlyRootFilesystem: true
             runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault

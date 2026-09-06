@@ -33,12 +33,40 @@ _SENSITIVE_KEYS = frozenset(
 )
 
 
+def _scrub(value: Any) -> Any:
+    """
+    Recursively drop `_SENSITIVE_KEYS` from a value, at any nesting depth.
+
+    A bare top-level check catches `logger.info("x", password=...)` but
+    not a nested payload — an exception's own `args`, a vendor API's
+    error body, a dict passed through as one field's value — so a
+    credential inside any of those reached the log line unredacted. Lists
+    are walked too, since a collector's per-host error list is exactly
+    the shape a credential would arrive nested inside.
+
+    Args:
+        value (Any): The value to scrub — a dict, a list, or anything
+            else (returned unchanged).
+
+    Returns:
+        Any: `value` with every `_SENSITIVE_KEYS` key removed from any
+            dict found at any depth.
+    """
+    if isinstance(value, MutableMapping):
+        return {k: _scrub(v) for k, v in value.items() if k.lower() not in _SENSITIVE_KEYS}
+    if isinstance(value, list):
+        return [_scrub(item) for item in value]
+    return value
+
+
 def _drop_sensitive_keys(
     _logger: Any, _method_name: str, event_dict: MutableMapping[str, Any]
 ) -> MutableMapping[str, Any]:
     for key in list(event_dict):
         if key.lower() in _SENSITIVE_KEYS:
             del event_dict[key]
+        else:
+            event_dict[key] = _scrub(event_dict[key])
     return event_dict
 
 

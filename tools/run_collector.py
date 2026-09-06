@@ -117,7 +117,11 @@ def _openmanage_provider(
         # auth guard and every log line report in place of the secret.
         name="ome-bmc",
         username=settings.ome_bmc_username,
-        password=settings.ome_bmc_password,
+        # `ome_bmc_password` is a `SecretStr` — unwrapped here because
+        # `RedfishCredential.password` is a plain `str` consumed directly
+        # in an HTTP login body. `str(settings.ome_bmc_password)` would
+        # silently sign every iDRAC login with the literal `"**********"`.
+        password=settings.ome_bmc_password.get_secret_value(),
     )
 
     def redfish_for(targets: list[RedfishTarget]) -> ServerInventoryProvider:

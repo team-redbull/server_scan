@@ -4,8 +4,17 @@
 # Red Hat-supported inside an air-gapped OpenShift estate — and it already
 # runs unprivileged on port 8080 by default, matching this platform's
 # non-root requirement with no extra configuration.
+#
+# Both stages pinned to the 9.8 minor stream, not a frozen build id and
+# not a floating `latest` — matching the backend Containerfile's own
+# `ubi-minimal:9.8` pin, for the same reason: the stream keeps receiving
+# Red Hat's CVE fixes within 9.8 with no commit here, while an
+# air-gapped rebuild stays reproducible to a known OS minor. `latest`
+# gave every rebuild a different, unrecorded base with no way to tell
+# what changed. Bumping to the next minor is a manual step — check for a
+# newer 9.x periodically, same as the backend's.
 
-FROM registry.access.redhat.com/ubi9/nodejs-22:latest AS build
+FROM registry.access.redhat.com/ubi9/nodejs-22:9.8 AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
 # npm ci --omit=dev would skip the devDependencies the build itself needs
@@ -15,7 +24,7 @@ RUN npm ci
 COPY . .
 RUN npm run build
 
-FROM registry.access.redhat.com/ubi9/nginx-124:latest AS runtime
+FROM registry.access.redhat.com/ubi9/nginx-124:9.8 AS runtime
 COPY --from=build /app/dist /usr/share/nginx/html
 COPY nginx.conf /etc/nginx/nginx.conf
 
