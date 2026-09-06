@@ -366,6 +366,22 @@ cumulative is an artefact).
 
 ## Phase 6 — Frontend correctness
 
+**Not started — pick up here.** A prior session read the files below to
+plan this phase and made zero edits (confirmed clean working tree), so
+nothing here is half-done; this note only saves the next session the
+file-location lookup. Files already located and worth reading first:
+`src/features/sites/SitesOverviewPage.tsx` (C2, the "all healthy" branch
+at `:236`), `src/features/servers/NetworkTab.tsx` and `HardwareTab.tsx`
+(C3 — copy `HardwareTab`'s `Reported`/`Stat` treatment into `NetworkTab`,
+which has neither), `src/features/servers/ServerDetailPage.tsx` and
+`OverviewTab.tsx` (C14, the silent maintenance-write failure),
+`src/features/servers/hooks.ts` (C15, missing `invalidateQueries`),
+`src/features/inventory/InventoryPage.tsx` and `InventoryTable.tsx` (C16
+dead result-count header, the sticky-header defect, and the `<select>`
+accessible-name defect), `src/api/queryKeys.ts` and `src/api/servers.ts`
+(P3, the facets query-key mismatch), `src/main.tsx`/`src/router.tsx` (the
+missing error boundary).
+
 **Commit:** `fix: stop showing "all healthy" for a site whose servers were never evaluated`
 
 C2 (all-healthy), C3 (`NetworkTab` unread — copy `HardwareTab`'s
