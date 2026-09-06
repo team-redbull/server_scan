@@ -72,7 +72,7 @@ def _client(handle: StubHandle, *, timeout_seconds: float = 5.0) -> UcsCentralCl
         password="secret",
         timeout_seconds=timeout_seconds,
     )
-    client._handle = handle  # type: ignore[assignment]
+    client._handle = handle  # ty: ignore[invalid-assignment]
     return client
 
 

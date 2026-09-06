@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from typing import Any
 
 from app.domain.enums import InstallationType, Vendor
 from app.domain.models.network import BmcInfo, NetworkInfo
@@ -8,8 +9,8 @@ from app.domain.services.search_tokens import build_search_tokens
 NOW = datetime.now(UTC)
 
 
-def _server(**overrides: object) -> Server:
-    defaults: dict[str, object] = {
+def _server(**overrides: Any) -> Server:
+    defaults: dict[str, Any] = {
         "_id": "srv_test",
         "name": "ocp-dell-worker-001",
         # Required now that `Identity.vendor` has no default; overridable
@@ -19,7 +20,7 @@ def _server(**overrides: object) -> Server:
         "updated_at": NOW,
     }
     defaults.update(overrides)
-    return Server(**defaults)  # type: ignore[arg-type]
+    return Server(**defaults)
 
 
 def test_splits_hyphenated_name_into_tokens() -> None:

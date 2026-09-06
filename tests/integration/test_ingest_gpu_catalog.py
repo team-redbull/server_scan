@@ -12,10 +12,12 @@ construction, Mongo round-trip) to be useful.
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator
+from typing import Any
 
 import pytest
 
 from app.application.services.ingest import IngestService
+from app.domain.models.hardware import Gpu
 from app.domain.ports.provider import ProviderServer, ServerInventoryProvider
 from app.domain.value_objects.gpu_catalog import GpuCatalog
 from app.domain.value_objects.site import site_catalog
@@ -59,12 +61,12 @@ def _service(mongo: MongoClientHolder, *, gpu_catalog: GpuCatalog = _CATALOG) ->
     )
 
 
-def _with_one_gpu(**overrides: object) -> ProviderServer:
+def _with_one_gpu(**overrides: Any) -> ProviderServer:
     """A server whose collector reported one GPU by PID only, the shape
     UCS Manager's `graphicsCard` and Intersight's `graphics.Card` both
     produce — no memory size, since neither API reports one.
     """
-    base: dict[str, object] = {
+    base: dict[str, Any] = {
         "external_id": "ucsm://domain-1/sys/chassis-1/blade-1",
         "vendor": "cisco",
         "name": "ocp4-prod-tlv-infra-02",
@@ -72,10 +74,10 @@ def _with_one_gpu(**overrides: object) -> ProviderServer:
         "gpus": ({"vendor": "NVIDIA", "model": "P1001-200", "memory_bytes": None},),
     }
     base.update(overrides)
-    return ProviderServer(**base)  # type: ignore[arg-type]
+    return ProviderServer(**base)
 
 
-async def _stored_gpus(mongo: MongoClientHolder, serial_normalized: str) -> list[object]:
+async def _stored_gpus(mongo: MongoClientHolder, serial_normalized: str) -> list[Gpu]:
     repo = MongoServerRepository(mongo, cursor_secret=_CURSOR_SECRET)
     page = await repo.list_page(
         filters={"identity.serial_normalized": serial_normalized},

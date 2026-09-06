@@ -148,7 +148,7 @@ class TestComposite:
         assert evaluate_condition(cond, {"down": 0, "up": 1}, REGISTRY) is True
 
     def test_not_negates_child(self) -> None:
-        cond = Condition(**{"not": Condition(metric="down", operator="GTE", value=1)})
+        cond = Condition(not_=Condition(metric="down", operator="GTE", value=1))
         assert evaluate_condition(cond, {"down": 0}, REGISTRY) is True
         assert evaluate_condition(cond, {"down": 1}, REGISTRY) is False
 
@@ -200,7 +200,7 @@ def test_leaf_metrics_collects_all_referenced_metrics() -> None:
     cond = Condition(
         all_of=[
             Condition(metric="down", operator="GTE", value=1),
-            Condition(**{"not": Condition(metric="up", operator="EQ", value=0)}),
+            Condition(not_=Condition(metric="up", operator="EQ", value=0)),
         ]
     )
     assert set(leaf_metrics(cond)) == {"down", "up"}

@@ -81,7 +81,7 @@ is a real mistake, not a style preference.
    that failed CI on formatting alone even though lint and types were
    both clean. Run the real gate locally, on every touched file, before
    considering a change finished:
-   `uv run ruff check . && uv run ruff format --check . && uv run ty check backend/app tools`
+   `uv run ruff check . && uv run ruff format --check . && uv run ty check backend/app tools tests`
    (add `cd frontend && npm run lint && npm run typecheck && npm run build`
    for any frontend change). If `ruff format --check` fails, run
    `uv run ruff format .` and re-verify — don't hand-fix formatting.
@@ -99,7 +99,12 @@ is a real mistake, not a style preference.
      (`ANN001`–`ANN206`, not `ANN401`). ty has no `disallow_untyped_defs`
      and cannot grow one — it infers unannotated bodies rather than
      rejecting them — so this ratchet is the only thing keeping every
-     function annotated. It covers `tests/` too, which ty does not.
+     function annotated. It covers `tests/` too — and, since ADR-0023's
+     Phase 1 follow-up, so does `ty check` itself: the gate is now `ty
+     check backend/app tools tests`, not just `backend/app tools`. Before
+     that change `tests/` carried mypy-style `# type: ignore[...]`
+     comments that were suppressing nothing (the trap above), invisibly,
+     because nothing was checking that directory at all.
    - **ty is beta, on 0.0.x, and pinned exactly** for that reason.
      A new diagnostic after a version bump is ty changing, not a
      regression in this codebase. Trust `ty check` over ty's published
@@ -660,7 +665,7 @@ uv sync --all-groups && cp .env.example .env       # first time only
 uv run python -m tools.seed_inventory --count 1000 --seed 42
 
 uv run pytest -q                                   # backend: unit + integration + api
-uv run ruff check . && uv run ruff format --check . && uv run ty check backend/app tools
+uv run ruff check . && uv run ruff format --check . && uv run ty check backend/app tools tests
 
 cd frontend && npm run lint && npm run typecheck && npm run test -- --run && npm run build
 npm run test:e2e                                    # needs backend + frontend dev server running

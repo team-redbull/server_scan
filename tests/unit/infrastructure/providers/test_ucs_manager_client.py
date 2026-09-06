@@ -56,7 +56,7 @@ def _client(handle: StubHandle) -> UcsManagerClient:
     client = UcsManagerClient(
         endpoint="ucsm.lab.example.com", username="admin", password="secret", timeout_seconds=5.0
     )
-    client._handle = handle  # type: ignore[assignment]
+    client._handle = handle  # ty: ignore[invalid-assignment]
     return client
 
 

@@ -185,7 +185,13 @@ python-version = "3.12"
 # resolves an untyped dependency from its installed source rather than
 # giving up on it, which is how it caught a bad `ucsmsdk` call that was
 # invisible under those overrides. See ADR-0019.
-root = ["backend"]
+#
+# The repo root is also a root, not just `backend`, because `tests/`
+# imports `tools.run_collector` directly (`tools/` is a first-party
+# package that lives next to `backend/`, not under it) — without this,
+# `ty check tests` cannot resolve that import at all, rather than
+# type-checking it.
+root = ["backend", "."]
 
 [tool.ty.rules]
 # Only rules this project has actually reasoned about are written down; the

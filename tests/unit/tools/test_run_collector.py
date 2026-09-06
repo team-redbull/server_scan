@@ -240,8 +240,8 @@ class TestRunOneManager:
         ingest = FakeIngestService()
         result = await _run_one_manager(
             _manager(),
-            ingest_service=ingest,  # type: ignore[arg-type]
-            credential_resolver=FakeCredentialResolver(),  # type: ignore[arg-type]
+            ingest_service=ingest,  # ty: ignore[invalid-argument-type]
+            credential_resolver=FakeCredentialResolver(),
             timeout_seconds=5.0,
             settings=_central_settings(),
         )
@@ -278,8 +278,8 @@ class TestRunOneManager:
         monkeypatch.setattr(run_collector, "_build_provider", _factory(PartiallyFailedProvider()))
         result = await _run_one_manager(
             _manager(),
-            ingest_service=FakeIngestService(),  # type: ignore[arg-type]
-            credential_resolver=FakeCredentialResolver(),  # type: ignore[arg-type]
+            ingest_service=FakeIngestService(),  # ty: ignore[invalid-argument-type]
+            credential_resolver=FakeCredentialResolver(),
             timeout_seconds=5.0,
             settings=_central_settings(),
         )
@@ -295,8 +295,8 @@ class TestRunOneManager:
         manager = _manager()
         await _run_one_manager(
             manager,
-            ingest_service=ingest,  # type: ignore[arg-type]
-            credential_resolver=FakeCredentialResolver(),  # type: ignore[arg-type]
+            ingest_service=ingest,  # ty: ignore[invalid-argument-type]
+            credential_resolver=FakeCredentialResolver(),
             timeout_seconds=5.0,
             settings=_central_settings(),
         )
@@ -328,12 +328,12 @@ class TestRunOneManager:
             timeout_seconds=5.0,
             settings=_central_settings(),
         )
-        provider.health_check = _fail_if_called  # type: ignore[method-assign]
+        provider.health_check = _fail_if_called  # ty: ignore[invalid-assignment]
 
         await _run_one_manager(
             manager,
-            ingest_service=ingest,  # type: ignore[arg-type]
-            credential_resolver=resolver,  # type: ignore[arg-type]
+            ingest_service=ingest,  # ty: ignore[invalid-argument-type]
+            credential_resolver=resolver,
             timeout_seconds=5.0,
             settings=_central_settings(),
         )
@@ -350,8 +350,8 @@ class TestRunOneManager:
         """
         result = await _run_one_manager(
             _manager(),
-            ingest_service=FakeIngestService(error=error),  # type: ignore[arg-type]
-            credential_resolver=FakeCredentialResolver(),  # type: ignore[arg-type]
+            ingest_service=FakeIngestService(error=error),  # ty: ignore[invalid-argument-type]
+            credential_resolver=FakeCredentialResolver(),
             timeout_seconds=5.0,
         )
         assert result is None
@@ -364,8 +364,8 @@ class TestRunOneManager:
         """
         result = await _run_one_manager(
             _manager(type=ManagerType.UCS_MANAGER),
-            ingest_service=FakeIngestService(),  # type: ignore[arg-type]
-            credential_resolver=FakeCredentialResolver(),  # type: ignore[arg-type]
+            ingest_service=FakeIngestService(),  # ty: ignore[invalid-argument-type]
+            credential_resolver=FakeCredentialResolver(),
             timeout_seconds=5.0,
         )
         assert result is None
@@ -400,7 +400,7 @@ class TestDryRun:
 
         count = await _dry_run_one_manager(
             _manager(),
-            credential_resolver=FakeCredentialResolver(),  # type: ignore[arg-type]
+            credential_resolver=FakeCredentialResolver(),
             timeout_seconds=5.0,
             limit=None,
             provider_factory=_factory(FakeProvider()),
@@ -435,7 +435,7 @@ class TestDryRun:
 
         await _dry_run_one_manager(
             _manager(),
-            credential_resolver=FakeCredentialResolver(),  # type: ignore[arg-type]
+            credential_resolver=FakeCredentialResolver(),
             timeout_seconds=5.0,
             limit=None,
             provider_factory=_factory(FakeProvider()),
@@ -480,7 +480,7 @@ class TestDryRun:
 
         await _dry_run_one_manager(
             _manager(),
-            credential_resolver=FakeCredentialResolver(),  # type: ignore[arg-type]
+            credential_resolver=FakeCredentialResolver(),
             timeout_seconds=5.0,
             limit=None,
             provider_factory=_factory(FakeProvider()),
@@ -532,7 +532,7 @@ class TestDryRun:
 
         await _dry_run_one_manager(
             _manager(),
-            credential_resolver=FakeCredentialResolver(),  # type: ignore[arg-type]
+            credential_resolver=FakeCredentialResolver(),
             timeout_seconds=5.0,
             limit=None,
             provider_factory=_factory(FakeProvider()),
@@ -577,7 +577,7 @@ class TestDryRun:
 
         await _dry_run_one_manager(
             _manager(),
-            credential_resolver=FakeCredentialResolver(),  # type: ignore[arg-type]
+            credential_resolver=FakeCredentialResolver(),
             timeout_seconds=5.0,
             limit=None,
             provider_factory=_factory(FakeProvider()),
@@ -628,7 +628,7 @@ class TestDryRun:
 
         await _dry_run_one_manager(
             _manager(),
-            credential_resolver=FakeCredentialResolver(),  # type: ignore[arg-type]
+            credential_resolver=FakeCredentialResolver(),
             timeout_seconds=5.0,
             limit=None,
             provider_factory=_factory(FakeProvider()),
@@ -653,7 +653,7 @@ class TestDryRun:
 
         count = await _dry_run_one_manager(
             _manager(),
-            credential_resolver=FakeCredentialResolver(),  # type: ignore[arg-type]
+            credential_resolver=FakeCredentialResolver(),
             timeout_seconds=5.0,
             limit=3,
             provider_factory=_factory(FakeProvider()),
@@ -717,14 +717,14 @@ class TestNameFilter:
         "no filter" rather than an accidental empty inventory.
         """
         fake = self._Fake("srv-1", "srv-2")
-        assert _filtered(fake, "") is fake  # type: ignore[arg-type]
+        assert _filtered(fake, "") is fake
 
     async def test_health_check_still_reaches_the_real_provider(self) -> None:
         """The wrapper stands in for the provider everywhere, including
         the login `IngestService.ingest()` performs first.
         """
         fake = self._Fake()
-        await _filtered(fake, "^ocp").health_check()  # type: ignore[arg-type]
+        await _filtered(fake, "^ocp").health_check()
         assert fake.health_checked == 1
 
     async def test_dry_run_shows_only_what_a_real_run_would_write(self, capsys: Any) -> None:
@@ -734,7 +734,7 @@ class TestNameFilter:
         """
         count = await _dry_run_one_manager(
             _manager(),
-            credential_resolver=FakeCredentialResolver(),  # type: ignore[arg-type]
+            credential_resolver=FakeCredentialResolver(),
             timeout_seconds=5.0,
             limit=None,
             name_pattern="^ocp",

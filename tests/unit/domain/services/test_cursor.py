@@ -23,7 +23,7 @@ def _encode(**overrides: object) -> str:
         "secret": SECRET,
     }
     defaults.update(overrides)
-    return encode_cursor(**defaults)  # type: ignore[arg-type]
+    return encode_cursor(**defaults)
 
 
 def test_round_trip_string_sort_value() -> None:

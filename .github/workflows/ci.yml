@@ -64,6 +64,12 @@ jobs:
 
       # Matches the command CLAUDE.md documents — `tools/` is real
       # shipped code (the collector runner) and was previously unchecked.
+      # `tests/` joined it after ADR-0023's Phase 1 follow-up: those files
+      # sat outside every prior `ty check` invocation and carried mypy-style
+      # `# type: ignore[...]` comments ty silently does not honor (only a
+      # bare `# type: ignore` or its own `# ty: ignore[rule-name]` are), so
+      # a batch of real mismatches went unseen until this line started
+      # checking them.
       #
       # ty replaced mypy here (ADR-0019). It is a pinned dev dependency
       # installed by the `uv sync --all-groups` above, deliberately not a
@@ -73,7 +79,7 @@ jobs:
       # is expected to move diagnostics — read a new error after one as ty
       # changing, not as a regression in this codebase.
       - name: ty
-        run: uv run ty check backend/app tools
+        run: uv run ty check backend/app tools tests
 
   test:
     name: Test (pytest)

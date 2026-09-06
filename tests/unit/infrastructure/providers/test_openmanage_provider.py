@@ -204,7 +204,7 @@ def _provider(
         redfish_provider_factory=factory,
         name_pattern=name_pattern,
     )
-    provider._new_client = lambda: _FakeOmeClient(profiles, devices)  # type: ignore[method-assign]
+    provider._new_client = lambda: _FakeOmeClient(profiles, devices)  # ty: ignore[invalid-assignment]
     return provider, recorded
 
 
@@ -221,7 +221,7 @@ class TestDiscovery:
             servers=[_collected("10.0.0.1")],
         )
         client = _FakeOmeClient([], [])
-        provider._new_client = lambda: client  # type: ignore[method-assign]
+        provider._new_client = lambda: client  # ty: ignore[invalid-assignment]
         [server async for server in provider.collect()]
         assert client.paths == ["/ProfileService/Profiles", "/DeviceService/Devices"]
 

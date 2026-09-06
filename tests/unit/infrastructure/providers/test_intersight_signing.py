@@ -168,9 +168,9 @@ def test_the_signature_verifies_against_its_own_public_key(
     pem = pem_factory()
     headers = _sign(pem)
     public = load_private_key(pem).public_key()
-    signature = base64.b64decode(
-        re.search(r'signature="([^"]+)"', headers["Authorization"]).group(1)  # type: ignore[union-attr]
-    )
+    match = re.search(r'signature="([^"]+)"', headers["Authorization"])
+    assert match is not None
+    signature = base64.b64decode(match.group(1))
     message = _signing_string(headers)
 
     if isinstance(public, rsa.RSAPublicKey):

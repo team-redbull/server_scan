@@ -169,7 +169,7 @@ def _provider(client: FakeUcsClient) -> UcsManagerProvider:
     )
     # `_new_client` is the intended seam — the provider builds its own
     # client per call, so overriding the factory is all a test needs.
-    provider._new_client = lambda: client  # type: ignore[method-assign]
+    provider._new_client = lambda: client  # ty: ignore[invalid-assignment]
     return provider
 
 

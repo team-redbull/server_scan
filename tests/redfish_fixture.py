@@ -81,7 +81,7 @@ class RedfishFixture:
         fixture = self
 
         class Handler(BaseHTTPRequestHandler):
-            def log_message(self, *args: Any) -> None:
+            def log_message(self, format: str, *args: Any) -> None:
                 """Silence the default stderr access log."""
 
             def _authorized(self) -> bool:

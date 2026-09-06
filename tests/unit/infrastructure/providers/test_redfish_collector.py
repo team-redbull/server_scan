@@ -81,7 +81,7 @@ class _PlainClient(RedfishClient):
     ) -> None:
         super().__init__(target=target, **kwargs)
         host = connect_host or target.host
-        self._client.base_url = f"http://{host}:{target.port}"  # type: ignore[assignment]
+        self._client.base_url = f"http://{host}:{target.port}"
 
 
 def _provider(port: int, *targets: RedfishTarget, **overrides: Any) -> RedfishStandaloneProvider:
@@ -166,7 +166,9 @@ class TestHealthyHost:
         with RedfishFixture(resources=minimal_service()) as fixture:
             servers = await _collect(_provider(fixture.port))
 
-        [gpu] = servers[0].gpus or ()
+        gpus = servers[0].gpus
+        assert gpus is not None
+        gpu = gpus[0]
         assert gpu["memory_type"] == "HBM2"
         assert gpu["ecc_mode_enabled"] is True
         # 3 correctable-core + 1 correctable-other; 0 uncorrectable either way.
@@ -187,7 +189,9 @@ class TestHealthyHost:
         with RedfishFixture(resources=resources) as fixture:
             servers = await _collect(_provider(fixture.port))
 
-        [mapped_gpu] = servers[0].gpus or ()
+        gpus = servers[0].gpus
+        assert gpus is not None
+        mapped_gpu = gpus[0]
         assert mapped_gpu["correctable_error_count"] is None
         assert mapped_gpu["uncorrectable_error_count"] is None
         assert mapped_gpu["temperature_celsius"] is None
@@ -203,7 +207,9 @@ class TestHealthyHost:
         ) as fixture:
             servers = await _collect(_provider(fixture.port))
 
-        [gpu] = servers[0].gpus or ()
+        gpus = servers[0].gpus
+        assert gpus is not None
+        gpu = gpus[0]
         assert gpu["correctable_error_count"] is None
         # EnvironmentMetrics still read even though ProcessorMetrics 500'd.
         assert gpu["temperature_celsius"] == 62.5

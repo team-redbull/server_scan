@@ -626,6 +626,7 @@ class TestCpuAndStorage:
                 _storage_disk(dn="disk-2", size="1144641", device_type="SSD", disk_state="good"),
             ],
         )
+        assert result.storage_drives is not None
         assert len(result.storage_drives) == 2
         first = result.storage_drives[0]
         assert first["id"] == "disk-1"
@@ -666,6 +667,7 @@ class TestCpuAndStorage:
             cpu_units=[],
             disk_units=[_storage_disk(size="not-applicable")],
         )
+        assert result.storage_drives is not None
         assert result.storage_drives[0]["capacity_bytes"] is None
         assert result.storage_total_bytes == 0
 
@@ -695,6 +697,7 @@ class TestCpuAndStorage:
             cpu_units=[],
             disk_units=[_storage_disk(disk_state=disk_state)],
         )
+        assert result.storage_drives is not None
         assert result.storage_drives[0]["health"] == expected
 
     def test_unmapped_device_type_is_unknown_media(self) -> None:
@@ -711,6 +714,7 @@ class TestCpuAndStorage:
             cpu_units=[],
             disk_units=[_storage_disk(device_type="unspecified")],
         )
+        assert result.storage_drives is not None
         assert result.storage_drives[0]["media_type"] == "UNKNOWN"
 
 
@@ -738,6 +742,7 @@ class TestPsus:
             disk_units=[],
             psu_units=[_psu_mo()],
         )
+        assert result.psus is not None
         assert len(result.psus) == 1
         psu = result.psus[0]
         assert psu["id"] == "1"
@@ -762,6 +767,7 @@ class TestPsus:
             disk_units=[],
             psu_units=[_psu_mo(oper_state="inoperable", power="failed")],
         )
+        assert result.psus is not None
         psu = result.psus[0]
         assert psu["health"] == "DOWN"
         assert psu["oper_power"] == "failed"
@@ -822,6 +828,7 @@ class TestPsus:
             disk_units=[],
             psu_units=[_psu_mo(psu_wattage=None)],
         )
+        assert result.psus is not None
         assert result.psus[0]["capacity_watts"] is None
 
 
@@ -848,6 +855,7 @@ class TestGpus:
             disk_units=[],
             card_units=[_card_mo()],
         )
+        assert result.gpus is not None
         assert len(result.gpus) == 1
         gpu = result.gpus[0]
         assert gpu["vendor"] == "NVIDIA"
@@ -873,6 +881,7 @@ class TestGpus:
             disk_units=[],
             card_units=[_card_mo(oper_state="inoperable")],
         )
+        assert result.gpus is not None
         assert result.gpus[0]["health"] == "DOWN"
 
     def test_an_empty_gpu_slot_is_not_reported(self) -> None:
@@ -929,6 +938,7 @@ class TestGpus:
             disk_units=[],
             card_units=[_card_mo(temperature="not-applicable")],
         )
+        assert result.gpus is not None
         assert result.gpus[0]["temperature_celsius"] is None
 
     def test_missing_temperature_is_none(self) -> None:
@@ -946,6 +956,7 @@ class TestGpus:
             disk_units=[],
             card_units=[_card_mo(temperature=None)],
         )
+        assert result.gpus is not None
         assert result.gpus[0]["temperature_celsius"] is None
 
     def test_memory_and_power_telemetry_are_none_not_zero(self) -> None:
@@ -966,6 +977,7 @@ class TestGpus:
             disk_units=[],
             card_units=[_card_mo()],
         )
+        assert result.gpus is not None
         gpu = result.gpus[0]
         for field in (
             "memory_bytes",

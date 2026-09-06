@@ -71,5 +71,5 @@ def test_compiled_pattern_is_cached_across_calls() -> None:
     engine = RegexModuleEngine(max_pattern_length=200, match_timeout_seconds=0.25)
     engine.search(r"^ocp-.*", "ocp-a", ignore_case=True, multiline=False, dotall=False)
     engine.search(r"^ocp-.*", "ocp-b", ignore_case=True, multiline=False, dotall=False)
-    info = engine._compile.cache_info()  # type: ignore[attr-defined]
+    info = engine._compile.cache_info()
     assert info.hits >= 1

@@ -260,3 +260,25 @@ honour (it wants a bare `# type: ignore`), so bringing `tests/` under ty
 will surface a real batch of pre-existing suppressions that currently
 suppress nothing. Left for its own commit rather than folded in here —
 see `docs/notes/2026-09-handoff-phase1-followups.md`.
+
+**Done, in the very next commit on this branch.** `ty check backend/app
+tools tests` now passes clean (141 diagnostics surfaced and fixed, zero
+`# ty: ignore` added beyond a handful of genuinely-inherent test-double
+mismatches — a monkeypatched `_new_client`/`_handle` swapped for a stub of
+a different type, and one third-party private-attribute chain). Most
+diagnostics were real, fixable mismatches rather than suppression
+candidates: an override-builder helper typed its overrides `dict[str,
+object]` where `dict[str, Any]` was the honest signature; two
+`ProviderServer`/`Server` test builders had the same shape;
+`Condition`'s `not_` field (aliased to the reserved word `not`) was being
+set through an unnecessary `**{"not": ...}` spread when
+`populate_by_name=True` already allows the real field name;
+`capture_logs()` returns `list[EventDict]` (`MutableMapping[str, Any]`),
+which is not assignable to a `list[dict[str, Any]]`-typed parameter
+because `list` is invariant; and several `test_ucs_manager_mapping.py`
+assertions indexed an `Optional` tuple field without first asserting it
+non-`None`, which is exactly the "did we actually read this" distinction
+the rest of this codebase is careful about. `pyproject.toml`'s
+`[tool.ty.environment] root` gained `.` alongside `backend`, because
+`tests/` imports `tools.run_collector` directly and `tools/` is a
+first-party package next to `backend/`, not under it.

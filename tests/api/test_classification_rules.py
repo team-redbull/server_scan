@@ -212,5 +212,6 @@ async def test_no_endpoint_can_change_a_rule(
         assert resp.status_code == 405, f"{action} answered {resp.status_code}, not 405"
 
     # And nothing was changed by trying.
-    assert (await rule_repo.get_by_id(rule.id)) is not None
-    assert (await rule_repo.get_by_id(rule.id)).enabled is True
+    unchanged = await rule_repo.get_by_id(rule.id)
+    assert unchanged is not None
+    assert unchanged.enabled is True

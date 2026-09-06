@@ -353,7 +353,7 @@ def test_certificate_verification_is_unconditionally_disabled() -> None:
     to how `verify=False` is wired would actually fail it.
     """
     client = IntersightClient(endpoint="intersight.com", key_id="a/b/c", private_key_pem=_KEY)
-    pool = client._client._transport._pool  # type: ignore[attr-defined]
+    pool = client._client._transport._pool  # ty: ignore[unresolved-attribute]
     assert pool._ssl_context.verify_mode == ssl.CERT_NONE
 
 

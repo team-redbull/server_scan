@@ -13,7 +13,11 @@ from pathlib import Path
 
 import pytest
 
-from app.infrastructure.providers.redfish.targets import InventoryError, load_targets
+from app.infrastructure.providers.redfish.targets import (
+    InventoryError,
+    RedfishTarget,
+    load_targets,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -24,13 +28,19 @@ def _write(tmp_path: Path, name: str, body: str) -> Path:
     return path
 
 
-def _load(tmp_path: Path, inventory: str, credentials: str = "", **kwargs: object) -> object:
+def _load(
+    tmp_path: Path,
+    inventory: str,
+    credentials: str = "",
+    *,
+    fallback_login: tuple[str, str] | None = ("svc", "secret"),
+) -> list[RedfishTarget]:
     inv = _write(tmp_path, "inventory.toml", inventory)
     creds = _write(tmp_path, "credentials.toml", credentials) if credentials else None
     return load_targets(
         inventory_path=str(inv),
         credentials_path=str(creds) if creds else "",
-        fallback_login=kwargs.get("fallback_login", ("svc", "secret")),  # type: ignore[arg-type]
+        fallback_login=fallback_login,
     )
 
 
@@ -44,8 +54,8 @@ class TestCredentialResolution:
             '[[hosts]]\nhost = "10.0.0.1"\n',
             '[credentials."10.0.0.1"]\nusername = "u1"\npassword = "p1"\n',
         )
-        assert targets[0].credential.name == "10.0.0.1"  # type: ignore[index]
-        assert targets[0].credential.username == "u1"  # type: ignore[index]
+        assert targets[0].credential.name == "10.0.0.1"
+        assert targets[0].credential.username == "u1"
 
     def test_an_explicit_credential_wins_over_a_host_named_one(self, tmp_path: Path) -> None:
         targets = _load(
@@ -54,12 +64,12 @@ class TestCredentialResolution:
             '[credentials."10.0.0.1"]\nusername = "u1"\npassword = "p1"\n'
             '[credentials.shared]\nusername = "us"\npassword = "ps"\n',
         )
-        assert targets[0].credential.name == "shared"  # type: ignore[index]
+        assert targets[0].credential.name == "shared"
 
     def test_the_fleet_wide_login_is_the_last_resort(self, tmp_path: Path) -> None:
         targets = _load(tmp_path, '[[hosts]]\nhost = "10.0.0.1"\n')
-        assert targets[0].credential.name == "default"  # type: ignore[index]
-        assert targets[0].credential.username == "svc"  # type: ignore[index]
+        assert targets[0].credential.name == "default"
+        assert targets[0].credential.username == "svc"
 
     def test_a_host_with_no_resolvable_credential_names_what_to_set(self, tmp_path: Path) -> None:
         with pytest.raises(InventoryError) as exc:
@@ -146,10 +156,10 @@ class TestSettingsLadder:
             '[[hosts]]\nhost = "10.0.0.1"\ngroup = "lab"\n\n'
             '[[hosts]]\nhost = "10.0.0.2"\ngroup = "lab"\nport = 8443\n',
         )
-        assert targets[0].verify_tls is False  # type: ignore[index]
-        assert targets[0].verify_tls_reason == "factory certs"  # type: ignore[index]
-        assert targets[0].base_url == "https://10.0.0.1"  # type: ignore[index]
-        assert targets[1].base_url == "https://10.0.0.2:8443"  # type: ignore[index]
+        assert targets[0].verify_tls is False
+        assert targets[0].verify_tls_reason == "factory certs"
+        assert targets[0].base_url == "https://10.0.0.1"
+        assert targets[1].base_url == "https://10.0.0.2:8443"
 
     def test_a_directory_of_files_is_merged(self, tmp_path: Path) -> None:
         """What lets a large estate shard per site without a format
@@ -184,6 +194,6 @@ def test_a_credential_never_prints_its_password(tmp_path: Path) -> None:
         '[[hosts]]\nhost = "10.0.0.1"\n',
         '[credentials."10.0.0.1"]\nusername = "u1"\npassword = "hunter2"\n',
     )
-    rendered = repr(targets[0])  # type: ignore[index]
+    rendered = repr(targets[0])
     assert "hunter2" not in rendered
     assert "***" in rendered

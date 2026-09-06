@@ -18,6 +18,8 @@ read.
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 from app.config.settings import Settings
@@ -32,9 +34,9 @@ from app.infrastructure.credentials.env import (
 pytestmark = pytest.mark.unit
 
 
-def _settings(**overrides: str) -> Settings:
+def _settings(**overrides: Any) -> Settings:
     # `_env_file=None` so a developer's real .env can't leak into the test.
-    return Settings(_env_file=None, **overrides)  # type: ignore[arg-type]
+    return Settings(_env_file=None, **overrides)
 
 
 CENTRAL = {

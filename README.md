@@ -401,7 +401,7 @@ uv run python -m tools.seed_inventory --count 1000 --seed 42
 uv run pytest                     # backend: unit + integration + api tests
 uv run ruff check .               # lint
 uv run ruff format --check .      # formatting
-uv run ty check backend/app tools # type check
+uv run ty check backend/app tools tests # type check
 
 cd frontend
 npm run lint && npm run typecheck && npm run test -- --run && npm run build

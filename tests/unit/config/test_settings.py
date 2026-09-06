@@ -33,7 +33,7 @@ def _settings() -> Settings:
     Returns:
         Settings: Constructed from the process env, `.env` excluded.
     """
-    return Settings(_env_file=None)  # type: ignore[call-arg]
+    return Settings(_env_file=None)
 
 
 class TestGpuModels:

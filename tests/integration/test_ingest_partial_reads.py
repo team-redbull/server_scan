@@ -11,6 +11,7 @@ routinely rather than exceptionally.
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator
+from typing import Any
 
 import pytest
 
@@ -61,9 +62,9 @@ def _service(mongo: MongoClientHolder) -> IngestService:
     )
 
 
-def _fully_read(**overrides: object) -> ProviderServer:
+def _fully_read(**overrides: Any) -> ProviderServer:
     """A server whose collector read every field successfully."""
-    base: dict[str, object] = {
+    base: dict[str, Any] = {
         "external_id": "redfish://10.20.30.41/redfish/v1/Systems/1",
         "vendor": "dell",
         "name": "ocp4-prod-tlv-infra-01",
@@ -89,7 +90,7 @@ def _fully_read(**overrides: object) -> ProviderServer:
         "psus": ({"id": "1", "model": "PSU-750W", "serial": "PSU-1", "health": "DOWN"},),
     }
     base.update(overrides)
-    return ProviderServer(**base)  # type: ignore[arg-type]
+    return ProviderServer(**base)
 
 
 async def test_a_sub_resource_that_could_not_be_read_does_not_erase_stored_hardware(

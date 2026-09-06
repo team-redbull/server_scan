@@ -36,6 +36,7 @@ from typing import Any
 
 import pytest
 from structlog.testing import capture_logs
+from structlog.typing import EventDict
 
 from app.domain.enums import ManagerType
 from app.domain.models.common import AuditFields
@@ -197,7 +198,7 @@ async def _collect(provider: UcsCentralProvider) -> list[ProviderServer]:
 
 async def _collect_with_logs(
     provider: UcsCentralProvider,
-) -> tuple[list[ProviderServer], list[dict[str, Any]]]:
+) -> tuple[list[ProviderServer], list[EventDict]]:
     """Collect, capturing structlog events as dicts.
 
     `structlog.testing.capture_logs` rather than `capsys`/`caplog`: whether
@@ -211,7 +212,7 @@ async def _collect_with_logs(
     return servers, events
 
 
-def _events(events: list[dict[str, Any]], name: str) -> list[dict[str, Any]]:
+def _events(events: list[EventDict], name: str) -> list[EventDict]:
     return [e for e in events if e.get("event") == name]
 
 
