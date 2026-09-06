@@ -19,6 +19,7 @@ from tools.run_collector import (
     _build_provider,
     _dry_run_one_manager,
     _filtered,
+    _format_duration,
     _parse_args,
     _run,
     _run_one_manager,
@@ -97,6 +98,23 @@ class FakeCredentialResolver:
         return ManagerConnection(
             endpoint="ucsm.lab.example.com", username="admin", password="secret"
         )
+
+
+class TestFormatDuration:
+    """The 60s boundary is the whole logic: below it, seconds with one
+    decimal; at or above it, whole minutes and seconds."""
+
+    @pytest.mark.parametrize(
+        ("seconds", "expected"),
+        [
+            (0.4, "0.4s"),
+            (59.9, "59.9s"),
+            (60.0, "1m 0s"),
+            (133.4, "2m 13s"),
+        ],
+    )
+    def test_formats_at_and_around_the_minute_boundary(self, seconds: float, expected: str) -> None:
+        assert _format_duration(seconds) == expected
 
 
 class TestBuildProvider:
@@ -986,8 +1004,45 @@ class TestRunExitCodes:
         """
         code = await self._run_with(monkeypatch, None)
 
+        out = capsys.readouterr().out
         assert code == 1
-        assert "FAILED" in capsys.readouterr().out
+        assert "FAILED" in out
+        # `_run_one_manager` swallows its own exception into `None`, so the
+        # timer wraps its *call site* in `_run` rather than living inside
+        # it — this is what proves a run that fails still reports how long
+        # it took before dying, not just a complete one.
+        assert "took=" in out
+
+    async def test_a_complete_run_logs_run_complete_with_a_raw_float_duration(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`collector.run_complete` is the one event a future dashboard
+        reads run duration from, so it must carry a raw number — never the
+        formatted `took=` string — and say which path produced it.
+        """
+        logged: list[tuple[str, dict[str, Any]]] = []
+
+        class _RecordingLogger:
+            def info(self, event: str, **kwargs: Any) -> None:
+                logged.append((event, kwargs))
+
+            def warning(self, event: str, **kwargs: Any) -> None:
+                logged.append((event, kwargs))
+
+            def error(self, event: str, **kwargs: Any) -> None:
+                logged.append((event, kwargs))
+
+            def exception(self, event: str, **kwargs: Any) -> None:
+                logged.append((event, kwargs))
+
+        monkeypatch.setattr(run_collector, "logger", _RecordingLogger())
+        code = await self._run_with(monkeypatch, _outcome())
+
+        assert code == 0
+        run_complete = [kwargs for event, kwargs in logged if event == "collector.run_complete"]
+        assert len(run_complete) == 1
+        assert run_complete[0]["dry_run"] is False
+        assert isinstance(run_complete[0]["seconds"], float)
 
     async def test_missing_configuration_still_exits_two(
         self, monkeypatch: pytest.MonkeyPatch

@@ -513,6 +513,61 @@ suite's isolation guarantees first, not a blind flag flip.
 
 ---
 
+## Between Phase 8 and 9 — collector run duration (user request, not in the plan)
+
+**Shipped as `feat: log and print collector run duration as took=/collector.run_complete`.**
+Every collector except Intersight logged nothing about how long its run
+took, and Intersight's own `intersight.run_summary`'s `seconds=` field was
+a one-off nobody else followed. All five now share one convention:
+
+- `tools/run_collector.py` gets a `_format_duration(seconds: float) -> str`
+  helper next to `_format_capacity`/`_format_tb`/`_format_disk_size`:
+  `"42.3s"` below a minute, `"2m 13s"` at or above it.
+- Timed at the two places that actually drive a provider end to end —
+  `_dry_run_one_manager` (the whole function body, `try`/`finally`) and
+  the `_run_one_manager` call site inside `_run` (timed around the call,
+  not inside `_run_one_manager` itself, since that function already
+  swallows its own exception into `None` — the timer has to live where
+  the failure is *handled*, not where it's caught, or a failed run's
+  duration never reaches the print/log that reports it). Both `finally`
+  blocks, so a run that dies partway still reports how long it ran.
+  **Deliberately not** in `ServerInventoryProvider.collect()` (printing
+  from `app.domain` is a layering violation domain must not know about
+  stdout) and **not** a decorator (`collect()` is an async generator
+  whose `GeneratorExit`/`aclosing` behavior is load-bearing — see
+  `provider.py:224`, `run_collector.py:502` — and a decorator around an
+  async generator changes when that fires).
+- Appended to both existing stdout summary lines: real run gets
+  `took=2m 13s`, dry run gets `(took 42.3s)`. Verified manually end to
+  end (a slow fake provider + a fake failing `_run_one_manager`) — the
+  FAILED path was the one worth checking by hand, since it's easy to
+  wire the happy path and miss it:
+  `manager=ucs-central FAILED (see logs) took=0.0s`.
+- One structured event, `collector.run_complete`, from both paths, with
+  the duration as a raw `seconds` float (never the formatted string —
+  the point is to graph it) and `dry_run=True/False` so a dashboard can
+  filter dry runs out. `manager_type` is not logged explicitly; it
+  arrives via the contextvars binding `_run` already does, confirmed in
+  the manual run's actual log line (`manager_type=UCS_CENTRAL` present
+  with no code added for it).
+- `intersight.run_summary`'s `seconds=` deleted — exactly one duration
+  per run, from one place, in one format, now.
+- **No Prometheus metric.** A CronJob pod is never scraped (item 0 of
+  CLAUDE.md's not-done list — staleness detection is still open), so a
+  metric emitted from a collector process reaches nothing. The log field
+  is the export path; a future dashboard reads it from the log pipeline,
+  not from a metric with no scraper.
+
+Tests: `_format_duration` at 0.4s/59.9s/60s/133.4s (the 60s boundary is
+the whole logic); the real path logging `collector.run_complete` with a
+`float` `seconds` and `dry_run is False`; the existing total-failure exit
+test extended to assert `took=` is present in that path's output too, per
+above. No test asserts an exact duration. Full gate green: `ruff check`,
+`ruff format --check`, `ty check`, `pytest -q` (1080 passed, up from
+1075 — 5 new).
+
+---
+
 ## Phase 9 — Test gaps
 
 **Commit:** `test: skip cleanly instead of erroring when the dev stack is down`

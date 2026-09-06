@@ -596,7 +596,6 @@ class IntersightProvider(ServerInventoryProvider):
                 "intersight.run_summary",
                 collected=collected,
                 modes=list(self._modes),
-                seconds=round(time.monotonic() - started, 1),
                 unreadable_subresources=len(self._collection_errors),
             )
         finally:

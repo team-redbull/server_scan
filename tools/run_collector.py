@@ -22,6 +22,7 @@ import asyncio
 import contextlib
 import os
 import re
+import time
 from collections.abc import AsyncGenerator, Callable
 from dataclasses import dataclass
 
@@ -670,6 +671,22 @@ def _format_disk_size(capacity_bytes: int) -> str:
     return f"{capacity_bytes / 1000**3:.1f} GB"
 
 
+def _format_duration(seconds: float) -> str:
+    """
+    Render a run's wall-clock duration for the CLI summary line.
+
+    Args:
+        seconds (float): Elapsed time, in seconds.
+
+    Returns:
+        str: e.g. `"42.3s"` below a minute, `"2m 13s"` at or above it.
+    """
+    if seconds < 60:
+        return f"{seconds:.1f}s"
+    minutes, remainder = divmod(int(seconds), 60)
+    return f"{minutes}m {remainder}s"
+
+
 async def _dry_run_one_manager(
     manager: Manager,
     *,
@@ -680,179 +697,218 @@ async def _dry_run_one_manager(
     settings: Settings | None = None,
     provider_factory: Callable[..., ServerInventoryProvider] | None = None,
 ) -> int:
-    """Print what `manager` reports, writing nothing. Returns the count.
+    """
+    Print what `manager` reports, writing nothing.
 
     Deliberately bypasses `IngestService` entirely rather than passing it
     some no-op repository: the point of a dry run is to see what the
     *provider* produces, before classification, health evaluation and
     correlation have had a chance to reshape it. Anything printed here is
     the raw `ProviderServer` the collector would hand to the pipeline.
-    """
-    build = provider_factory or _build_provider
-    provider = _filtered(
-        build(
-            manager,
-            credential_resolver=credential_resolver,
-            timeout_seconds=timeout_seconds,
-            settings=settings,
-        ),
-        name_pattern,
-    )
-    sites = site_catalog(settings.sites if settings is not None else get_settings().sites)
-    gpus_catalog = gpu_catalog(
-        settings.gpu_models if settings is not None else get_settings().gpu_models
-    )
-    print(f"\n=== {manager.name} ({manager.type.value} @ {manager.endpoint}) ===")
-    if name_pattern:
-        print(f"    (only servers whose name matches {name_pattern!r} are shown/collected)")
 
+    Timed end to end (provider construction through the last server),
+    wrapped in `finally` so a run that fails partway still reports how
+    long it took before dying — see `collector.run_complete` below.
+
+    Args:
+        manager (Manager): The manager to collect from.
+        credential_resolver (CredentialResolver): Resolves the login or
+            API key for `manager`'s type.
+        timeout_seconds (float): Per-call timeout passed to the provider.
+        limit (int | None): Stop after this many servers; `None` for no
+            limit, `0` to report zero without connecting past construction.
+        name_pattern (str): Only report servers whose name matches this
+            regex; empty matches everything.
+        settings (Settings | None): Falls back to `get_settings()` when
+            omitted.
+        provider_factory (Callable[..., ServerInventoryProvider] | None):
+            Overrides `_build_provider`; a test seam.
+
+    Returns:
+        int: How many servers were reported.
+    """
+    start = time.monotonic()
     count = 0
-    if limit == 0:
-        # A plain `async for` always fetches its *next* item before the
-        # loop body ever runs, so checking the limit at the bottom of the
-        # loop (below) — which is what stops this from pulling one server
-        # past every other `--limit N` — cannot also cover `N == 0`
-        # without ever entering the loop, and therefore the provider,
-        # at all. Handled here instead of inside it.
-        print("  … stopped at --limit 0")
-        print(f"\n{manager.name}: {count} server(s) reported. Nothing was written.")
+    try:
+        build = provider_factory or _build_provider
+        provider = _filtered(
+            build(
+                manager,
+                credential_resolver=credential_resolver,
+                timeout_seconds=timeout_seconds,
+                settings=settings,
+            ),
+            name_pattern,
+        )
+        sites = site_catalog(settings.sites if settings is not None else get_settings().sites)
+        gpus_catalog = gpu_catalog(
+            settings.gpu_models if settings is not None else get_settings().gpu_models
+        )
+        print(f"\n=== {manager.name} ({manager.type.value} @ {manager.endpoint}) ===")
+        if name_pattern:
+            print(f"    (only servers whose name matches {name_pattern!r} are shown/collected)")
+
+        if limit == 0:
+            # A plain `async for` always fetches its *next* item before the
+            # loop body ever runs, so checking the limit at the bottom of the
+            # loop (below) — which is what stops this from pulling one server
+            # past every other `--limit N` — cannot also cover `N == 0`
+            # without ever entering the loop, and therefore the provider,
+            # at all. Handled here instead of inside it.
+            print("  … stopped at --limit 0")
+            return count
+        async with contextlib.aclosing(provider.collect()) as servers:
+            async for ps in servers:
+                count += 1
+                site = parse_site_code(ps.name, sites) or parse_site_code(ps.profile_dn, sites)
+                memory = (
+                    f"{ps.memory_total_bytes / 1024**3:.1f} GiB"
+                    if ps.memory_total_bytes is not None
+                    else _UNREAD
+                )
+                storage = (
+                    _format_tb(ps.storage_total_bytes)
+                    if ps.storage_total_bytes is not None
+                    else _UNREAD
+                )
+                drive_count = _or_unread(
+                    None if ps.storage_drives is None else len(ps.storage_drives)
+                )
+                macs = _UNREAD if ps.nic_macs is None else (", ".join(ps.nic_macs) or "—")
+                # Service profiles and fabric attachments are UCS concepts. A
+                # provider with neither (OpenManage, Redfish) printed "— " and "0"
+                # on every server, which reads as missing data rather than as a
+                # field its vendor has no equivalent for.
+                profile = f"\n     profile     : {ps.profile_dn}" if ps.profile_dn else ""
+                attachments = (
+                    f"\n     attachments : {len(ps.attachments)}" if ps.attachments else ""
+                )
+                print(
+                    f"\n[{count}] {ps.name}"
+                    f"\n     external_id : {ps.external_id}"
+                    f"\n     site (from name): {site or '— none in name'}"
+                    f"\n     vendor/model: {ps.vendor} / {ps.model}"
+                    f"\n     serial/uuid : {ps.serial} / {_or_unread(ps.system_uuid)}"
+                    f"\n     cpu         : {_or_unread(ps.cpu_sockets)} sockets,"
+                    f" {_or_unread(ps.cpu_cores)} cores,"
+                    f" {_or_unread(ps.cpu_threads)} threads ({ps.cpu_model or 'model unknown'})"
+                    f"\n     memory      : {memory}"
+                    f"\n     storage     : {storage} total across {drive_count} drive(s)"
+                    f"\n     bmc         : {_bmc_host(ps.bmc_address_raw)}"
+                    f" (mac {ps.bmc_mac or '—'})"
+                    f"{profile}"
+                    f"\n     profile tmpl: {ps.profile_template_name or '—'}"
+                    f" [{ps.profile_template_external_id or '—'}]"
+                    f"\n     nic macs    : {macs}"
+                    f"{attachments}"
+                    f"\n     gpus        : {_or_unread(None if ps.gpus is None else len(ps.gpus))}"
+                    f"\n     psus        : {_or_unread(None if ps.psus is None else len(ps.psus))}"
+                )
+                for a in ps.attachments:
+                    if a.interface_kind == "PHYSICAL":
+                        # Fabric-interconnect identity only makes sense on a
+                        # cabled physical uplink. A vNIC (`HostEthInterface` on
+                        # Intersight, `vnic` on UCS Manager/Central) structurally
+                        # never carries a fabric relationship at all — printing
+                        # "fabric None / FI model/serial=—/—" on every vNIC line
+                        # reads as missing data rather than as a field its kind
+                        # has no equivalent for. This is also why a standalone
+                        # server (which contributes zero PHYSICAL attachments —
+                        # nothing to cable to a Fabric Interconnect it doesn't
+                        # have) never shows an FI-shaped line at all: the
+                        # attachment fabric() already skips an uncabled physical
+                        # interface, so every one of its attachments is VNIC.
+                        # See docs/cisco-collectors.md, "PHYSICAL versus VNIC".
+                        print(
+                            f"        [{a.interface_kind:8}] fabric {a.fabric}"
+                            f"  if={a.server_interface}"
+                            f"  admin={a.admin_state} oper={a.oper_state}"
+                            f"  peer={a.fabric_port or '—'}"
+                            f"  FI model/serial={a.fabric_model or '—'}/{a.fabric_serial or '—'}"
+                        )
+                    else:
+                        print(
+                            f"        [{a.interface_kind:8}] if={a.server_interface}"
+                            f"  admin={a.admin_state} oper={a.oper_state}"
+                        )
+                # Per-NIC detail for the providers that report it — Redfish, and so
+                # the Dell collector that delegates to it. The flat `nic macs` line
+                # above is all a provider without it has.
+                for nic in ps.nics:
+                    speed = f"  {nic.speed_mbps}mbps" if nic.speed_mbps else ""
+                    location = f"  [{nic.location}]" if nic.location else ""
+                    print(
+                        f"        nic {nic.name}{location}  mac={nic.mac or '—'}"
+                        f"  {nic.link_state}{speed}"
+                    )
+                for drive in ps.storage_drives or ():
+                    capacity_bytes = drive.get("capacity_bytes")
+                    size = (
+                        _format_disk_size(capacity_bytes)
+                        if isinstance(capacity_bytes, int)
+                        else "size unknown"
+                    )
+                    print(
+                        f"        disk {drive.get('id')}  {drive.get('model') or '—'}"
+                        f"  serial={drive.get('serial') or '—'}"
+                        f"  {drive.get('media_type')}  {size}  health={drive.get('health')}"
+                    )
+                for gpu in ps.gpus or ():
+                    gpu = gpus_catalog.enrich(gpu)
+                    gpu_memory = gpu.get("memory_bytes")
+                    gpu_size = (
+                        _format_capacity(gpu_memory)
+                        if isinstance(gpu_memory, int)
+                        else "VRAM unknown"
+                    )
+                    temp = gpu.get("temperature_celsius")
+                    power = gpu.get("power_watts")
+                    print(
+                        f"        gpu {gpu.get('model') or '—'}  vendor={gpu.get('vendor') or '—'}"
+                        f"  serial={gpu.get('serial') or '—'}"
+                        f"  {gpu_size} ({gpu.get('memory_type') or 'memory type unknown'})"
+                        f"  ecc={gpu.get('ecc_mode_enabled')}"
+                        f"  errors={gpu.get('correctable_error_count')}c/"
+                        f"{gpu.get('uncorrectable_error_count')}u"
+                        f"  temp={f'{temp:.0f}°C' if isinstance(temp, (int, float)) else '—'}"
+                        f"  power={f'{power:.0f}W' if isinstance(power, (int, float)) else '—'}"
+                        f"  health={gpu.get('health')}"
+                    )
+                for psu in ps.psus or ():
+                    capacity = psu.get("capacity_watts")
+                    # Redfish only, and there for the same reason `power=`
+                    # below is: the raw `Status.Health`/`Status.State`
+                    # pair, so a live run can settle whether mapping
+                    # Warning to UNKNOWN rather than DOWN is right before
+                    # that becomes a CRITICAL finding. Empty for every
+                    # provider that doesn't report it.
+                    redfish_status = psu.get("redfish_status")
+                    status = f"  status={redfish_status}" if redfish_status else ""
+                    print(
+                        f"        psu {psu.get('id')}  {psu.get('model') or '—'}"
+                        f"  serial={psu.get('serial') or '—'}"
+                        f"  {f'{capacity}W' if isinstance(capacity, int) else 'wattage unknown'}"
+                        f"  health={psu.get('health')}"
+                        # UCS Manager only: the equipmentPsu MO's separate `power`
+                        # field, collected alongside oper_state so a live run can
+                        # show which one tracks a real PSU failure more reliably
+                        # before this settles on one (docs/cisco-collectors.md,
+                        # "Power supplies (PSUs)"). Always "—" for a provider that
+                        # doesn't report it, Intersight included.
+                        f"  power={psu.get('oper_power') or '—'}"
+                        f"{status}"
+                    )
+                if limit is not None and count >= limit:
+                    print(f"  … stopped at --limit {limit}")
+                    break
         return count
-    async with contextlib.aclosing(provider.collect()) as servers:
-        async for ps in servers:
-            count += 1
-            site = parse_site_code(ps.name, sites) or parse_site_code(ps.profile_dn, sites)
-            memory = (
-                f"{ps.memory_total_bytes / 1024**3:.1f} GiB"
-                if ps.memory_total_bytes is not None
-                else _UNREAD
-            )
-            storage = (
-                _format_tb(ps.storage_total_bytes)
-                if ps.storage_total_bytes is not None
-                else _UNREAD
-            )
-            drive_count = _or_unread(None if ps.storage_drives is None else len(ps.storage_drives))
-            macs = _UNREAD if ps.nic_macs is None else (", ".join(ps.nic_macs) or "—")
-            # Service profiles and fabric attachments are UCS concepts. A
-            # provider with neither (OpenManage, Redfish) printed "— " and "0"
-            # on every server, which reads as missing data rather than as a
-            # field its vendor has no equivalent for.
-            profile = f"\n     profile     : {ps.profile_dn}" if ps.profile_dn else ""
-            attachments = f"\n     attachments : {len(ps.attachments)}" if ps.attachments else ""
-            print(
-                f"\n[{count}] {ps.name}"
-                f"\n     external_id : {ps.external_id}"
-                f"\n     site (from name): {site or '— none in name'}"
-                f"\n     vendor/model: {ps.vendor} / {ps.model}"
-                f"\n     serial/uuid : {ps.serial} / {_or_unread(ps.system_uuid)}"
-                f"\n     cpu         : {_or_unread(ps.cpu_sockets)} sockets,"
-                f" {_or_unread(ps.cpu_cores)} cores,"
-                f" {_or_unread(ps.cpu_threads)} threads ({ps.cpu_model or 'model unknown'})"
-                f"\n     memory      : {memory}"
-                f"\n     storage     : {storage} total across {drive_count} drive(s)"
-                f"\n     bmc         : {_bmc_host(ps.bmc_address_raw)} (mac {ps.bmc_mac or '—'})"
-                f"{profile}"
-                f"\n     profile tmpl: {ps.profile_template_name or '—'}"
-                f" [{ps.profile_template_external_id or '—'}]"
-                f"\n     nic macs    : {macs}"
-                f"{attachments}"
-                f"\n     gpus        : {_or_unread(None if ps.gpus is None else len(ps.gpus))}"
-                f"\n     psus        : {_or_unread(None if ps.psus is None else len(ps.psus))}"
-            )
-            for a in ps.attachments:
-                if a.interface_kind == "PHYSICAL":
-                    # Fabric-interconnect identity only makes sense on a
-                    # cabled physical uplink. A vNIC (`HostEthInterface` on
-                    # Intersight, `vnic` on UCS Manager/Central) structurally
-                    # never carries a fabric relationship at all — printing
-                    # "fabric None / FI model/serial=—/—" on every vNIC line
-                    # reads as missing data rather than as a field its kind
-                    # has no equivalent for. This is also why a standalone
-                    # server (which contributes zero PHYSICAL attachments —
-                    # nothing to cable to a Fabric Interconnect it doesn't
-                    # have) never shows an FI-shaped line at all: the
-                    # attachment fabric() already skips an uncabled physical
-                    # interface, so every one of its attachments is VNIC.
-                    # See docs/cisco-collectors.md, "PHYSICAL versus VNIC".
-                    print(
-                        f"        [{a.interface_kind:8}] fabric {a.fabric}  if={a.server_interface}"
-                        f"  admin={a.admin_state} oper={a.oper_state}"
-                        f"  peer={a.fabric_port or '—'}"
-                        f"  FI model/serial={a.fabric_model or '—'}/{a.fabric_serial or '—'}"
-                    )
-                else:
-                    print(
-                        f"        [{a.interface_kind:8}] if={a.server_interface}"
-                        f"  admin={a.admin_state} oper={a.oper_state}"
-                    )
-            # Per-NIC detail for the providers that report it — Redfish, and so
-            # the Dell collector that delegates to it. The flat `nic macs` line
-            # above is all a provider without it has.
-            for nic in ps.nics:
-                speed = f"  {nic.speed_mbps}mbps" if nic.speed_mbps else ""
-                location = f"  [{nic.location}]" if nic.location else ""
-                print(
-                    f"        nic {nic.name}{location}  mac={nic.mac or '—'}"
-                    f"  {nic.link_state}{speed}"
-                )
-            for drive in ps.storage_drives or ():
-                capacity_bytes = drive.get("capacity_bytes")
-                size = (
-                    _format_disk_size(capacity_bytes)
-                    if isinstance(capacity_bytes, int)
-                    else "size unknown"
-                )
-                print(
-                    f"        disk {drive.get('id')}  {drive.get('model') or '—'}"
-                    f"  serial={drive.get('serial') or '—'}"
-                    f"  {drive.get('media_type')}  {size}  health={drive.get('health')}"
-                )
-            for gpu in ps.gpus or ():
-                gpu = gpus_catalog.enrich(gpu)
-                gpu_memory = gpu.get("memory_bytes")
-                gpu_size = (
-                    _format_capacity(gpu_memory) if isinstance(gpu_memory, int) else "VRAM unknown"
-                )
-                temp = gpu.get("temperature_celsius")
-                power = gpu.get("power_watts")
-                print(
-                    f"        gpu {gpu.get('model') or '—'}  vendor={gpu.get('vendor') or '—'}"
-                    f"  serial={gpu.get('serial') or '—'}"
-                    f"  {gpu_size} ({gpu.get('memory_type') or 'memory type unknown'})"
-                    f"  ecc={gpu.get('ecc_mode_enabled')}"
-                    f"  errors={gpu.get('correctable_error_count')}c/"
-                    f"{gpu.get('uncorrectable_error_count')}u"
-                    f"  temp={f'{temp:.0f}°C' if isinstance(temp, (int, float)) else '—'}"
-                    f"  power={f'{power:.0f}W' if isinstance(power, (int, float)) else '—'}"
-                    f"  health={gpu.get('health')}"
-                )
-            for psu in ps.psus or ():
-                capacity = psu.get("capacity_watts")
-                print(
-                    f"        psu {psu.get('id')}  {psu.get('model') or '—'}"
-                    f"  serial={psu.get('serial') or '—'}"
-                    f"  {f'{capacity}W' if isinstance(capacity, int) else 'wattage unknown'}"
-                    f"  health={psu.get('health')}"
-                    # UCS Manager only: the equipmentPsu MO's separate `power`
-                    # field, collected alongside oper_state so a live run can
-                    # show which one tracks a real PSU failure more reliably
-                    # before this settles on one (docs/cisco-collectors.md,
-                    # "Power supplies (PSUs)"). Always "—" for a provider that
-                    # doesn't report it, Intersight included.
-                    f"  power={psu.get('oper_power') or '—'}"
-                    # Redfish only, and there for the same reason: the raw
-                    # `Status.Health`/`Status.State` pair, so a live run can
-                    # settle whether mapping Warning to UNKNOWN rather than
-                    # DOWN is right before that becomes a CRITICAL finding.
-                    # Absent for every provider that doesn't report it, so a
-                    # Cisco PSU line is unchanged.
-                    f"{f'  status={psu["redfish_status"]}' if psu.get('redfish_status') else ''}"
-                )
-            if limit is not None and count >= limit:
-                print(f"  … stopped at --limit {limit}")
-                break
-    print(f"\n{manager.name}: {count} server(s) reported. Nothing was written.")
-    return count
+    finally:
+        duration = time.monotonic() - start
+        print(
+            f"\n{manager.name}: {count} server(s) reported. Nothing was written. "
+            f"(took {_format_duration(duration)})"
+        )
+        logger.info("collector.run_complete", dry_run=True, fetched=count, seconds=duration)
 
 
 @dataclass(frozen=True, slots=True)
@@ -915,6 +971,20 @@ async def _run_one_manager(
 async def _run(
     *, manager_type: ManagerType, dry_run: bool = False, limit: int | None = None
 ) -> int:
+    """
+    Run one manager type's collector end to end, real or `--dry-run`.
+
+    Args:
+        manager_type (ManagerType): Which collector to run.
+        dry_run (bool): Print what the provider reports without writing
+            anything, when `True`.
+        limit (int | None): Stop after this many servers, or `None` for
+            no limit.
+
+    Returns:
+        int: Exit code — 0 complete, 1 total failure, 2 not configured,
+            3 partial (some servers written, but not the whole fleet).
+    """
     settings = get_settings()
     configure_logging(
         level=settings.log_level,
@@ -1014,22 +1084,47 @@ async def _run(
                 ),
                 audit=AuditService(repo=MongoAuditEventRepository(mongo)),
             )
-            outcome = await _run_one_manager(
-                manager,
-                ingest_service=ingest_service,
-                credential_resolver=credential_resolver,
-                timeout_seconds=settings.collector_connect_timeout_seconds,
-                name_pattern=name_pattern,
-                settings=settings,
-            )
+            # Timed here, around the call, rather than inside
+            # `_run_one_manager` itself: that function already swallows a
+            # failed run into `None` (so the CronJob doesn't die on one
+            # bad manager), and `finally` below is what makes a run that
+            # fails partway still report how long it took before dying —
+            # exactly the run most worth seeing the duration of.
+            run_start = time.monotonic()
+            try:
+                outcome = await _run_one_manager(
+                    manager,
+                    ingest_service=ingest_service,
+                    credential_resolver=credential_resolver,
+                    timeout_seconds=settings.collector_connect_timeout_seconds,
+                    name_pattern=name_pattern,
+                    settings=settings,
+                )
+            finally:
+                run_duration = time.monotonic() - run_start
+
             if outcome is None:
-                print(f"manager={manager.name} FAILED (see logs)")
+                print(
+                    f"manager={manager.name} FAILED (see logs)"
+                    f" took={_format_duration(run_duration)}"
+                )
+                logger.info("collector.run_complete", dry_run=False, seconds=run_duration)
                 return 1
 
             summary = outcome.summary
             print(
                 f"manager={manager.name} fetched={summary.fetched} "
-                f"created={summary.created} updated={summary.updated} errors={summary.errors}"
+                f"created={summary.created} updated={summary.updated} errors={summary.errors} "
+                f"took={_format_duration(run_duration)}"
+            )
+            logger.info(
+                "collector.run_complete",
+                dry_run=False,
+                fetched=summary.fetched,
+                created=summary.created,
+                updated=summary.updated,
+                errors=summary.errors,
+                seconds=run_duration,
             )
             if outcome.collection_errors or summary.errors:
                 # Exit 3, not 0: some servers were written, but this run did
