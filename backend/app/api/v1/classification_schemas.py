@@ -38,39 +38,6 @@ class RuleStatsSchema(BaseModel):
     quarantined: bool
 
 
-class ClassificationRuleCreate(BaseModel):
-    name: str
-    description: str = ""
-    enabled: bool = True
-    installation_type: InstallationType
-    scope: RuleScopeSchema = Field(default_factory=RuleScopeSchema)
-    field: str
-    pattern: str
-    flags: RuleFlagsSchema = Field(default_factory=RuleFlagsSchema)
-    source: str
-    priority: int
-    order: int = 0
-
-
-class ClassificationRuleUpdate(BaseModel):
-    """Every field optional — a PATCH sends only what it wants to change.
-    `system`/`stats`/`revision`/timestamps are never caller-writable, same
-    as on create.
-    """
-
-    name: str | None = None
-    description: str | None = None
-    enabled: bool | None = None
-    installation_type: InstallationType | None = None
-    scope: RuleScopeSchema | None = None
-    field: str | None = None
-    pattern: str | None = None
-    flags: RuleFlagsSchema | None = None
-    source: str | None = None
-    priority: int | None = None
-    order: int | None = None
-
-
 class ClassificationRuleResponse(BaseModel):
     id: str
     name: str

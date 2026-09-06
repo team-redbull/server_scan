@@ -1,13 +1,15 @@
-"""`/api/v1/classification-rules` CRUD + preview.
+"""`/api/v1/classification-rules`: read-only listing and lookup.
 
 No cursor pagination on `GET /classification-rules` — same rationale as
 `MongoClassificationRuleRepository`'s docstring: this is a small,
 human-curated collection (dozens to low hundreds of rules), not the
 10k+-row `servers` collection `app.api.v1.servers` paginates.
 
-Thin handlers throughout: cross-field validation lives in
-`app.application.services.classification_service.validate_rule_write`,
-never duplicated here.
+Rules are read-only (`27b20a8`, `f9ab059`): they ship with the platform
+and are seeded/validated at startup
+(`app.application.services.bootstrap`, via
+`app.application.services.classification_service.validate_rule_write`),
+never created or edited through this router.
 """
 
 from __future__ import annotations
@@ -19,20 +21,9 @@ from fastapi import APIRouter, Depends, Query
 from app.api.v1.classification_schemas import (
     ClassificationRuleListResponse,
     ClassificationRuleResponse,
-    RuleFlagsSchema,
-    RuleScopeSchema,
 )
-from app.application.services.audit_service import AuditService
-from app.application.services.classification_service import (
-    ClassificationService,
-)
-from app.config import Settings, get_settings
 from app.dependencies import get_mongo_holder
-from app.domain.models.classification_rule import RuleFlags, RuleScope
-from app.domain.ports.regex_engine import RegexEngine
-from app.domain.services.regex_engine import RegexModuleEngine
 from app.errors import NotFoundError
-from app.infrastructure.mongodb.audit_event_repository import MongoAuditEventRepository
 from app.infrastructure.mongodb.classification_rule_repository import (
     MongoClassificationRuleRepository,
 )
@@ -45,33 +36,6 @@ def _rule_repo(
     mongo: Annotated[MongoClientHolder, Depends(get_mongo_holder)],
 ) -> MongoClassificationRuleRepository:
     return MongoClassificationRuleRepository(mongo)
-
-
-def _regex_engine(settings: Annotated[Settings, Depends(get_settings)]) -> RegexEngine:
-    return RegexModuleEngine(
-        max_pattern_length=settings.regex_max_pattern_length,
-        match_timeout_seconds=settings.regex_match_timeout_seconds,
-    )
-
-
-def _classification_service(
-    mongo: Annotated[MongoClientHolder, Depends(get_mongo_holder)],
-    rule_repo: Annotated[MongoClassificationRuleRepository, Depends(_rule_repo)],
-    engine: Annotated[RegexEngine, Depends(_regex_engine)],
-) -> ClassificationService:
-    return ClassificationService(rule_repo=rule_repo, engine=engine, mongo=mongo)
-
-
-def _scope_from_schema(scope: RuleScopeSchema) -> RuleScope:
-    return RuleScope(vendor=scope.vendor, manager_type=scope.manager_type, site_id=scope.site_id)
-
-
-def _flags_from_schema(flags: RuleFlagsSchema) -> RuleFlags:
-    return RuleFlags(ignore_case=flags.ignore_case, multiline=flags.multiline, dotall=flags.dotall)
-
-
-def _audit_service(mongo: Annotated[MongoClientHolder, Depends(get_mongo_holder)]) -> AuditService:
-    return AuditService(repo=MongoAuditEventRepository(mongo))
 
 
 @router.get("", response_model=ClassificationRuleListResponse)

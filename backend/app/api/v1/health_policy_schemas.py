@@ -18,62 +18,12 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from app.domain.enums import HealthSeverity
 from app.domain.models.health_policy import EvidenceField, HealthPolicy, PolicyScope, PolicyStats
 from app.domain.services.health.conditions import Condition
 from app.domain.services.health.metrics import MetricType
-
-
-class HealthPolicyCreate(BaseModel):
-    """`system` is deliberately absent — system-default policies are
-    seeded (`app.domain.services.health.health_policy_defaults.
-    default_system_policies`), never created through this endpoint, so a
-    caller can never mint a policy that looks system-owned. `policy_key`
-    is optional: when omitted, the API layer defaults it to the new
-    policy's own generated id (see `HealthPolicy`'s module docstring on
-    why that's the correct default for "just add a policy").
-    """
-
-    name: str
-    description: str = ""
-    enabled: bool = True
-    policy_key: str | None = None
-    mode: str = "EVALUATE"
-    category: str
-    severity: HealthSeverity
-    condition: Condition
-    evidence: list[EvidenceField] = Field(default_factory=list)
-    message_template: str
-    scope: PolicyScope = Field(default_factory=PolicyScope)
-    source: str
-    priority: int
-    order: int = 0
-
-
-class HealthPolicyUpdate(BaseModel):
-    """Partial update — every field optional, only fields the caller sets
-    are applied (`.model_dump(exclude_unset=True)` in the route). System
-    policies are further restricted to `enabled`-only at the route/service
-    layer (`app.application.services.health_policy_service.
-    validate_system_field_lock`), not by this schema's shape.
-    """
-
-    name: str | None = None
-    description: str | None = None
-    enabled: bool | None = None
-    policy_key: str | None = None
-    mode: str | None = None
-    category: str | None = None
-    severity: HealthSeverity | None = None
-    condition: Condition | None = None
-    evidence: list[EvidenceField] | None = None
-    message_template: str | None = None
-    scope: PolicyScope | None = None
-    source: str | None = None
-    priority: int | None = None
-    order: int | None = None
 
 
 class HealthPolicyResponse(BaseModel):
@@ -130,47 +80,6 @@ class HealthPolicyResponse(BaseModel):
 
 class HealthPolicyListResponse(BaseModel):
     items: list[HealthPolicyResponse]
-
-
-class HealthPolicyPreviewRequest(BaseModel):
-    """The draft policy under consideration, plus preview knobs.
-    `policy_id` is set only when previewing an in-progress *edit* of an
-    existing policy — it excludes that policy's currently-stored version
-    from the "existing" set the draft is spliced into (see
-    `HealthPolicyService.preview`), so a shadow race against itself never
-    happens.
-    """
-
-    policy_id: str | None = None
-    name: str
-    description: str = ""
-    enabled: bool = True
-    policy_key: str | None = None
-    mode: str = "EVALUATE"
-    category: str
-    severity: HealthSeverity
-    condition: Condition
-    evidence: list[EvidenceField] = Field(default_factory=list)
-    message_template: str
-    scope: PolicyScope = Field(default_factory=PolicyScope)
-    source: str
-    priority: int
-    order: int = 0
-    sample_size: int = Field(default=50, ge=1, le=500)
-    max_scan: int = Field(default=5000, ge=1, le=20000)
-
-
-class HealthPolicyPreviewSample(BaseModel):
-    id: str
-    name: str
-    would_be_severity: HealthSeverity
-
-
-class HealthPolicyPreviewResponse(BaseModel):
-    matched_count: int
-    truncated: bool
-    sample: list[HealthPolicyPreviewSample]
-    mode: str
 
 
 class HealthMetricResponse(BaseModel):

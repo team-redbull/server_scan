@@ -14,10 +14,13 @@ import json
 import pytest
 from pymongo.errors import DuplicateKeyError
 
+from app.application.services import bootstrap
 from app.application.services.bootstrap import ensure_default_classification_rules
 from app.domain.enums import InstallationType
 from app.domain.models.classification_rule import ClassificationRule, RuleScope
+from app.domain.services.regex_engine import RegexModuleEngine
 from app.domain.value_objects.site import site_catalog
+from app.errors import RuleScopeInvalidError
 from app.infrastructure.mongodb import MongoClientHolder
 from app.infrastructure.mongodb.classification_rule_repository import (
     MongoClassificationRuleRepository,
@@ -28,6 +31,7 @@ from app.utils.ids import new_id
 from app.utils.timeutil import utcnow
 
 SITES = site_catalog("")
+ENGINE = RegexModuleEngine(max_pattern_length=200, match_timeout_seconds=0.25)
 
 pytestmark = pytest.mark.integration
 
@@ -222,7 +226,7 @@ async def test_bootstrap_resyncs_a_stale_system_rule_but_keeps_its_enabled_flag(
     )
     await repo.upsert(stale)
 
-    written = await ensure_default_classification_rules(repo, SITES)
+    written = await ensure_default_classification_rules(repo, SITES, engine=ENGINE)
 
     assert written >= 1
     stored = await repo.get_by_name(generated.name)
@@ -237,5 +241,20 @@ async def test_bootstrap_is_a_no_op_once_the_rules_match_the_code(
     mongo_holder: MongoClientHolder,
 ) -> None:
     repo = MongoClassificationRuleRepository(mongo_holder)
-    await ensure_default_classification_rules(repo, SITES)
-    assert await ensure_default_classification_rules(repo, SITES) == 0
+    await ensure_default_classification_rules(repo, SITES, engine=ENGINE)
+    assert await ensure_default_classification_rules(repo, SITES, engine=ENGINE) == 0
+
+
+async def test_bootstrap_rejects_a_malformed_system_rule_at_startup(
+    mongo_holder: MongoClientHolder, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`validate_rule_write` now runs over every shipped default before it
+    is written (C12) — a defect in a default's own definition must fail
+    the startup, not surface later as a silent classification miss.
+    """
+    repo = MongoClassificationRuleRepository(mongo_holder)
+    broken = _make_rule("broken-system-rule", source="GLOBAL_CUSTOM", priority=999)
+    monkeypatch.setattr(bootstrap, "default_system_rules", lambda sites: [broken])
+
+    with pytest.raises(RuleScopeInvalidError):
+        await ensure_default_classification_rules(repo, SITES, engine=ENGINE)

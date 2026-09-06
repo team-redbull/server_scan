@@ -33,6 +33,8 @@ from app.application.services.bootstrap import (
     ensure_default_health_policies,
 )
 from app.config import get_settings
+from app.domain.services.health.metrics import build_default_registry
+from app.domain.services.regex_engine import RegexModuleEngine
 from app.domain.value_objects.site import site_catalog
 from app.exception_handlers import register_exception_handlers
 from app.infrastructure.logging import configure_logging
@@ -64,11 +66,21 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await mongo.connect()
     await ensure_indexes(mongo.db)
     # Idempotent — see `ensure_default_*`'s docstring for why "seed only
-    # if missing by name" is required here, not just convenient.
-    await ensure_default_classification_rules(
-        MongoClassificationRuleRepository(mongo), site_catalog(settings.sites)
+    # if missing by name" is required here, not just convenient, and why
+    # each shipped default is validated (`validate_rule_write`/
+    # `validate_policy_write`) before it's ever written.
+    regex_engine = RegexModuleEngine(
+        max_pattern_length=settings.regex_max_pattern_length,
+        match_timeout_seconds=settings.regex_match_timeout_seconds,
     )
-    await ensure_default_health_policies(MongoHealthPolicyRepository(mongo))
+    await ensure_default_classification_rules(
+        MongoClassificationRuleRepository(mongo),
+        site_catalog(settings.sites),
+        engine=regex_engine,
+    )
+    await ensure_default_health_policies(
+        MongoHealthPolicyRepository(mongo), registry=build_default_registry()
+    )
     app.state.mongo = mongo
 
     redis = RedisClientHolder(settings)

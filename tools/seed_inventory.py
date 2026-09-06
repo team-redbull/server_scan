@@ -77,13 +77,14 @@ async def _run(*, count: int, seed: int) -> None:
         rule_repo = MongoClassificationRuleRepository(mongo)
         policy_repo = MongoHealthPolicyRepository(mongo)
         sites = site_catalog(settings.sites)
-        await ensure_default_classification_rules(rule_repo, sites)
-        await ensure_default_health_policies(policy_repo)
-
+        registry = build_default_registry()
         regex_engine = RegexModuleEngine(
             max_pattern_length=settings.regex_max_pattern_length,
             match_timeout_seconds=settings.regex_match_timeout_seconds,
         )
+        await ensure_default_classification_rules(rule_repo, sites, engine=regex_engine)
+        await ensure_default_health_policies(policy_repo, registry=registry)
+
         ingest_service = IngestService(
             server_repo=MongoServerRepository(mongo, cursor_secret=settings.cursor_secret),
             site_repo=MongoSiteRepository(mongo),
@@ -95,13 +96,10 @@ async def _run(*, count: int, seed: int) -> None:
             # silently did nothing to seeded data — the one place a local
             # override is easiest to try.
             gpu_catalog=gpu_catalog(settings.gpu_models),
-            classification_service=ClassificationService(
-                rule_repo=rule_repo, engine=regex_engine, mongo=mongo
-            ),
+            classification_service=ClassificationService(rule_repo=rule_repo, engine=regex_engine),
             health_service=HealthPolicyService(
                 policy_repo=policy_repo,
-                registry=build_default_registry(),
-                server_repo=MongoServerRepository(mongo, cursor_secret=settings.cursor_secret),
+                registry=registry,
             ),
             audit=AuditService(repo=MongoAuditEventRepository(mongo)),
         )

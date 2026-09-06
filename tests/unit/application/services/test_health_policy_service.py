@@ -1,9 +1,8 @@
 """Unit tests (no I/O) for `app.application.services.health_policy_service`.
 
-Only the pure validation helpers (`validate_policy_write`,
-`validate_system_field_lock`) are exercised here — `HealthPolicyService`
-itself talks to Mongo (policy repo + server repo) and is covered by
-`tests/integration/test_health_policy_repository.py` and
+Only the pure validation helper (`validate_policy_write`) is exercised
+here — `HealthPolicyService` itself talks to Mongo (policy repo) and is
+covered by `tests/integration/test_health_policy_repository.py` and
 `tests/api/test_health_policies.py` instead.
 """
 
@@ -13,10 +12,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from app.application.services.health_policy_service import (
-    validate_policy_write,
-    validate_system_field_lock,
-)
+from app.application.services.health_policy_service import validate_policy_write
 from app.domain.enums import HealthSeverity
 from app.domain.models.health_policy import EvidenceField, HealthPolicy, PolicyScope
 from app.domain.services.health.conditions import Condition
@@ -188,30 +184,3 @@ def test_global_custom_with_empty_scope_passes() -> None:
 def test_system_default_with_empty_scope_passes() -> None:
     policy = _policy(source="SYSTEM_DEFAULT", priority=100, scope=PolicyScope(), system=True)
     validate_policy_write(policy, registry=REGISTRY)  # should not raise
-
-
-# --- System field lock ---
-
-
-def test_system_policy_enabled_only_update_passes() -> None:
-    existing = _policy(source="SYSTEM_DEFAULT", priority=100, system=True)
-    validate_system_field_lock(existing=existing, updates={"enabled": False})  # should not raise
-
-
-def test_system_policy_other_field_update_raises() -> None:
-    existing = _policy(source="SYSTEM_DEFAULT", priority=100, system=True)
-    with pytest.raises(ValidationAppError):
-        validate_system_field_lock(existing=existing, updates={"priority": 150})
-
-
-def test_system_policy_mixed_update_raises() -> None:
-    existing = _policy(source="SYSTEM_DEFAULT", priority=100, system=True)
-    with pytest.raises(ValidationAppError):
-        validate_system_field_lock(existing=existing, updates={"enabled": False, "priority": 150})
-
-
-def test_non_system_policy_any_update_passes() -> None:
-    existing = _policy(source="GLOBAL_CUSTOM", priority=200, system=False)
-    validate_system_field_lock(
-        existing=existing, updates={"priority": 250, "enabled": False}
-    )  # should not raise

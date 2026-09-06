@@ -134,19 +134,15 @@ def _classification_service(
     mongo: Annotated[MongoClientHolder, Depends(get_mongo_holder)],
     engine: Annotated[RegexEngine, Depends(_regex_engine)],
 ) -> ClassificationService:
-    return ClassificationService(
-        rule_repo=MongoClassificationRuleRepository(mongo), engine=engine, mongo=mongo
-    )
+    return ClassificationService(rule_repo=MongoClassificationRuleRepository(mongo), engine=engine)
 
 
 def _health_policy_service(
     mongo: Annotated[MongoClientHolder, Depends(get_mongo_holder)],
-    server_repo: Annotated[MongoServerRepository, Depends(_server_repo)],
 ) -> HealthPolicyService:
     return HealthPolicyService(
         policy_repo=MongoHealthPolicyRepository(mongo),
         registry=_METRIC_REGISTRY,
-        server_repo=server_repo,
     )
 
 

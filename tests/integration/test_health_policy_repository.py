@@ -15,10 +15,14 @@ import json
 import pytest
 from pymongo.errors import DuplicateKeyError
 
+from app.application.services import bootstrap
+from app.application.services.bootstrap import ensure_default_health_policies
 from app.domain.enums import HealthSeverity
 from app.domain.models.health_policy import HealthPolicy, PolicyScope
 from app.domain.services.health.conditions import Condition
 from app.domain.services.health.health_policy_defaults import default_system_policies
+from app.domain.services.health.metrics import build_default_registry
+from app.errors import AppError
 from app.infrastructure.mongodb import MongoClientHolder
 from app.infrastructure.mongodb.health_policy_repository import MongoHealthPolicyRepository
 from app.infrastructure.mongodb.indexes import HEALTH_POLICIES_COLLECTION
@@ -26,6 +30,8 @@ from app.utils.ids import new_id
 from app.utils.timeutil import utcnow
 
 pytestmark = pytest.mark.integration
+
+REGISTRY = build_default_registry()
 
 
 def _make_policy(
@@ -200,3 +206,50 @@ async def test_family_resolution_load_order_uses_index_scan(
     assert "COLLSCAN" not in explain_str
     assert "IXSCAN" in explain_str
     assert '"stage": "SORT"' not in explain_str
+
+
+async def test_bootstrap_resyncs_a_stale_system_policy_but_keeps_its_enabled_flag(
+    mongo_holder: MongoClientHolder,
+) -> None:
+    """Mirrors the classification-rule bootstrap re-sync test: a system
+    policy's definition can drift from what code now generates (C11), and
+    there is no editor UI left to notice or correct that by hand.
+    """
+    repo = MongoHealthPolicyRepository(mongo_holder)
+    generated = default_system_policies()[0]
+    stale = generated.model_copy(update={"severity": HealthSeverity.INFO, "enabled": False})
+    await repo.upsert(stale)
+
+    written = await ensure_default_health_policies(repo, registry=REGISTRY)
+
+    assert written >= 1
+    stored = await repo.get_by_name(generated.name)
+    assert stored is not None
+    assert stored.severity == generated.severity
+    assert stored.id == stale.id  # same document, not a second one
+    assert stored.enabled is False  # the one field an admin owns survives
+    assert stored.revision == stale.revision + 1
+
+
+async def test_bootstrap_is_a_no_op_once_the_policies_match_the_code(
+    mongo_holder: MongoClientHolder,
+) -> None:
+    repo = MongoHealthPolicyRepository(mongo_holder)
+    await ensure_default_health_policies(repo, registry=REGISTRY)
+    assert await ensure_default_health_policies(repo, registry=REGISTRY) == 0
+
+
+async def test_bootstrap_rejects_a_malformed_system_policy_at_startup(
+    mongo_holder: MongoClientHolder, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`validate_policy_write` now runs over every shipped default before
+    it is written (C12) — a defect in a default's own definition must
+    fail the startup, not surface later as a silently-wrong evaluation.
+    """
+    repo = MongoHealthPolicyRepository(mongo_holder)
+    # SITE_CUSTOM requires scope.site_id; this one doesn't set it.
+    broken = _make_policy("broken-system-policy", source="SITE_CUSTOM", priority=500)
+    monkeypatch.setattr(bootstrap, "default_system_policies", lambda: [broken])
+
+    with pytest.raises(AppError):
+        await ensure_default_health_policies(repo, registry=REGISTRY)

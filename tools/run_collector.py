@@ -994,11 +994,9 @@ async def _run(
             manager_repo=manager_repo,
             sites=site_catalog(settings.sites),
             gpu_catalog=gpu_catalog(settings.gpu_models),
-            classification_service=ClassificationService(
-                rule_repo=rule_repo, engine=regex_engine, mongo=mongo
-            ),
+            classification_service=ClassificationService(rule_repo=rule_repo, engine=regex_engine),
             health_service=HealthPolicyService(
-                policy_repo=policy_repo, registry=build_default_registry(), server_repo=server_repo
+                policy_repo=policy_repo, registry=build_default_registry()
             ),
             audit=AuditService(repo=MongoAuditEventRepository(mongo)),
         )

@@ -101,9 +101,10 @@ def _node_count(condition: Condition) -> int:
 def validate_condition(condition: Condition, registry: MetricRegistry) -> None:
     """Raises `ConditionValidationError` for anything that would be unsafe
     or meaningless to evaluate: unknown metric, operator/type mismatch, or
-    a tree that's too deep/large. Called when a policy is created/updated,
-    never at evaluation time — evaluation trusts a condition that passed
-    this once.
+    a tree that's too deep/large. Called when a system-default policy is
+    seeded or re-synced at startup (`app.application.services.bootstrap`,
+    via `validate_policy_write`), never at evaluation time — evaluation
+    trusts a condition that passed this once.
     """
     if _depth(condition) > MAX_CONDITION_DEPTH:
         raise ConditionValidationError(f"condition tree exceeds max depth {MAX_CONDITION_DEPTH}")
