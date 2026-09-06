@@ -232,4 +232,4 @@ def _relative_path(link: str) -> str:
     Returns:
         str: The same link relative to the client's `/api` base_url.
     """
-    return link[len("/api") :] if link.startswith("/api") else link
+    return link.removeprefix("/api")

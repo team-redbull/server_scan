@@ -79,8 +79,9 @@ class MongoClientHolder:
             return False
         try:
             await self._client.admin.command("ping")
-            return True
         except PyMongoError as exc:
             mongo_ping_failures_total.inc()
             logger.warning("mongo.ping_failed", error=str(exc), exc_info=exc)
             return False
+        else:
+            return True

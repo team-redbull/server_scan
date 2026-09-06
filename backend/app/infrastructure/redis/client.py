@@ -12,10 +12,10 @@ exception at the call site.
 from __future__ import annotations
 
 import structlog
-
-from app.config import Settings
 from redis.asyncio import Redis
 from redis.exceptions import RedisError
+
+from app.config import Settings
 
 logger = structlog.get_logger(__name__)
 
@@ -64,6 +64,7 @@ class RedisClientHolder:
             return False
         try:
             await self._client.ping()
-            return True
         except RedisError:
             return False
+        else:
+            return True

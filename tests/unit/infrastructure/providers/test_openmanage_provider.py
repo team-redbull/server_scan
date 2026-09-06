@@ -103,7 +103,7 @@ class _FakeOmeClient:
 
     async def __aexit__(self, *_: object) -> None:
         """Log out. No-op for the fake."""
-        return None
+        return
 
     async def get_all(self, path: str) -> list[dict[str, Any]]:
         """

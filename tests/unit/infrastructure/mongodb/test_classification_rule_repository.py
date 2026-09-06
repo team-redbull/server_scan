@@ -114,6 +114,8 @@ def test_hosted_cluster_and_upi_patterns_are_mutually_exclusive() -> None:
     ]
     for name in names:
         matched = [
-            r for r in default_system_rules(SITES) if re.compile(r.pattern, re.I).match(name)
+            r
+            for r in default_system_rules(SITES)
+            if re.compile(r.pattern, re.IGNORECASE).match(name)
         ]
         assert len(matched) == 1, f"{name} matched {[r.name for r in matched]}"

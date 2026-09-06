@@ -397,9 +397,15 @@ class UcsCentralProvider(ServerInventoryProvider):
             provider = self._domain_provider_factory(target)
             collected: list[ProviderServer] = []
             try:
+                # Appended one at a time rather than built as a comprehension
+                # (ruff PERF401) on purpose: the `except` below logs how many
+                # servers were collected *before* the domain failed, which
+                # needs `collected` to hold real partial progress mid-loop —
+                # a comprehension has no partial result to read if iteration
+                # raises on server N of M.
                 async with contextlib.aclosing(provider.collect()) as servers:
                     async for provider_server in servers:
-                        collected.append(
+                        collected.append(  # noqa: PERF401
                             replace(
                                 provider_server,
                                 external_id=central_external_id(

@@ -515,18 +515,17 @@ def to_provider_server(
     elif host is not None and ext is not None:
         macs = ()
 
-    attachments: list[ProviderAttachment] = []
-    for interface in ext or ():
-        # An uplink reporting no fabric is not cabled to one. Skipped
-        # rather than emitted with a null fabric, matching UCS Manager.
-        if _text(interface.get("SwitchId")):
-            attachments.append(
-                attachment(interface, provider_type=provider_type, interface_kind="PHYSICAL")
-            )
-    for interface in host or ():
-        attachments.append(
-            attachment(interface, provider_type=provider_type, interface_kind="VNIC")
-        )
+    # An uplink reporting no fabric is not cabled to one. Skipped rather
+    # than emitted with a null fabric, matching UCS Manager.
+    attachments: list[ProviderAttachment] = [
+        attachment(interface, provider_type=provider_type, interface_kind="PHYSICAL")
+        for interface in ext or ()
+        if _text(interface.get("SwitchId"))
+    ]
+    attachments.extend(
+        attachment(interface, provider_type=provider_type, interface_kind="VNIC")
+        for interface in host or ()
+    )
 
     drives = [drive(disk) for disk in disks] if disks is not None else None
     storage_total: int | None = None

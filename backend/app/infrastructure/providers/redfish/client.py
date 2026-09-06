@@ -495,12 +495,6 @@ class RedfishClient:
         for attempt in range(1, _MAX_ATTEMPTS + 1):
             try:
                 response = await self._client.request(method, path, headers=headers, json=json)
-                self._trace(method, path, response.status_code)
-                if response.status_code in _RETRY_STATUSES and attempt < _MAX_ATTEMPTS:
-                    await self._backoff(attempt, response.headers.get("Retry-After"))
-                    continue
-                self._guard_size(response, path)
-                return response
             except httpx.ConnectError as exc:
                 if isinstance(exc.__cause__, ssl.SSLError):
                     raise RedfishTlsError(
@@ -511,6 +505,13 @@ class RedfishClient:
                 last = exc
             except (httpx.TimeoutException, httpx.RemoteProtocolError, httpx.ReadError) as exc:
                 last = exc
+            else:
+                self._trace(method, path, response.status_code)
+                if response.status_code in _RETRY_STATUSES and attempt < _MAX_ATTEMPTS:
+                    await self._backoff(attempt, response.headers.get("Retry-After"))
+                    continue
+                self._guard_size(response, path)
+                return response
             if attempt < _MAX_ATTEMPTS:
                 await self._backoff(attempt, None)
         raise RedfishUnreachableError(f"Could not reach {self._target.host}: {last}")

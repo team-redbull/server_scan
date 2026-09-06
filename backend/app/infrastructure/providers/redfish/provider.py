@@ -380,7 +380,7 @@ class RedfishStandaloneProvider(ServerInventoryProvider):
             except RedfishAuthError as exc:
                 self._record_auth_failure(target, exc)
             except RedfishTlsError as exc:
-                logger.error("redfish.tls_verify_failed", host=target.host, error=str(exc))
+                logger.exception("redfish.tls_verify_failed", host=target.host, error=str(exc))
                 self._record_error(f"{target.host}: TLS verification failed — {exc}")
             except RedfishUnreachableError as exc:
                 logger.warning("redfish.host_unreachable", host=target.host, error=str(exc))
@@ -590,12 +590,13 @@ class RedfishStandaloneProvider(ServerInventoryProvider):
             return None
         try:
             members: list[dict[str, Any]] = await client.get_collection(validate_odata_id(path))
-            return members
         except (RedfishForbiddenError, RedfishProtocolError, RedfishUnreachableError) as exc:
             logger.warning(
                 "redfish.resource_skipped", host=system.get("Id"), resource=key, error=str(exc)
             )
             return None
+        else:
+            return members
 
     async def _drives(self, client: Any, system: dict[str, Any]) -> list[dict[str, Any]] | None:
         """
@@ -696,10 +697,11 @@ class RedfishStandaloneProvider(ServerInventoryProvider):
             return None
         try:
             resolved: dict[str, Any] = await client.get(validate_odata_id(path))
-            return resolved
         except (RedfishForbiddenError, RedfishProtocolError, RedfishUnreachableError) as exc:
             logger.warning("redfish.resource_skipped", resource=key, error=str(exc))
             return None
+        else:
+            return resolved
 
     async def _psus(self, client: Any, system: dict[str, Any]) -> list[dict[str, Any]] | None:
         """

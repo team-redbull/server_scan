@@ -402,11 +402,20 @@ uv run pytest                     # backend: unit + integration + api tests
 uv run ruff check .               # lint
 uv run ruff format --check .      # formatting
 uv run ty check backend/app tools tests # type check
+uv run lint-imports                # layering (pyproject.toml's [tool.importlinter])
 
 cd frontend
 npm run lint && npm run typecheck && npm run test -- --run && npm run build
 npm run test:e2e                  # Playwright — needs the dev stack + backend + frontend all running
 ```
+
+Not CI gates, but worth running locally when touching a lot of code at
+once: `uvx vulture backend/app tools --min-confidence 80` (dead code —
+expect two known false positives, `__aexit__`'s unused `exc_type`/`tb`),
+`npx knip` from `frontend/` (unused exports — currently the ~450 LOC left
+behind by the removed rule/policy editors, tracked as its own cleanup),
+and `uv run ruff check --select D .` (docstring coverage against
+CLAUDE.md's convention 8).
 
 The integration tests need the dev stack; without it they skip rather
 than fail, and the whole directory reports `60 skipped` in about five

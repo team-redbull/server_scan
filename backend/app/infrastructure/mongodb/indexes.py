@@ -246,10 +246,11 @@ async def _create_indexes(
     """
     try:
         await db[collection].create_indexes(indexes)
-        return
     except OperationFailure as exc:
         if exc.code != _INDEX_KEY_SPECS_CONFLICT:
             raise
+    else:
+        return
 
     # Rebuilt one at a time so a single changed specification cannot drop
     # indexes that were already correct.

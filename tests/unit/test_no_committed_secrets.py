@@ -100,9 +100,11 @@ def test_no_tracked_file_looks_like_a_raw_bmc_capture() -> None:
         if not path.exists():
             continue
         text = path.read_text(errors="ignore")
-        for marker in _CAPTURE_MARKERS:
-            if marker in text and str(relative).replace("\\", "/") != "tests/redfish_fixture.py":
-                offenders.append(f"{relative}: contains {marker!r}")
+        offenders.extend(
+            f"{relative}: contains {marker!r}"
+            for marker in _CAPTURE_MARKERS
+            if marker in text and str(relative).replace("\\", "/") != "tests/redfish_fixture.py"
+        )
 
     assert not offenders, (
         "A file looks like an unscrubbed capture from real hardware:\n  "

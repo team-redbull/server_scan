@@ -23,10 +23,10 @@ import json
 from typing import Any
 
 import structlog
+from redis.exceptions import RedisError
 
 from app.infrastructure.redis.client import RedisClientHolder
 from app.observability.metrics import cache_operations_total
-from redis.exceptions import RedisError
 
 logger = structlog.get_logger(__name__)
 

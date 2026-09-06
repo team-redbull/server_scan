@@ -1044,7 +1044,7 @@ class TestManagerTypeInLogContext:
 
         async def _fake_dry_run(*_args: Any, **_kwargs: Any) -> None:
             seen.update(structlog.contextvars.get_contextvars())
-            return None
+            return
 
         monkeypatch.setattr(run_collector, "_dry_run_one_manager", _fake_dry_run)
         monkeypatch.setattr(run_collector, "get_settings", _central_settings_for_run)

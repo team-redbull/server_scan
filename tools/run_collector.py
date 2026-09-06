@@ -957,7 +957,7 @@ async def _run(
             if manager_type is ManagerType.UCS_CENTRAL:
                 resolve_login(settings, ManagerType.UCS_MANAGER)
         except ManagerNotConfiguredError as exc:
-            logger.error("collector.not_configured", manager_type=manager_type.value)
+            logger.exception("collector.not_configured", manager_type=manager_type.value)
             print(f"{exc}")
             return 2
         manager = manager_for(manager_type, connection)

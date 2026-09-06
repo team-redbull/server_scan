@@ -71,13 +71,14 @@ def _decode_cursor(cursor: str) -> tuple[str, str]:
         payload = base64.urlsafe_b64decode(cursor.encode("ascii")).decode("utf-8")
         created_at_iso, event_id = json.loads(payload)
         if not isinstance(created_at_iso, str) or not isinstance(event_id, str):
-            raise ValueError("cursor payload has the wrong shape")
+            raise TypeError("cursor payload has the wrong shape")
         parsed = datetime.fromisoformat(created_at_iso)  # validation only; result unused
         if parsed.tzinfo is None:
             raise ValueError("cursor timestamp must be timezone-aware")
-        return created_at_iso, event_id
     except (ValueError, TypeError, binascii.Error, UnicodeDecodeError) as exc:
         raise CursorInvalidError("Malformed event cursor.", details={"cursor": cursor}) from exc
+    else:
+        return created_at_iso, event_id
 
 
 class MongoAuditEventRepository:

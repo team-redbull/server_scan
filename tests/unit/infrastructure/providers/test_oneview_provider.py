@@ -220,11 +220,8 @@ async def _collect(provider: OneViewProvider) -> list[ProviderServer]:
     Returns:
         list[ProviderServer]: Everything it yielded.
     """
-    collected: list[ProviderServer] = []
     async with contextlib.aclosing(provider.collect()) as servers:
-        async for server in servers:
-            collected.append(server)
-    return collected
+        return [server async for server in servers]
 
 
 class TestCollection:

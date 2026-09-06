@@ -8,6 +8,15 @@ license = { text = "Proprietary" }
 
 dependencies = [
     "fastapi==0.141.1",
+    # Only ever installed as fastapi's transitive dependency until now —
+    # made direct because `main.py`, `exception_handlers.py` and
+    # `middleware/request_context.py` import `starlette.*` themselves
+    # (the ASGI middleware base, request/response types, its own
+    # `HTTPException`). A transitive dependency can change version out
+    # from under those imports on any fastapi bump with no signal here;
+    # `deptry`'s DEP003 is what catches that class of risk. Pinned to
+    # what fastapi 0.141.1 actually resolves.
+    "starlette==1.6.0",
     "pydantic==2.13.4",
     "pydantic-settings==2.15.0",
     "pymongo==4.17.0",
@@ -63,7 +72,7 @@ dev = [
     # Bumping it is a deliberate act on the quarterly pass, and a new
     # diagnostic after a bump is ty changing, not this codebase regressing.
     # See docs/adr/0019-ty-replaces-mypy.md.
-    "ty==0.0.76",
+    "ty==0.0.78",
     # Still required after mypy's removal: ty consumes typeshed stub
     # packages exactly as mypy did, and without this one the `Pattern`
     # subscript in `app.domain.services.regex_engine` is unresolvable.
@@ -74,6 +83,10 @@ dev = [
     # unrelated `uv sync` bumped it mid-migration, which is the same
     # failure mode the `ty` pin above exists to prevent.
     "types-regex==2026.8.31.20260831",
+    # Exact, matching every other dev dependency's pinning convention here —
+    # not because it's beta like `ty`, just for the same reproducibility
+    # reason ADR-0013 gives for the CI action SHAs.
+    "import-linter==2.15",
 ]
 
 [tool.uv]
@@ -149,6 +162,31 @@ select = [
     "ANN204",
     "ANN205",
     "ANN206",
+    # Phase 8 of docs/notes/2026-09-refactor-plan.md. PTH (use pathlib over
+    # os.path) and LOG (logging-call correctness) were already clean.
+    # RET/TRY300 (return only in the branch that can't raise) and TRY400
+    # (use `logger.exception`, which captures the traceback, inside an
+    # `except` — two collectors were silently dropping it via `.error`)
+    # are real correctness/observability rules. PERF (list-building) and
+    # FURB (modernization) are cheap wins with no behavior change.
+    #
+    # C901 (cyclomatic complexity) is deliberately NOT selected: enabling
+    # it hits `validate_condition` (the health-policy condition engine,
+    # ADR-0005's headline design), Intersight's join-table builder and
+    # OneView's PSU mapping — real domain/collector logic whose branching
+    # mirrors a genuinely complex external contract, not accidental
+    # sprawl. Splitting those is its own reviewed change with its own
+    # regression risk (no live hardware to re-verify most of them
+    # against), not a mechanical lint fix — see this phase's section in
+    # the refactor plan for the full function list.
+    "PTH",
+    "LOG",
+    "RET",
+    "PERF",
+    "FURB",
+    "TRY004",
+    "TRY300",
+    "TRY400",
 ]
 ignore = ["S101"]  # allow assert in tests
 
@@ -216,3 +254,44 @@ missing-type-argument = "ignore"
 # Off: PEP 698 `@override` is a convention this repo has not adopted. It is
 # a style question, not a correctness one, and adopting it is its own change.
 missing-override-decorator = "ignore"
+
+[tool.importlinter]
+root_packages = ["app"]
+
+# Five boundaries describe this codebase's hexagonal layering; only four are
+# gated here. The fifth — application never naming a concrete adapter class
+# — is broken today in `audit_service.py`, `bootstrap.py` (twice),
+# `classification_service.py` and `health_policy_service.py`, all importing
+# a `Mongo*Repository` directly instead of the `ServerRepository` Protocol
+# `app.domain.ports.repository` already declares (which itself has no
+# equivalent for the audit/classification-rule/health-policy repositories —
+# three ports that don't exist yet). Fixing it means either writing those
+# missing ports or accepting DI at the composition root as the only allowed
+# concrete-adapter reference, and either is its own change, not a drive-by
+# here.
+# ponytail: known debt, no gate — a speculative ports sweep to make this
+# green would be its own multi-file change; fix when a real port is added
+# for one of these repositories anyway, not as a mechanical pass.
+[[tool.importlinter.contracts]]
+name = "domain has no dependency on outer layers"
+type = "forbidden"
+source_modules = ["app.domain"]
+forbidden_modules = ["app.application", "app.infrastructure", "app.api"]
+
+[[tool.importlinter.contracts]]
+name = "infrastructure has no dependency on application"
+type = "forbidden"
+source_modules = ["app.infrastructure"]
+forbidden_modules = ["app.application"]
+
+[[tool.importlinter.contracts]]
+name = "infrastructure has no dependency on api"
+type = "forbidden"
+source_modules = ["app.infrastructure"]
+forbidden_modules = ["app.api"]
+
+[[tool.importlinter.contracts]]
+name = "application has no dependency on api"
+type = "forbidden"
+source_modules = ["app.application"]
+forbidden_modules = ["app.api"]
