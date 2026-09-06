@@ -8,6 +8,7 @@ must return fast (no hang) and never raise when Redis is unreachable.
 
 from __future__ import annotations
 
+import json
 import time
 
 import pytest
@@ -31,6 +32,32 @@ async def test_set_then_get_round_trips(redis_holder: RedisClientHolder) -> None
 async def test_get_missing_key_returns_none(redis_holder: RedisClientHolder) -> None:
     cache = CacheClient(redis_holder)
     assert await cache.get("test:cache:definitely-not-set") is None
+
+
+async def test_get_raw_returns_the_undecoded_bytes_get_would_have_parsed(
+    redis_holder: RedisClientHolder,
+) -> None:
+    """P2 (`docs/notes/2026-09-audit.md`): `get_raw` exists so a caller
+    about to hand a cached value straight back as an HTTP response body
+    never pays for `get`'s `json.loads` only to have it re-encoded
+    unchanged. Asserted here against `get`'s own decoded value, not just
+    "some bytes came back" — this is what makes it a safe drop-in for that
+    one use, not a different cache.
+    """
+    cache = CacheClient(redis_holder)
+    value = {"hello": "world", "n": 5}
+    await cache.set("test:cache:raw-roundtrip", value, ttl_seconds=30)
+
+    raw = await cache.get_raw("test:cache:raw-roundtrip")
+
+    assert raw is not None
+    assert json.loads(raw) == value
+    assert await cache.get("test:cache:raw-roundtrip") == value
+
+
+async def test_get_raw_missing_key_returns_none(redis_holder: RedisClientHolder) -> None:
+    cache = CacheClient(redis_holder)
+    assert await cache.get_raw("test:cache:definitely-not-set") is None
 
 
 async def test_delete_removes_key(redis_holder: RedisClientHolder) -> None:
@@ -60,6 +87,19 @@ async def test_get_degrades_to_none_when_redis_unreachable() -> None:
 
     start = time.monotonic()
     value = await cache.get("any-key")
+    elapsed = time.monotonic() - start
+
+    assert value is None
+    assert elapsed < 5.0  # fails fast, does not hang
+    await holder.close()
+
+
+async def test_get_raw_degrades_to_none_when_redis_unreachable() -> None:
+    holder = await _unreachable_holder()
+    cache = CacheClient(holder)
+
+    start = time.monotonic()
+    value = await cache.get_raw("any-key")
     elapsed = time.monotonic() - start
 
     assert value is None

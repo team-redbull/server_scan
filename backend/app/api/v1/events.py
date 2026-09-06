@@ -28,7 +28,7 @@ _DEFAULT_PAGE_SIZE = 50
 _MAX_PAGE_SIZE = 200
 
 
-def _event_repo(
+async def _event_repo(
     mongo: Annotated[MongoClientHolder, Depends(get_mongo_holder)],
 ) -> MongoAuditEventRepository:
     return MongoAuditEventRepository(mongo)

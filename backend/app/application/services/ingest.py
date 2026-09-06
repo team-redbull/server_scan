@@ -45,6 +45,7 @@ from app.application.services.pipeline import classification_from_result, health
 from app.domain.enums import LinkState, MediaType, Vendor
 from app.domain.models.audit_event import EventType
 from app.domain.models.classification import Classification
+from app.domain.models.classification_rule import ClassificationRule
 from app.domain.models.connectivity import (
     Connectivity,
     ConnectivityAttachment,
@@ -61,6 +62,7 @@ from app.domain.models.hardware import (
     StorageDrive,
 )
 from app.domain.models.health import Health
+from app.domain.models.health_policy import HealthPolicy
 from app.domain.models.maintenance import Maintenance
 from app.domain.models.manager import Manager
 from app.domain.models.network import BmcInfo, NetworkInfo, NetworkInterface
@@ -307,11 +309,30 @@ class IngestService:
 
         await provider.health_check()
 
+        # Loaded once for the whole run, not once per server: both are an
+        # answer that cannot change while this run is in progress, and
+        # re-reading them per server was ~2 uncached collection reads per
+        # server — ~20,000 on a 10,000-server run — for nothing (P1,
+        # `docs/notes/2026-09-audit.md`). See `ClassificationService`'s and
+        # `HealthPolicyService`'s own docstrings for the load-once/
+        # classify-or-evaluate-many split this calls into.
+        ruleset = (
+            await self._classification_service.load_ruleset()
+            if self._classification_service is not None
+            else []
+        )
+        policies = (
+            await self._health_service.load_policies() if self._health_service is not None else []
+        )
+
         async for provider_server in provider.collect():
             summary.fetched += 1
             try:
                 created = await self._ingest_one(
-                    provider_server, provider_type=provider.provider_type
+                    provider_server,
+                    provider_type=provider.provider_type,
+                    ruleset=ruleset,
+                    policies=policies,
                 )
             except Exception:
                 logger.exception(
@@ -351,9 +372,26 @@ class IngestService:
         )
         return page.items[0] if page.items else None
 
-    async def _ingest_one(self, ps: ProviderServer, *, provider_type: str) -> bool:
+    async def _ingest_one(
+        self,
+        ps: ProviderServer,
+        *,
+        provider_type: str,
+        ruleset: list[ClassificationRule],
+        policies: list[HealthPolicy],
+    ) -> bool:
         """Returns True if a new server document was created, False if an
         existing one was updated.
+
+        Args:
+            ps (ProviderServer): The provider's raw record for one server.
+            provider_type (str): The collector's `ManagerType` value.
+            ruleset (list[ClassificationRule]): This run's ruleset, loaded
+                once by `ingest()` — see `ClassificationService.
+                load_ruleset`'s docstring for why.
+            policies (list[HealthPolicy]): This run's policy set, loaded
+                once by `ingest()` — see `HealthPolicyService.
+                load_policies`'s docstring for why.
         """
         # No fallback vendor. Every server arrives through a
         # vendor-specific collector, so an unrecognized value means that
@@ -383,6 +421,8 @@ class IngestService:
             serial_normalized=serial_normalized,
             existing=existing,
             provider_type=provider_type,
+            ruleset=ruleset,
+            policies=policies,
         )
 
         try:
@@ -406,6 +446,8 @@ class IngestService:
                 serial_normalized=serial_normalized,
                 existing=refetched,
                 provider_type=provider_type,
+                ruleset=ruleset,
+                policies=policies,
             )
             await self._server_repo.upsert(server)
             await self._emit_transition_events(existing, server)
@@ -465,7 +507,13 @@ class IngestService:
         serial_normalized: str,
         existing: Server | None,
         provider_type: str,
+        ruleset: list[ClassificationRule],
+        policies: list[HealthPolicy],
     ) -> Server:
+        """`ruleset`/`policies` are this run's snapshot, loaded once by
+        `ingest()` — see `ClassificationService.load_ruleset` and
+        `HealthPolicyService.load_policies` for why.
+        """
         now = utcnow()
         server_id = existing.id if existing is not None else new_id("server")
         created_at = existing.created_at if existing is not None else now
@@ -701,14 +749,14 @@ class IngestService:
                 serial=ps.serial,
                 model=ps.model,
             )
-            result = await self._classification_service.classify_server(classifiable)
+            result = self._classification_service.classify_with_ruleset(classifiable, ruleset)
             previous_version = existing.classification.classification_version if existing else 0
             server.classification = classification_from_result(
                 result, previous_version=previous_version
             )
 
         if self._health_service is not None:
-            state = await self._health_service.evaluate_server(server)
+            state = self._health_service.evaluate_with_policies(server, policies)
             server.health = health_from_state(state)
 
         server.search_tokens = build_search_tokens(server)

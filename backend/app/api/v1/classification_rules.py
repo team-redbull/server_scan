@@ -32,7 +32,7 @@ from app.infrastructure.mongodb.client import MongoClientHolder
 router = APIRouter(prefix="/api/v1/classification-rules", tags=["classification-rules"])
 
 
-def _rule_repo(
+async def _rule_repo(
     mongo: Annotated[MongoClientHolder, Depends(get_mongo_holder)],
 ) -> MongoClassificationRuleRepository:
     return MongoClassificationRuleRepository(mongo)

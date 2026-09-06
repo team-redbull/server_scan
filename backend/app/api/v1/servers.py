@@ -32,7 +32,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, Query, Request, Response
 
 from app.api.v1.maintenance_schemas import MaintenanceEnableRequest
 from app.api.v1.schemas import (
@@ -109,35 +109,37 @@ def _extract_raw_filters(request: Request) -> dict[str, object]:
     return filters
 
 
-def _server_repo(
+async def _server_repo(
     mongo: Annotated[MongoClientHolder, Depends(get_mongo_holder)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> MongoServerRepository:
     return MongoServerRepository(mongo, cursor_secret=settings.cursor_secret)
 
 
-def _cache_client(redis: Annotated[RedisClientHolder, Depends(get_redis_holder)]) -> CacheClient:
+async def _cache_client(
+    redis: Annotated[RedisClientHolder, Depends(get_redis_holder)],
+) -> CacheClient:
     return CacheClient(redis)
 
 
 _METRIC_REGISTRY = build_default_registry()
 
 
-def _regex_engine(settings: Annotated[Settings, Depends(get_settings)]) -> RegexEngine:
+async def _regex_engine(settings: Annotated[Settings, Depends(get_settings)]) -> RegexEngine:
     return RegexModuleEngine(
         max_pattern_length=settings.regex_max_pattern_length,
         match_timeout_seconds=settings.regex_match_timeout_seconds,
     )
 
 
-def _classification_service(
+async def _classification_service(
     mongo: Annotated[MongoClientHolder, Depends(get_mongo_holder)],
     engine: Annotated[RegexEngine, Depends(_regex_engine)],
 ) -> ClassificationService:
     return ClassificationService(rule_repo=MongoClassificationRuleRepository(mongo), engine=engine)
 
 
-def _health_policy_service(
+async def _health_policy_service(
     mongo: Annotated[MongoClientHolder, Depends(get_mongo_holder)],
 ) -> HealthPolicyService:
     return HealthPolicyService(
@@ -146,11 +148,13 @@ def _health_policy_service(
     )
 
 
-def _audit_service(mongo: Annotated[MongoClientHolder, Depends(get_mongo_holder)]) -> AuditService:
+async def _audit_service(
+    mongo: Annotated[MongoClientHolder, Depends(get_mongo_holder)],
+) -> AuditService:
     return AuditService(repo=MongoAuditEventRepository(mongo))
 
 
-def _maintenance_service(
+async def _maintenance_service(
     server_repo: Annotated[MongoServerRepository, Depends(_server_repo)],
     audit: Annotated[AuditService, Depends(_audit_service)],
 ) -> MaintenanceService:
@@ -177,7 +181,7 @@ async def list_servers(
     cursor: str | None = Query(default=None),
     page_size: int | None = Query(default=None, ge=1),
     with_count: bool = Query(default=False),
-) -> ServerListResponse:
+) -> ServerListResponse | Response:
     effective_page_size = page_size if page_size is not None else settings.default_page_size
     if effective_page_size > settings.max_page_size:
         raise PageSizeTooLargeError(
@@ -206,9 +210,16 @@ async def list_servers(
         stable_hash({"cursor": cursor}),
     )
 
-    cached = await cache.get(cache_key)
+    cached = await cache.get_raw(cache_key)
     if cached is not None:
-        return ServerListResponse.model_validate(cached)
+        # The bytes in Redis are already the bytes on the wire — `set()`
+        # below caches `response.model_dump(mode="json")`, JSON-encoded,
+        # which is exactly what FastAPI would re-encode a validated
+        # `ServerListResponse` back into. Returning them directly skips a
+        # decode + re-validate + re-encode round trip that measured at
+        # 0.919 ms/request and changed nothing about the bytes on the wire
+        # (`docs/notes/2026-09-research-performance.md` §7.2, §6.1).
+        return Response(content=cached, media_type="application/json")
 
     # Coalesced, not just cached: concurrent identical requests that all
     # arrive before the first one has written its result back (the same
@@ -254,7 +265,7 @@ async def server_facets(
     repo: Annotated[MongoServerRepository, Depends(_server_repo)],
     cache: Annotated[CacheClient, Depends(_cache_client)],
     search: str | None = Query(default=None),
-) -> ServerFacets:
+) -> ServerFacets | Response:
     """
     How many servers each filter option would match, under the filters
     already applied.
@@ -271,15 +282,18 @@ async def server_facets(
         search (str | None): The same free-text search `GET /servers` takes.
 
     Returns:
-        ServerFacets: One count per option, plus the matching total.
+        ServerFacets | Response: One count per option, plus the matching
+            total — a raw cached JSON body on a cache hit (see
+            `list_servers`'s docstring for why), the validated model on a
+            miss.
     """
     raw_filters = _extract_raw_filters(request)
     mongo_filters = build_filter_query(raw_filters)
 
     cache_key = facets_key(stable_hash({"filters": mongo_filters, "search": search}))
-    cached = await cache.get(cache_key)
+    cached = await cache.get_raw(cache_key)
     if cached is not None:
-        return ServerFacets.model_validate(cached)
+        return Response(content=cached, media_type="application/json")
 
     facets = ServerFacets.from_rows(
         await repo.facet_breakdown(filters=mongo_filters, search=search)
@@ -294,13 +308,17 @@ async def get_server(
     repo: Annotated[MongoServerRepository, Depends(_server_repo)],
     cache: Annotated[CacheClient, Depends(_cache_client)],
     settings: Annotated[Settings, Depends(get_settings)],
-) -> ServerDetail:
+) -> ServerDetail | Response:
     pointer_key = _revision_pointer_key(server_id)
     cached_revision = await cache.get(pointer_key)
     if isinstance(cached_revision, int):
-        cached_detail = await cache.get(server_key(server_id, cached_revision))
+        # The pointer itself is a bare int, not a document — still decoded
+        # normally via `get`. Only the detail document behind it is large
+        # enough to skip the decode/re-validate/re-encode round trip for
+        # (see `list_servers`'s docstring for the measurement).
+        cached_detail = await cache.get_raw(server_key(server_id, cached_revision))
         if cached_detail is not None:
-            return ServerDetail.model_validate(cached_detail)
+            return Response(content=cached_detail, media_type="application/json")
 
     server = await repo.get_by_id(server_id)
     if server is None:

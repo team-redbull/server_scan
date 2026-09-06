@@ -301,6 +301,45 @@ async def test_get_detail_200_is_cache_stable_on_second_read(
     assert first.status_code == 200
     assert second.status_code == 200
     assert first.json() == second.json()
+    # The second read is served straight from the cached bytes (P2,
+    # `docs/notes/2026-09-audit.md`), never decoded/re-validated/
+    # re-encoded — still a real, well-formed `application/json` response.
+    assert second.headers["content-type"] == "application/json"
+
+
+async def test_list_is_cache_stable_on_second_read(
+    app_context: tuple[AsyncClient, MongoServerRepository],
+) -> None:
+    """Same P2 cache-hit path as the detail endpoint, for `GET /servers`:
+    the second read returns the raw bytes `set()` cached on the first,
+    never a `model_validate` + FastAPI re-encode round trip.
+    """
+    client, repo = app_context
+    for i in range(3):
+        await repo.upsert(_make_server(i, name=f"list-cache-test-{i}"))
+
+    first = await client.get("/api/v1/servers")
+    second = await client.get("/api/v1/servers")
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json() == second.json()
+    assert second.headers["content-type"] == "application/json"
+
+
+async def test_facets_is_cache_stable_on_second_read(
+    app_context: tuple[AsyncClient, MongoServerRepository],
+) -> None:
+    client, repo = app_context
+    await repo.upsert(_make_server(1, name="facets-cache-test"))
+
+    first = await client.get("/api/v1/servers/facets")
+    second = await client.get("/api/v1/servers/facets")
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json() == second.json()
+    assert second.headers["content-type"] == "application/json"
 
 
 async def test_get_detail_404_for_missing_server(

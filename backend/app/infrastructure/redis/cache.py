@@ -87,6 +87,32 @@ class CacheClient:
         cache_operations_total.labels(operation="get", outcome="hit").inc()
         return value
 
+    async def get_raw(self, key: str) -> bytes | str | None:
+        """Same cache-aside contract as `get` (degrades to `None` on any
+        Redis failure, never raises), but skips `json.loads` — for a
+        caller about to hand the bytes straight back as the HTTP response
+        body unchanged, which would otherwise decode them here only to
+        have FastAPI re-encode the identical bytes right back out. Measured
+        at 0.919 ms/request for a cached list page (`docs/notes/
+        2026-09-research-performance.md` §7.2); every other JSON round trip
+        this method skips is the same cost. Never use this for a value a
+        caller is going to inspect or mutate — `get` is still correct
+        there.
+        """
+        try:
+            raw = await self._redis.client.get(key)
+        except _CACHE_EXCEPTIONS as exc:
+            logger.warning("cache.get_failed", key=key, error=str(exc))
+            cache_operations_total.labels(operation="get", outcome="error").inc()
+            return None
+
+        if raw is None:
+            cache_operations_total.labels(operation="get", outcome="miss").inc()
+            return None
+
+        cache_operations_total.labels(operation="get", outcome="hit").inc()
+        return raw
+
     async def set(self, key: str, value: object, *, ttl_seconds: int) -> None:
         try:
             payload = json.dumps(value, default=str)

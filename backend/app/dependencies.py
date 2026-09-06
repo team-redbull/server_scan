@@ -6,6 +6,13 @@ functions only *retrieve* what's already there. This keeps route handlers
 free of any global-singleton imports, which is what makes
 `app.dependency_overrides` usable in tests without monkeypatching module
 globals.
+
+Every provider here is `async def`, not `def`, even though none of them
+await anything — a sync dependency is still dispatched through Starlette's
+`run_in_threadpool`, and an isolated A/B measured that handoff at
++0.14 ms per dependency (`docs/notes/2026-09-research-performance.md`
+§7.4). `list_servers` alone pulls in three of these, so this was the
+largest single measured cost in the read path with a one-keyword fix.
 """
 
 from __future__ import annotations
@@ -17,17 +24,17 @@ from app.infrastructure.mongodb import MongoClientHolder
 from app.infrastructure.redis import RedisClientHolder
 
 
-def get_mongo_holder(request: Request) -> MongoClientHolder:
+async def get_mongo_holder(request: Request) -> MongoClientHolder:
     holder: MongoClientHolder = request.app.state.mongo
     return holder
 
 
-def get_redis_holder(request: Request) -> RedisClientHolder:
+async def get_redis_holder(request: Request) -> RedisClientHolder:
     holder: RedisClientHolder = request.app.state.redis
     return holder
 
 
-def get_request_id(request: Request) -> str | None:
+async def get_request_id(request: Request) -> str | None:
     return getattr(request.state, "request_id", None)
 
 
@@ -41,5 +48,5 @@ def get_request_id(request: Request) -> str | None:
 _UNAUTHENTICATED_ACTOR = Actor(type=ActorType.USER, id="unauthenticated", display="API (no auth)")
 
 
-def get_current_actor(_request: Request) -> Actor:
+async def get_current_actor(_request: Request) -> Actor:
     return _UNAUTHENTICATED_ACTOR

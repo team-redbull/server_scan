@@ -1,12 +1,25 @@
 """`ClassificationService`: the one integration seam for slice 2's rule
 engine.
 
-`classify_server` is the ONLY place that loads the active ruleset (all
-enabled rules, via `MongoClassificationRuleRepository.list_all
-(enabled_only=True)`) and hands it to the pure domain `classify()`
-function. Callers (the ingestion pipeline) never call `list_all()` and
-`classify()` separately — that split is exactly the kind of duplication
-that lets a caller forget the `enabled_only` filter.
+Two ways to reach the domain's pure `classify()` function, and both are
+this module's job precisely so a caller never has to call `list_all()`
+and `classify()` separately — that split is exactly the kind of
+duplication that lets a caller forget the `enabled_only` filter:
+
+- `classify_server` loads the active ruleset fresh (all enabled rules,
+  via `MongoClassificationRuleRepository.list_all(enabled_only=True)`)
+  on every call — the right choice for a single, standalone
+  classification against whatever is current right now (the
+  `POST /servers/{id}/reclassify` route).
+- `load_ruleset` + `classify_with_ruleset` split that same load out from
+  the classification: a caller classifying many servers in one run (the
+  ingestion pipeline, per `app.application.services.ingest`) loads the
+  ruleset once — P1 in `docs/notes/2026-09-audit.md`: a 10,000-server run
+  was issuing ~10,000 uncached collection reads for an answer that cannot
+  change during the run — and calls `classify_with_ruleset` per server
+  against that one snapshot. `enabled_only=True` still lives in exactly
+  one place (`load_ruleset`), so this isn't the duplication the split
+  above warns about.
 
 `validate_rule_write` is a free function, not a method: it validates a
 fully-merged `ClassificationRule` before persisting, with no
@@ -154,6 +167,48 @@ class ClassificationService:
         itself (see its own predicate), not pre-filtered here — this
         method never re-implements that predicate, it only supplies the
         enabled ruleset.
+
+        Args:
+            classifiable (ClassifiableServer): The server to classify.
+
+        Returns:
+            ClassificationResult: The resolved installation type and, when
+                one matched, which rule and why.
         """
-        rules = await self._rule_repo.list_all(enabled_only=True)
-        return classify(classifiable, rules, self._engine)
+        rules = await self.load_ruleset()
+        return self.classify_with_ruleset(classifiable, rules)
+
+    async def load_ruleset(self) -> list[ClassificationRule]:
+        """The current active (enabled) ruleset, for a caller that will
+        classify many servers against the same snapshot in one run — the
+        ingestion pipeline, never a fresh `classify_server` call repeated
+        per server. Centralizing `enabled_only=True` here rather than
+        letting a caller reach for `list_all()` directly is what keeps
+        this method (and `classify_server`) the only two places that
+        filter can be forgotten.
+
+        Returns:
+            list[ClassificationRule]: The rules to pass into
+                `classify_with_ruleset` for the rest of the run.
+        """
+        return await self._rule_repo.list_all(enabled_only=True)
+
+    def classify_with_ruleset(
+        self, classifiable: ClassifiableServer, ruleset: list[ClassificationRule]
+    ) -> ClassificationResult:
+        """Classify against an already-loaded ruleset (`load_ruleset`) —
+        the ingest-loop counterpart to `classify_server`, which loads its
+        own ruleset on every call. A caller classifying many servers in
+        one run should call `load_ruleset` once and this per server, never
+        `classify_server` in a loop.
+
+        Args:
+            classifiable (ClassifiableServer): The server to classify.
+            ruleset (list[ClassificationRule]): The rules loaded by
+                `load_ruleset` for this run.
+
+        Returns:
+            ClassificationResult: The resolved installation type and, when
+                one matched, which rule and why.
+        """
+        return classify(classifiable, ruleset, self._engine)

@@ -48,11 +48,11 @@ router = APIRouter(prefix="/api/v1", tags=["health-policies"])
 _METRIC_REGISTRY = build_default_registry()
 
 
-def _metric_registry() -> MetricRegistry:
+async def _metric_registry() -> MetricRegistry:
     return _METRIC_REGISTRY
 
 
-def _policy_repo(
+async def _policy_repo(
     mongo: Annotated[MongoClientHolder, Depends(get_mongo_holder)],
 ) -> MongoHealthPolicyRepository:
     return MongoHealthPolicyRepository(mongo)

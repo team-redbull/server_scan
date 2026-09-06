@@ -70,14 +70,14 @@ _INSTALLATION_ORDER: tuple[str, ...] = tuple(t.value for t in InstallationType)
 _VENDOR_INDEX = {vendor: position for position, vendor in enumerate(_VENDOR_ORDER)}
 
 
-def _server_repo(
+async def _server_repo(
     mongo: Annotated[MongoClientHolder, Depends(get_mongo_holder)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> MongoServerRepository:
     return MongoServerRepository(mongo, cursor_secret=settings.cursor_secret)
 
 
-def _cache(
+async def _cache(
     redis: Annotated[RedisClientHolder, Depends(get_redis_holder)],
 ) -> CacheClient:
     return CacheClient(redis)

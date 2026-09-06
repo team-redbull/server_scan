@@ -3,8 +3,19 @@
 `HealthPolicyService` ties together policy loading, fact extraction, and
 the domain evaluation engine (`app.domain.services.health.evaluate.
 evaluate_health`) so callers never have to remember to do those three
-steps in the right order themselves. `evaluate_server` is the ingestion
-pipeline's own entry point.
+steps in the right order themselves.
+
+Two ways to reach it, mirroring `ClassificationService`'s own
+`classify_server` / `load_ruleset`+`classify_with_ruleset` split, and for
+the same reason: `evaluate_server` loads every stored policy fresh on
+every call (right for a single, standalone evaluation — the
+`POST /servers/{id}/health/recalculate` route); `load_policies` +
+`evaluate_with_policies` split that load out for a caller evaluating many
+servers in one run — the ingestion pipeline
+(`app.application.services.ingest`), which used to call `evaluate_server`
+per server and, per P1 in `docs/notes/2026-09-audit.md`, was issuing
+~10,000 uncached collection reads on a 10,000-server run for an answer
+that cannot change during that run.
 
 `validate_policy_write` is a free function, not a method, for the same
 reason `classification_service.validate_rule_write` is: its only caller
@@ -128,17 +139,60 @@ class HealthPolicyService:
         self._registry = registry
 
     async def evaluate_server(self, server: Server) -> HealthState:
-        """Load every stored policy (scope filtering happens inside
-        `evaluate_health` itself — see its docstring) and evaluate against
-        this server's facts. `manager_type` is always `None`: `Server`
-        carries no `manager_type` field today (only `manager_id` — see
-        `app.domain.models.server.Server`), so any policy scoped to a
-        `manager_type` cannot currently match any server. That's a known
-        gap in the `Server` schema, not something this service can paper
+        """Load every stored policy fresh and evaluate against this
+        server's facts — the right choice for a single, standalone
+        evaluation against whatever is current right now (the
+        `POST /servers/{id}/health/recalculate` route). A caller
+        evaluating many servers in one run should call `load_policies`
+        once instead and `evaluate_with_policies` per server; see
+        `load_policies`'s docstring for why (P1,
+        `docs/notes/2026-09-audit.md`).
+
+        Args:
+            server (Server): The server to evaluate.
+
+        Returns:
+            HealthState: The resolved overall severity and every firing/
+                suppressed evaluation.
+        """
+        policies = await self.load_policies()
+        return self.evaluate_with_policies(server, policies)
+
+    async def load_policies(self) -> list[HealthPolicy]:
+        """Every stored policy (scope filtering happens inside
+        `evaluate_health` itself — see its docstring), for a caller that
+        will evaluate many servers against the same snapshot in one run —
+        the ingestion pipeline, never a fresh `evaluate_server` call
+        repeated per server. Before this existed, a 10,000-server run was
+        issuing ~10,000 uncached collection reads for an answer that
+        cannot change during the run.
+
+        Returns:
+            list[HealthPolicy]: The policies to pass into
+                `evaluate_with_policies` for the rest of the run.
+        """
+        return await self._policy_repo.list_all()
+
+    def evaluate_with_policies(self, server: Server, policies: list[HealthPolicy]) -> HealthState:
+        """Evaluate against an already-loaded policy set (`load_policies`)
+        — the ingest-loop counterpart to `evaluate_server`, which loads
+        its own policy set on every call. `manager_type` is always `None`:
+        `Server` carries no `manager_type` field today (only `manager_id`
+        — see `app.domain.models.server.Server`), so any policy scoped to
+        a `manager_type` cannot currently match any server. That's a known
+        gap in the `Server` schema, not something this method can paper
         over.
+
+        Args:
+            server (Server): The server to evaluate.
+            policies (list[HealthPolicy]): The policies loaded by
+                `load_policies` for this run.
+
+        Returns:
+            HealthState: The resolved overall severity and every firing/
+                suppressed evaluation.
         """
         facts = extract_facts(server)
-        policies = await self._policy_repo.list_all()
         return evaluate_health(
             facts,
             policies,
