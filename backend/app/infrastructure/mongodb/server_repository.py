@@ -21,6 +21,7 @@ from app.domain.models.server import Server
 from app.domain.ports.repository import Page, SiteBreakdownRow
 from app.domain.services.cursor import CursorPosition, decode_cursor, encode_cursor
 from app.domain.services.search import SORT_ACCESSORS, build_search_query, resolve_sort_field
+from app.errors import NotFoundError, RevisionConflictError
 from app.infrastructure.mongodb.client import MongoClientHolder
 from app.infrastructure.mongodb.indexes import SERVERS_COLLECTION
 
@@ -93,6 +94,34 @@ class MongoServerRepository:
         """
         doc = server.model_dump(by_alias=True, mode="json")
         await self._collection.replace_one({"_id": server.id}, doc, upsert=True)
+        return server
+
+    async def upsert_with_revision_check(self, server: Server, *, expected_revision: int) -> Server:
+        """Compare-and-set on `revision`: the filter only matches the
+        document a caller actually read (`_id` *and* the revision it saw),
+        so a concurrent writer that already advanced the revision loses
+        the race here instead of silently clobbering the other's write.
+        No `upsert=True` — this never creates a document, so a filter that
+        matches nothing is unconditionally a conflict, distinguished below
+        by whether the document exists at all.
+        """
+        doc = server.model_dump(by_alias=True, mode="json")
+        result = await self._collection.replace_one(
+            {"_id": server.id, "revision": expected_revision}, doc
+        )
+        if result.matched_count == 0:
+            current = await self._collection.find_one(
+                {"_id": server.id}, projection={"revision": 1}
+            )
+            if current is None:
+                raise NotFoundError(
+                    f"No server with id {server.id!r}.", details={"server_id": server.id}
+                )
+            raise RevisionConflictError(
+                f"Server {server.id!r} was modified concurrently: expected revision "
+                f"{expected_revision}, stored revision is now {current['revision']}.",
+                current_revision=current["revision"],
+            )
         return server
 
     async def get_by_id(self, server_id: str) -> Server | None:

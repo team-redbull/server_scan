@@ -37,6 +37,7 @@ class MaintenanceService:
         request_id: str | None,
     ) -> Server:
         server = await self._get_or_404(server_id)
+        expected_revision = server.revision
         was_enabled = server.maintenance.enabled
         now = utcnow()
 
@@ -51,7 +52,9 @@ class MaintenanceService:
         )
         server.revision += 1
         server.updated_at = now
-        await self._server_repo.upsert(server)
+        await self._server_repo.upsert_with_revision_check(
+            server, expected_revision=expected_revision
+        )
 
         await self._audit.record(
             EventType.MAINTENANCE_UPDATED if was_enabled else EventType.MAINTENANCE_ENABLED,
@@ -64,13 +67,16 @@ class MaintenanceService:
 
     async def disable(self, server_id: str, *, actor: Actor, request_id: str | None) -> Server:
         server = await self._get_or_404(server_id)
+        expected_revision = server.revision
         was_enabled = server.maintenance.enabled
         now = utcnow()
 
         server.maintenance = Maintenance(enabled=False, updated_at=now)
         server.revision += 1
         server.updated_at = now
-        await self._server_repo.upsert(server)
+        await self._server_repo.upsert_with_revision_check(
+            server, expected_revision=expected_revision
+        )
 
         if was_enabled:
             await self._audit.record(

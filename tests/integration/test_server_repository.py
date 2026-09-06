@@ -21,7 +21,13 @@ from app.domain.models.server import Identity, Server
 from app.domain.services.normalize import normalize_text
 from app.domain.services.search import build_search_query
 from app.domain.services.search_tokens import build_search_tokens
-from app.errors import CursorFilterMismatchError, CursorInvalidError, UnknownSortFieldError
+from app.errors import (
+    CursorFilterMismatchError,
+    CursorInvalidError,
+    NotFoundError,
+    RevisionConflictError,
+    UnknownSortFieldError,
+)
 from app.infrastructure.mongodb import MongoClientHolder
 from app.infrastructure.mongodb.server_repository import MongoServerRepository
 from app.utils.ids import new_id
@@ -339,3 +345,62 @@ async def test_site_breakdown_groups_by_installation_type(
     assert [(row.site_id, row.installation_type) for row in critical] == [
         ("nyc", InstallationType.UPI.value)
     ]
+
+
+async def test_upsert_with_revision_check_succeeds_when_revision_matches(
+    mongo_holder: MongoClientHolder,
+) -> None:
+    repo = MongoServerRepository(mongo_holder, cursor_secret=_CURSOR_SECRET)
+    server = _make_server(600)
+    await repo.upsert(server)
+
+    server.name = "renamed"
+    server.revision += 1
+    await repo.upsert_with_revision_check(server, expected_revision=1)
+
+    fetched = await repo.get_by_id(server.id)
+    assert fetched is not None
+    assert fetched.name == "renamed"
+    assert fetched.revision == 2
+
+
+async def test_upsert_with_revision_check_rejects_a_concurrent_writer(
+    mongo_holder: MongoClientHolder,
+) -> None:
+    """The compare-and-set race this exists for: two callers both read the
+    same server at revision 1, both mutate their own in-memory copy, and
+    the second to write must lose — never silently clobber the first
+    writer's change.
+    """
+    repo = MongoServerRepository(mongo_holder, cursor_secret=_CURSOR_SECRET)
+    server = _make_server(601)
+    await repo.upsert(server)
+
+    first_writer = server.model_copy(deep=True)
+    second_writer = server.model_copy(deep=True)
+
+    first_writer.name = "first-writer-won"
+    first_writer.revision += 1
+    await repo.upsert_with_revision_check(first_writer, expected_revision=1)
+
+    second_writer.name = "second-writer-should-lose"
+    second_writer.revision += 1
+    with pytest.raises(RevisionConflictError) as exc_info:
+        await repo.upsert_with_revision_check(second_writer, expected_revision=1)
+    assert exc_info.value.details["current_revision"] == 2
+
+    fetched = await repo.get_by_id(server.id)
+    assert fetched is not None
+    assert fetched.name == "first-writer-won"
+    assert fetched.revision == 2
+
+
+async def test_upsert_with_revision_check_on_a_deleted_document_raises_not_found(
+    mongo_holder: MongoClientHolder,
+) -> None:
+    repo = MongoServerRepository(mongo_holder, cursor_secret=_CURSOR_SECRET)
+    server = _make_server(602)
+    # Deliberately never inserted — nothing for the filter to match, and
+    # no document to report a "current" revision from either.
+    with pytest.raises(NotFoundError):
+        await repo.upsert_with_revision_check(server, expected_revision=1)

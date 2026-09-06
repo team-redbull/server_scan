@@ -57,6 +57,21 @@ class ServerRepository(Protocol):
         """
         ...
 
+    async def upsert_with_revision_check(self, server: Server, *, expected_revision: int) -> Server:
+        """Replace an *existing* server document by `_id`, but only if its
+        stored `revision` still equals `expected_revision` — optimistic
+        concurrency for a read-modify-write cycle (reclassify, health
+        recalculate, maintenance enable/disable) against a server another
+        request may have concurrently written. Never inserts: unlike
+        `upsert`, a missing document is a conflict, not a create.
+
+        Raises:
+            RevisionConflictError: The document's stored revision has
+                already moved past `expected_revision`, or the document no
+                longer exists.
+        """
+        ...
+
     async def get_by_id(self, server_id: str) -> Server | None: ...
 
     async def list_page(

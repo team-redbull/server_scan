@@ -347,6 +347,7 @@ async def reclassify_server(
     if server is None:
         raise NotFoundError(f"No server with id {server_id!r}.", details={"server_id": server_id})
 
+    expected_revision = server.revision
     previous_type = server.classification.installation_type
     classifiable = ClassifiableServer(
         name=server.name,
@@ -363,7 +364,7 @@ async def reclassify_server(
     server.revision += 1
     server.updated_at = utcnow()
 
-    await repo.upsert(server)
+    await repo.upsert_with_revision_check(server, expected_revision=expected_revision)
     await _invalidate_detail_cache(server_id, cache)
 
     if server.classification.installation_type != previous_type:
@@ -401,13 +402,14 @@ async def recalculate_server_health(
     if server is None:
         raise NotFoundError(f"No server with id {server_id!r}.", details={"server_id": server_id})
 
+    expected_revision = server.revision
     previous_overall = server.health.overall
     state = await service.evaluate_server(server)
     server.health = health_from_state(state)
     server.revision += 1
     server.updated_at = utcnow()
 
-    await repo.upsert(server)
+    await repo.upsert_with_revision_check(server, expected_revision=expected_revision)
     await _invalidate_detail_cache(server_id, cache)
 
     if server.health.overall != previous_overall:
