@@ -31,6 +31,7 @@ from app.domain.enums import Vendor
 from app.domain.ports.provider import ProviderNic, ProviderServer
 from app.domain.value_objects.mac_address import normalize_mac
 from app.infrastructure.providers.redfish.mapping import (
+    health_detail_of,
     health_of,
     is_absent,
     media_type_of,
@@ -387,6 +388,7 @@ def _gpus(hardware: dict[str, Any]) -> tuple[dict[str, object], ...] | None:
                 "serial": _opt_str(device.get("SerialNumber")),
                 "memory_bytes": None,
                 "health": health_of(device),
+                "health_detail": health_detail_of(device),
                 "pci_address": _opt_str(device.get("Location")),
                 "firmware_version": (
                     _opt_str(current.get("VersionString")) if isinstance(current, dict) else None
@@ -415,6 +417,7 @@ def _drive_v2(drive: dict[str, Any]) -> dict[str, object]:
         "protocol": _opt_str(drive.get("Protocol")),
         "capacity_bytes": _opt_int(drive.get("CapacityBytes")),
         "health": health_of(drive),
+        "health_detail": health_detail_of(drive),
     }
 
 
@@ -456,6 +459,7 @@ def _drive_v1(drive: dict[str, Any]) -> dict[str, object]:
         "capacity_bytes": capacity,
         "slot": _opt_str(drive.get("Location")),
         "health": health_of(drive),
+        "health_detail": health_detail_of(drive),
     }
 
 
@@ -531,6 +535,26 @@ def _storage(
     return drives, sum(sizes) if sizes else None
 
 
+def _redfish_status_pair(status: object) -> str:
+    """
+    A PSU's generic Redfish `Health`/`State` pair, combined for display.
+
+    Matches `..redfish.mapping.psus_from_supplies`'s own `health_detail`
+    exactly, since a OneView PSU row is itself Redfish-schema-shaped and
+    `psu_health`'s fallback reduces this same pair.
+
+    Args:
+        status (object): The PSU row's own `Status` field, expected to be
+            a `{"Health": ..., "State": ...}` mapping.
+
+    Returns:
+        str: `"<Health>/<State>"`, `"—"` standing in for whichever half
+            is missing.
+    """
+    status = status if isinstance(status, dict) else {}
+    return f"{status.get('Health') or '—'}/{status.get('State') or '—'}"
+
+
 def psus_from(rows: list[dict[str, Any]] | None) -> tuple[dict[str, object], ...] | None:
     """
     Map one server's power supplies.
@@ -568,6 +592,13 @@ def psus_from(rows: list[dict[str, Any]] | None) -> tuple[dict[str, object], ...
                 "model": _opt_str(row.get("Model")),
                 "serial": _opt_str(row.get("SerialNumber")),
                 "health": _PSU_STATE_HEALTH.get(str(state), psu_health(row)),
+                # Whichever raw signal actually decided `health` above —
+                # HPE's own `state` when there is one (the preferred,
+                # more specific source), else the same generic Redfish
+                # `Health/State` pair `psu_health`'s fallback reduces
+                # (`..redfish.mapping.psus_from_supplies`'s own
+                # `health_detail` uses the identical combined form).
+                "health_detail": _opt_str(state) or _redfish_status_pair(row.get("Status")),
                 # "The maximum amount of power, in Watts, that the
                 # associated power supply is rated to deliver."
                 "capacity_watts": _opt_int(row.get("PowerCapacityWatts")),

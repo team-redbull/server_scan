@@ -240,6 +240,7 @@ def _gpu_from_dict(data: dict[str, object]) -> Gpu:
         serial=_opt_str(data.get("serial")),
         memory_bytes=_opt_int(data.get("memory_bytes")),
         health=_opt_str(data.get("health")),
+        health_detail=_opt_str(data.get("health_detail")),
         pci_address=_opt_str(data.get("pci_address")),
         firmware_version=_opt_str(data.get("firmware_version")),
         memory_type=_opt_str(data.get("memory_type")),
@@ -266,6 +267,7 @@ def _psu_from_dict(data: dict[str, object]) -> Psu:
         model=_opt_str(data.get("model")),
         serial=_opt_str(data.get("serial")),
         health=_opt_str(data.get("health")),
+        health_detail=_opt_str(data.get("health_detail")),
         capacity_watts=_opt_int(data.get("capacity_watts")),
     )
 
@@ -283,6 +285,7 @@ def _drive_from_dict(data: dict[str, object]) -> StorageDrive:
         media_type=media_type,
         capacity_bytes=_opt_int(data.get("capacity_bytes")),
         health=_opt_str(data.get("health")),
+        health_detail=_opt_str(data.get("health_detail")),
     )
 
 

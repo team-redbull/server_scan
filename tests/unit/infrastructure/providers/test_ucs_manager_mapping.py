@@ -769,6 +769,10 @@ class TestCpuAndStorage:
         )
         assert result.storage_drives is not None
         assert result.storage_drives[0]["health"] == expected
+        # The raw disk_state health was reduced from, verbatim — None for
+        # an empty string, matching `health_detail`'s "no state to
+        # preserve" contract rather than reporting an empty string.
+        assert result.storage_drives[0]["health_detail"] == (disk_state or None)
 
     def test_unmapped_device_type_is_unknown_media(self) -> None:
         result = compute_unit_to_provider_server(
@@ -820,6 +824,7 @@ class TestPsus:
         assert psu["serial"] == "LIT12345678"
         assert psu["capacity_watts"] == 1050
         assert psu["health"] == "UP"
+        assert psu["health_detail"] == "operable"
         assert psu["oper_power"] == "ok"
 
     def test_a_failed_psu_reports_down(self) -> None:
@@ -840,6 +845,7 @@ class TestPsus:
         assert result.psus is not None
         psu = result.psus[0]
         assert psu["health"] == "DOWN"
+        assert psu["health_detail"] == "inoperable"
         assert psu["oper_power"] == "failed"
 
     def test_an_empty_psu_bay_is_not_reported_as_a_failed_psu(self) -> None:
@@ -934,6 +940,7 @@ class TestGpus:
         assert gpu["pci_address"] == "0000:af:00.0"
         assert gpu["firmware_version"] == "96.00.5E.00.02"
         assert gpu["health"] == "UP"
+        assert gpu["health_detail"] == "operable"
         assert gpu["temperature_celsius"] == 42.5
 
     def test_a_failed_gpu_reports_down(self) -> None:
@@ -953,6 +960,7 @@ class TestGpus:
         )
         assert result.gpus is not None
         assert result.gpus[0]["health"] == "DOWN"
+        assert result.gpus[0]["health_detail"] == "inoperable"
 
     def test_an_empty_gpu_slot_is_not_reported(self) -> None:
         result = compute_unit_to_provider_server(

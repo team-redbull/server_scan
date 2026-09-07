@@ -85,9 +85,18 @@ def _fully_read(**overrides: Any) -> ProviderServer:
                 "media_type": MediaType.SSD.value,
                 "capacity_bytes": 4 * 1024**4,
                 "health": HealthSeverity.CRITICAL.value,
+                "health_detail": "self-test-failed",
             },
         ),
-        "psus": ({"id": "1", "model": "PSU-750W", "serial": "PSU-1", "health": "DOWN"},),
+        "psus": (
+            {
+                "id": "1",
+                "model": "PSU-750W",
+                "serial": "PSU-1",
+                "health": "DOWN",
+                "health_detail": "inoperable",
+            },
+        ),
     }
     base.update(overrides)
     return ProviderServer(**base)
@@ -158,6 +167,52 @@ async def test_a_sub_resource_that_could_not_be_read_does_not_erase_stored_hardw
     # unconditionally, which this same-shaped defect would have produced
     # regardless of what the provider reported.
     assert [p.health for p in server.hardware.power.psus] == ["DOWN"]
+    # Added 2026-09-07: `health_detail` — the raw vendor state `health`
+    # was reduced from — carries through the same dict-to-domain-model
+    # boundary (`IngestService._drive_from_dict`/`_psu_from_dict`) and
+    # survives the same carry-forward as `health` itself.
+    assert [d.health_detail for d in server.hardware.storage.drives] == ["self-test-failed"]
+    assert [p.health_detail for p in server.hardware.power.psus] == ["inoperable"]
+
+
+async def test_gpu_health_detail_survives_the_full_ingest_pipeline(
+    mongo_holder: MongoClientHolder,
+) -> None:
+    """The same `health_detail` round trip as the drive/PSU one above,
+    for `IngestService._gpu_from_dict` — not covered by `_fully_read`'s
+    own base fixture, which reports no GPU by default.
+    """
+    service = _service(mongo_holder)
+
+    await service.ingest(
+        _OneShotProvider(
+            _fully_read(
+                serial="SN-GPU-DETAIL-1",
+                gpus=(
+                    {
+                        "vendor": "NVIDIA",
+                        "model": "H100",
+                        "serial": "GPU-1",
+                        "health": HealthSeverity.CRITICAL.value,
+                        "health_detail": "hardware-failure",
+                    },
+                ),
+            )
+        )
+    )
+
+    repo = MongoServerRepository(mongo_holder, cursor_secret=_CURSOR_SECRET)
+    page = await repo.list_page(
+        filters={"identity.serial_normalized": "sn-gpu-detail-1"},
+        search=None,
+        sort="name",
+        sort_desc=False,
+        cursor=None,
+        page_size=1,
+        with_count=False,
+    )
+    [gpu] = page.items[0].hardware.gpus
+    assert gpu.health_detail == "hardware-failure"
 
 
 async def test_an_empty_read_still_overwrites(mongo_holder: MongoClientHolder) -> None:

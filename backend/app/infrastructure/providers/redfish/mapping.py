@@ -150,6 +150,29 @@ def health_of(resource: dict[str, Any]) -> str:
     return _HEALTH.get(str(raw), HealthSeverity.UNKNOWN.value)
 
 
+def health_detail_of(resource: dict[str, Any]) -> str | None:
+    """
+    The raw `Status.Health` string `health_of` reduced to a `HealthSeverity`.
+
+    DMTF's own vocabulary (`"OK"`/`"Warning"`/`"Critical"`) is already
+    coarse, so this rarely adds nuance `health_of` doesn't already carry
+    — unlike Cisco's dozens-strong `disk_state`/`OperState` enums — but
+    it is kept for the same reason and the same contract as every other
+    `health_detail` field: diagnostic only, never read by the health
+    policy engine.
+
+    Args:
+        resource (dict[str, Any]): Any Redfish resource.
+
+    Returns:
+        str | None: The raw string, or `None` when `Status.Health` is
+            absent or not a string.
+    """
+    status = resource.get("Status")
+    raw = status.get("Health") if isinstance(status, dict) else None
+    return raw if isinstance(raw, str) and raw else None
+
+
 def is_absent(resource: dict[str, Any]) -> bool:
     """
     Report whether a component is physically not installed.
@@ -216,6 +239,7 @@ def drive_to_dict(drive: dict[str, Any]) -> dict[str, object]:
         "media_type": media_type_of(drive),
         "capacity_bytes": _as_int(drive.get("CapacityBytes")),
         "health": health_of(drive),
+        "health_detail": health_detail_of(drive),
     }
 
 
@@ -497,6 +521,7 @@ def gpus_from_processors(
                 "serial": processor.get("SerialNumber") or None,
                 "memory_bytes": mib * _MIB if mib is not None else None,
                 "health": health_of(processor),
+                "health_detail": health_detail_of(processor),
                 "pci_address": None,
                 "firmware_version": processor.get("FirmwareVersion") or None,
                 "memory_type": _gpu_memory_type(processor),
@@ -633,6 +658,7 @@ def psus_from_supplies(
             continue
         status = supply.get("Status")
         status = status if isinstance(status, dict) else {}
+        raw_status = f"{status.get('Health') or '—'}/{status.get('State') or '—'}"
         psus.append(
             {
                 "id": str(supply.get("MemberId") or supply.get("Id") or supply.get("Name") or "")
@@ -640,10 +666,16 @@ def psus_from_supplies(
                 "model": supply.get("Model") or None,
                 "serial": supply.get("SerialNumber") or None,
                 "health": psu_health(supply),
+                # `psu_health` reduces `Health` AND `State` together (a
+                # PSU with no `Health` still falls through to a
+                # `State`-driven answer) — the same combined form
+                # `redfish_status` below already used, now also the
+                # persisted `health_detail`.
+                "health_detail": raw_status,
                 "capacity_watts": _as_int(
                     supply.get("PowerCapacityWatts") or supply.get("CapacityWatts")
                 ),
-                "redfish_status": (f"{status.get('Health') or '—'}/{status.get('State') or '—'}"),
+                "redfish_status": raw_status,
             }
         )
     return tuple(psus)

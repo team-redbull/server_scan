@@ -158,6 +158,24 @@ def test_drive_health_uses_the_platform_vocabulary(disk: dict[str, Any], expecte
     assert mapping.drive(disk)["health"] == expected
 
 
+@pytest.mark.parametrize(
+    ("disk", "expected"),
+    [
+        ({"Health": "Critical"}, "Critical"),
+        ({"DriveState": "Failed"}, "Failed"),
+        ({"Health": "OK", "DriveState": "Online"}, "OK"),  # Health wins when both present
+        ({}, None),
+    ],
+)
+def test_drive_health_detail_names_whichever_field_decided_the_tier(
+    disk: dict[str, Any], expected: str | None
+) -> None:
+    """The raw state `health` was reduced from — same `Health`-then-
+    `DriveState` precedence `_drive_health` itself uses.
+    """
+    assert mapping.drive(disk)["health_detail"] == expected
+
+
 def test_drive_health_recognizes_the_live_intersight_ok_spelling() -> None:
     """Confirmed live 2026-09-07 (`tools.verify_intersight`'s disk health
     vocabulary check, section 8): 216 of 226 sampled drives on this
@@ -305,6 +323,7 @@ def test_gpu_telemetry_is_none_because_the_api_has_none() -> None:
     )
     assert gpu["model"] == "NVIDIA A100"
     assert gpu["health"] == "UP"
+    assert gpu["health_detail"] == "operable"
     for absent in (
         "memory_bytes",
         "memory_type",
@@ -374,7 +393,9 @@ def test_psu_health_uses_the_oper_state_vocabulary_not_ok_failed() -> None:
     )
     failed = mapping.psu({"PsuId": "2", "OperState": "inoperable"})
     assert healthy["health"] == "UP"
+    assert healthy["health_detail"] == "operable"
     assert failed["health"] == "DOWN"
+    assert failed["health_detail"] == "inoperable"
 
 
 def test_psu_health_recognizes_the_live_intersight_ok_spelling() -> None:

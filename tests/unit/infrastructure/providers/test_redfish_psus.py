@@ -40,6 +40,7 @@ class TestVocabulary:
         """
         [psu] = psus_from_supplies([_supply("OK", "Enabled")]) or []
         assert psu["health"] == "UP"
+        assert psu["health_detail"] == "OK/Enabled"
 
     def test_a_critical_supply_is_down(self) -> None:
         """The case the whole check exists for."""
@@ -62,6 +63,9 @@ class TestVocabulary:
         [psu] = psus_from_supplies([_supply("Warning", "Enabled")]) or []
         assert psu["health"] == "UNKNOWN"
         assert psu["redfish_status"] == "Warning/Enabled"
+        # health_detail (added 2026-09-07) is the persisted counterpart
+        # of redfish_status above — same value, same "Health/State" form.
+        assert psu["health_detail"] == "Warning/Enabled"
 
     def test_an_offline_supply_is_down(self) -> None:
         """`UnavailableOffline` is a fitted supply that is not supplying."""

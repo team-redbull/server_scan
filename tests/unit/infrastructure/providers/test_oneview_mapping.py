@@ -346,6 +346,7 @@ class TestGpus:
         assert gpus[0]["vendor"] == "NVIDIA"
         assert gpus[0]["serial"] == "GPU-0001"
         assert gpus[0]["pci_address"] == "PCI-E Slot 1"
+        assert gpus[0]["health_detail"] == "OK"
 
     def test_gpu_memory_is_left_for_the_catalog_to_fill(self) -> None:
         """OneView reports no GPU memory field anywhere — not on the
@@ -383,6 +384,7 @@ class TestStorage:
         assert server.storage_drives[0]["capacity_bytes"] == 1600321314816
         assert server.storage_drives[0]["media_type"] == "NVME"
         assert server.storage_total_bytes == 1600321314816
+        assert server.storage_drives[0]["health_detail"] == "OK"
 
     def test_the_v1_schema_never_uses_the_marketing_capacity(self) -> None:
         """`CapacityGB` is documented by HPE as "the marketing capacity
@@ -425,6 +427,7 @@ class TestStorage:
         assert server.storage_drives is not None
         assert server.storage_drives[0]["capacity_bytes"] == 15259721 * 1024 * 1024
         assert server.storage_drives[0]["media_type"] == "HDD"
+        assert server.storage_drives[0]["health_detail"] == "OK"
 
     def test_the_v1_schema_falls_back_to_blocks_times_block_size(self) -> None:
         member = _hardware()
@@ -680,6 +683,10 @@ class TestPsus:
         assert [p["health"] for p in psus] == ["UP", "DOWN", "UNKNOWN"]
         assert psus[0]["capacity_watts"] == 800
         assert psus[0]["serial"] == "5WBXK0GLLDF123"
+        # health_detail names HPE's own state — the more specific source
+        # that actually decided each of these, not the generic Redfish
+        # Health/State pair every row above shares ("OK"/"Enabled").
+        assert [p["health_detail"] for p in psus] == ["Ok", "ACPowerLost", "Degraded"]
 
     def test_power_failed_psu_count_actually_counts_a_failed_oneview_psu(self) -> None:
         """The regression that matters most: reproduces
@@ -714,6 +721,10 @@ class TestPsus:
 
         assert psus is not None
         assert [p["health"] for p in psus] == ["DOWN", "UP"]
+        # No HPE state on either row, so health_detail falls back to the
+        # same generic Redfish Health/State pair the fallback itself
+        # reduced — "—" standing in for the missing State half.
+        assert [p["health_detail"] for p in psus] == ["Critical/—", "OK/—"]
 
     def test_an_absent_bay_is_not_a_power_supply(self) -> None:
         assert psus_from([{"MemberId": "1", "Status": {"State": "Absent"}}]) == ()

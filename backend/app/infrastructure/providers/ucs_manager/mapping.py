@@ -405,6 +405,10 @@ def _storage_drives(disk_units: list[Any]) -> tuple[tuple[dict[str, object], ...
                 "media_type": _media_type(mo),
                 "capacity_bytes": capacity_bytes,
                 "health": _disk_health(mo),
+                # The raw `disk_state` `health` was reduced from — e.g.
+                # "self-test-failed" and "unconfigured-bad" both read
+                # CRITICAL, but only this field still tells them apart.
+                "health_detail": getattr(mo, "disk_state", None) or None,
             }
         )
     return tuple(drives), total_bytes
@@ -490,6 +494,9 @@ def _gpu(mo: Any) -> dict[str, object]:
         "model": getattr(mo, "model", None) or None,
         "serial": getattr(mo, "serial", None) or None,
         "health": _oper_state(mo),
+        # The raw `oper_state` `health` was reduced from — see
+        # `ucs_manager/mapping.py`'s `_psu` for the same field.
+        "health_detail": getattr(mo, "oper_state", None) or None,
         "pci_address": getattr(mo, "pci_addr", None) or None,
         "firmware_version": getattr(mo, "firmware_version", None) or None,
         "memory_bytes": None,
@@ -574,6 +581,11 @@ def _psu(mo: Any) -> dict[str, object]:
         "model": getattr(mo, "model", None) or None,
         "serial": getattr(mo, "serial", None) or None,
         "health": _oper_state(mo),
+        # The raw `oper_state` `health` was reduced from. Unlike
+        # `oper_power` below, this one IS part of the `Psu` domain model
+        # and is persisted — see `hardware.Psu.health_detail`'s
+        # docstring.
+        "health_detail": getattr(mo, "oper_state", None) or None,
         "capacity_watts": _psu_wattage(mo),
         "oper_power": getattr(mo, "power", None) or None,
     }

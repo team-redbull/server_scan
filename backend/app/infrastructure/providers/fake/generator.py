@@ -351,6 +351,23 @@ _DRIVE_MEDIA = ("NVME", "SSD", "SSD", "HDD")
 # CRITICAL drives.
 _COMPONENT_HEALTHS = ("HEALTHY", "HEALTHY", "HEALTHY", "HEALTHY", "WARNING", "CRITICAL")
 
+# `health_detail`'s stand-in per reduced tier — this seeder generates the
+# reduced tier directly rather than simulating a real collector's raw
+# vocabulary, so these are representative real values (Redfish's own
+# `Status.Health` strings) rather than an invented one. Cosmetic only:
+# never read by anything, including the health policy engine, same as
+# every real provider's `health_detail`.
+_HEALTH_DETAIL_SAMPLES = {"HEALTHY": "OK", "WARNING": "Warning", "CRITICAL": "Critical"}
+
+# Same idea for a PSU's UP/DOWN/DISABLED/UNKNOWN vocabulary, which is a
+# separate reduction from the HEALTHY/WARNING/CRITICAL one above.
+_PSU_HEALTH_DETAIL_SAMPLES = {
+    "UP": "operable",
+    "DOWN": "inoperable",
+    "DISABLED": "admin-down",
+    "UNKNOWN": "unknown",
+}
+
 _DRIVE_CAPACITIES_BYTES: dict[str, tuple[int, ...]] = {
     "NVME": (960_000_000_000, 1_920_000_000_000, 3_840_000_000_000),
     "SSD": (480_000_000_000, 960_000_000_000, 1_920_000_000_000),
@@ -654,6 +671,7 @@ def _build_storage_drives(
                 "media_type": media,
                 "capacity_bytes": capacity,
                 "health": health,
+                "health_detail": _HEALTH_DETAIL_SAMPLES[health],
             }
         )
     return tuple(drives), total
@@ -703,16 +721,20 @@ def _build_psus(rng: random.Random) -> tuple[dict[str, object], ...]:
     """
     capacity = rng.choice((800, 1200, 1600, 2400))
     failed_bay = rng.choice((1, 2)) if rng.random() < 0.06 else None
-    return tuple(
-        {
-            "id": f"PSU{bay}",
-            "model": f"{capacity}W Platinum",
-            "serial": f"PSU{rng.randint(1_000_000, 9_999_999)}",
-            "health": "DOWN" if bay == failed_bay else "UP",
-            "capacity_watts": capacity,
-        }
-        for bay in (1, 2)
-    )
+    psus: list[dict[str, object]] = []
+    for bay in (1, 2):
+        health = "DOWN" if bay == failed_bay else "UP"
+        psus.append(
+            {
+                "id": f"PSU{bay}",
+                "model": f"{capacity}W Platinum",
+                "serial": f"PSU{rng.randint(1_000_000, 9_999_999)}",
+                "health": health,
+                "health_detail": _PSU_HEALTH_DETAIL_SAMPLES[health],
+                "capacity_watts": capacity,
+            }
+        )
+    return tuple(psus)
 
 
 def _build_gpus(rng: random.Random, collector: ManagerType) -> tuple[dict[str, object], ...] | None:
@@ -733,66 +755,79 @@ def _build_gpus(rng: random.Random, collector: ManagerType) -> tuple[dict[str, o
     """
     count = rng.choice(_GPU_COUNTS)
     gpu_vendor, model, memory_type = _gpu_identity(rng, collector)
+    gpus: list[dict[str, object]]
     if collector is ManagerType.UCS_CENTRAL:
-        return tuple(
-            {
-                "vendor": gpu_vendor,
-                "model": model,
-                "serial": f"GPU{rng.getrandbits(32):08x}",
-                "memory_bytes": None,
-                "health": rng.choice(_COMPONENT_HEALTHS),
-                "pci_address": f"0000:{rng.randint(0x10, 0xBF):02x}:00.0",
-                "firmware_version": f"{rng.randint(535, 560)}.{rng.randint(0, 99):02d}.01",
-                "memory_type": None,
-                "ecc_mode_enabled": None,
-                "correctable_error_count": None,
-                "uncorrectable_error_count": None,
-                # The one real telemetry field UCS has, read off the
-                # card's own temperature stats MO.
-                "temperature_celsius": float(rng.randint(38, 82)),
-                "power_watts": None,
-            }
-            for _ in range(count)
-        )
+        gpus = []
+        for _ in range(count):
+            health = rng.choice(_COMPONENT_HEALTHS)
+            gpus.append(
+                {
+                    "vendor": gpu_vendor,
+                    "model": model,
+                    "serial": f"GPU{rng.getrandbits(32):08x}",
+                    "memory_bytes": None,
+                    "health": health,
+                    "health_detail": _HEALTH_DETAIL_SAMPLES[health],
+                    "pci_address": f"0000:{rng.randint(0x10, 0xBF):02x}:00.0",
+                    "firmware_version": f"{rng.randint(535, 560)}.{rng.randint(0, 99):02d}.01",
+                    "memory_type": None,
+                    "ecc_mode_enabled": None,
+                    "correctable_error_count": None,
+                    "uncorrectable_error_count": None,
+                    # The one real telemetry field UCS has, read off the
+                    # card's own temperature stats MO.
+                    "temperature_celsius": float(rng.randint(38, 82)),
+                    "power_watts": None,
+                }
+            )
+        return tuple(gpus)
     if collector is ManagerType.INTERSIGHT:
-        return tuple(
+        gpus = []
+        for _ in range(count):
+            health = rng.choice(_COMPONENT_HEALTHS)
+            gpus.append(
+                {
+                    "vendor": gpu_vendor,
+                    "model": model,
+                    "serial": f"GPU{rng.getrandbits(32):08x}",
+                    "memory_bytes": None,
+                    "health": health,
+                    "health_detail": _HEALTH_DETAIL_SAMPLES[health],
+                    "pci_address": None,
+                    "firmware_version": None,
+                    "memory_type": None,
+                    "ecc_mode_enabled": None,
+                    "correctable_error_count": None,
+                    "uncorrectable_error_count": None,
+                    "temperature_celsius": None,
+                    "power_watts": None,
+                }
+            )
+        return tuple(gpus)
+    gpus = []
+    for _ in range(count):
+        health = rng.choice(_COMPONENT_HEALTHS)
+        gpus.append(
             {
                 "vendor": gpu_vendor,
                 "model": model,
                 "serial": f"GPU{rng.getrandbits(32):08x}",
                 "memory_bytes": None,
-                "health": rng.choice(_COMPONENT_HEALTHS),
+                "health": health,
+                "health_detail": _HEALTH_DETAIL_SAMPLES[health],
+                # Redfish has no PCI address on a `Processor`; the
+                # collector reports None rather than inventing one.
                 "pci_address": None,
-                "firmware_version": None,
-                "memory_type": None,
-                "ecc_mode_enabled": None,
-                "correctable_error_count": None,
-                "uncorrectable_error_count": None,
-                "temperature_celsius": None,
-                "power_watts": None,
+                "firmware_version": f"{rng.randint(535, 560)}.{rng.randint(0, 99):02d}.01",
+                "memory_type": memory_type,
+                "ecc_mode_enabled": True,
+                "correctable_error_count": rng.choice((0, 0, 0, 1, 17)),
+                "uncorrectable_error_count": rng.choice((0, 0, 0, 0, 1)),
+                "temperature_celsius": float(rng.randint(38, 82)),
+                "power_watts": float(rng.randint(90, 700)),
             }
-            for _ in range(count)
         )
-    return tuple(
-        {
-            "vendor": gpu_vendor,
-            "model": model,
-            "serial": f"GPU{rng.getrandbits(32):08x}",
-            "memory_bytes": None,
-            "health": rng.choice(_COMPONENT_HEALTHS),
-            # Redfish has no PCI address on a `Processor`; the collector
-            # reports None rather than inventing one.
-            "pci_address": None,
-            "firmware_version": f"{rng.randint(535, 560)}.{rng.randint(0, 99):02d}.01",
-            "memory_type": memory_type,
-            "ecc_mode_enabled": True,
-            "correctable_error_count": rng.choice((0, 0, 0, 1, 17)),
-            "uncorrectable_error_count": rng.choice((0, 0, 0, 0, 1)),
-            "temperature_celsius": float(rng.randint(38, 82)),
-            "power_watts": float(rng.randint(90, 700)),
-        }
-        for _ in range(count)
-    )
+    return tuple(gpus)
 
 
 def _build_attachments(rng: random.Random, *, site_code: str) -> tuple[ProviderAttachment, ...]:
