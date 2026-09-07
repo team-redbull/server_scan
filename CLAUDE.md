@@ -155,9 +155,37 @@ is a real mistake, not a style preference.
    Applied so far to `app.infrastructure.providers.ucs_common`,
    `.ucs_manager` and `.ucs_central`, and to everything written since —
    `.intersight`, `.redfish`, `.openmanage`, `.oneview` and
-   `.fake` — plus `tools/verify_*.py`. The older parts of the
-   codebase still read in the previous style; convert a file when you are
-   already changing it, not as a sweep of its own.
+   `.fake` — plus `tools/verify_*.py`. **Done for the whole of
+   `backend/app`+`tools/`**, not just those files — the sweep landed
+   2026-09-07 as `refactor: give every backend function a Google-style
+   docstring` (`docs/notes/2026-09-refactor-plan.md`'s Phase 10) and `D`
+   (pydocstyle) is now part of the `ruff check .` gate, so a genuinely
+   missing or malformed docstring fails CI. `ruff` cannot enforce the two
+   rules below, though — both are still on the honor system:
+
+   - **The docstring summary — everything before `Args:`/`Returns:`/
+     `Raises:` — is 1-3 lines, not more, unless the function genuinely
+     needs it to avoid a real misuse.** Decided the same day as Phase 10,
+     applies to every function written since. Most functions already say
+     what they do in their name and signature; a long prose paragraph on
+     top of that is exactly the "wall of prose between statements" this
+     whole convention exists to stop. `Args:`/`Returns:`/`Raises:`
+     entries stay full and typed regardless — this rule is about the
+     prose above them.
+   - **Match the comment density already around the line you're
+     touching — don't single out your own addition.** Corrected
+     2026-09-07: a same-day session added a `health_detail` field to
+     four Pydantic models and gave *only that field* a 7-line inline
+     comment while every sibling field (`id`, `model`, `serial`, `health`
+     itself) had none — the same violation as the wall-of-prose
+     `_OPER_STATE_MAP`/`_DISK_HEALTH_MAP` comments and several
+     multi-paragraph docstring summaries added the same session, all in
+     files this rule already covered. If the surrounding fields/lines
+     carry no comment, a new one shouldn't either, no matter how
+     recently it landed or how much research went into it — the
+     research's home is `docs/`, cited with one line, exactly as this
+     convention already said. Being the one who wrote a fact five
+     minutes ago is not an exception to this rule.
 
 9. **The release notes are the commit subjects — so write the subject
    for whoever deploys it.** Changed 2026-09-05 at the user's request;

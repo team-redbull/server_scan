@@ -142,12 +142,7 @@ class UcsManagerProvider(ServerInventoryProvider):
                 str(getattr(mo, "id", "")): mo for mo in network_elements if getattr(mo, "id", "")
             }
             # A domain singleton — one more query on the same session,
-            # not one per server. `topSystem.name` is the domain's own
-            # cluster name, shared by both FI-A and FI-B; there is no
-            # separate per-FI hostname to read instead. Confirmed live
-            # 2026-09-07 against a real air-gapped domain, previewed
-            # first in `tools.verify_ucs_central`'s section 6. See
-            # `ucs_manager.mapping._attachments`'s `cluster_name` param.
+            # not one per server. See `mapping._attachments`'s docstring.
             top_system = await client.query_classid("topSystem")
             cluster_name = (
                 str(getattr(top_system[0], "name", "") or "") or None if top_system else None

@@ -17,6 +17,10 @@ verdict, and exits.
 
 Reads the same `INVENTORY_INTERSIGHT_IP`/`_API_KEY_ID`/`_API_KEY_PEM`
 the collector does, so if this works the collector can connect too.
+
+A few small helpers below mirror logic already in `intersight.mapping`
+rather than importing its private functions — this is a probe an
+operator runs, not a caller entitled to the collector's internals.
 """
 
 from __future__ import annotations
@@ -53,10 +57,6 @@ _MIB = 1024 * 1024
 def _int(value: object) -> int | None:
     """
     An integer, or None when the value is absent or not numeric.
-
-    A local copy rather than reaching into the mapping module's private
-    helper: this tool is a probe an operator runs, and it should not be
-    coupled to which of the mapping's internals happen to be public.
 
     Args:
         value (object): Any reported value.
@@ -625,11 +625,6 @@ def _drive_capacity_bytes(disk: Mapping[str, Any]) -> int | None:
     """
     A drive's capacity in bytes, mirroring `intersight.mapping._capacity_bytes` exactly.
 
-    A local copy rather than importing the mapping module's private
-    helper, matching this file's own convention (see `_int`'s
-    docstring): this tool is a probe an operator runs, not a caller
-    entitled to the collector's internals.
-
     Args:
         disk (Mapping[str, Any]): A `storage.PhysicalDisk` row.
 
@@ -707,11 +702,6 @@ def _mapped_drive_health(
     """
     A local mirror of `mapping._drive_health`'s logic, for reporting only.
 
-    A local copy rather than importing the mapping module's private
-    helper, matching this file's own convention (see
-    `_drive_capacity_bytes`'s docstring): this tool is a probe an
-    operator runs, not a caller entitled to the collector's internals.
-
     Args:
         health (str | None): The raw `Health` field.
         drive_state (str | None): The raw `DriveState` field.
@@ -738,14 +728,8 @@ async def _check_disk_health(client: IntersightClient) -> None:
     """
     Cross-check every raw Health/DriveState/FailurePredicted combination this tenant reports.
 
-    Prompted by a live report: many drives read `health=UNKNOWN` in a
-    `--dry-run`. `_drive_health` (`intersight/mapping.py`) reads `Health`
-    first, falling back to `DriveState`, and both are free-form strings
-    Cisco does not enumerate — the same shape of gap section 7 found for
-    `OperState`, on a different field. This groups every distinct
-    combination this tenant's drives actually report, rather than
-    printing one line per drive, so a handful of raw spellings explain
-    however many drives are affected.
+    Same shape of check as section 7's OperState vocabulary, one field
+    over. See ADR-0017's "second field pass" section.
 
     Args:
         client (IntersightClient): A connected client.
@@ -819,16 +803,7 @@ async def _check_operstate_vocabulary(client: IntersightClient) -> None:
     """
     Cross-check every raw `OperState` value this tenant reports against `normalize_oper_state`.
 
-    `normalize_oper_state` (`..ucs_common`) was written for UCS Manager's
-    vocabulary (`"operable"`, `"inoperable"`, ...) and reused verbatim for
-    `psu()`, `gpu()` and `attachment()`'s `OperState`-sourced fields —
-    ADR-0017 assumed Intersight reports the same strings without ever
-    checking a live tenant. A UI check on one server found
-    `OperState: OK`, a value the map does not recognize (Intersight's own
-    API docs and generated SDK do not enumerate `OperState`'s allowed
-    values either — see ADR-0017's PSU section), which would silently
-    report every healthy PSU/GPU/NIC as UNKNOWN rather than UP. This
-    prints the raw truth instead of guessing at it from the UI.
+    See ADR-0017's "second field pass" section for why this exists.
 
     Args:
         client (IntersightClient): A connected client.

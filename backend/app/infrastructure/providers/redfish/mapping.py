@@ -154,13 +154,6 @@ def health_detail_of(resource: dict[str, Any]) -> str | None:
     """
     The raw `Status.Health` string `health_of` reduced to a `HealthSeverity`.
 
-    DMTF's own vocabulary (`"OK"`/`"Warning"`/`"Critical"`) is already
-    coarse, so this rarely adds nuance `health_of` doesn't already carry
-    — unlike Cisco's dozens-strong `disk_state`/`OperState` enums — but
-    it is kept for the same reason and the same contract as every other
-    `health_detail` field: diagnostic only, never read by the health
-    policy engine.
-
     Args:
         resource (dict[str, Any]): Any Redfish resource.
 
@@ -666,11 +659,6 @@ def psus_from_supplies(
                 "model": supply.get("Model") or None,
                 "serial": supply.get("SerialNumber") or None,
                 "health": psu_health(supply),
-                # `psu_health` reduces `Health` AND `State` together (a
-                # PSU with no `Health` still falls through to a
-                # `State`-driven answer) — the same combined form
-                # `redfish_status` below already used, now also the
-                # persisted `health_detail`.
                 "health_detail": raw_status,
                 "capacity_watts": _as_int(
                     supply.get("PowerCapacityWatts") or supply.get("CapacityWatts")

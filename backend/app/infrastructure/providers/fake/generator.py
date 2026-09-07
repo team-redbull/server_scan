@@ -351,16 +351,11 @@ _DRIVE_MEDIA = ("NVME", "SSD", "SSD", "HDD")
 # CRITICAL drives.
 _COMPONENT_HEALTHS = ("HEALTHY", "HEALTHY", "HEALTHY", "HEALTHY", "WARNING", "CRITICAL")
 
-# `health_detail`'s stand-in per reduced tier — this seeder generates the
-# reduced tier directly rather than simulating a real collector's raw
-# vocabulary, so these are representative real values (Redfish's own
-# `Status.Health` strings) rather than an invented one. Cosmetic only:
-# never read by anything, including the health policy engine, same as
-# every real provider's `health_detail`.
+# `health_detail`'s stand-in per reduced tier — Redfish's own real
+# `Status.Health` strings, cosmetic only, never read by anything.
 _HEALTH_DETAIL_SAMPLES = {"HEALTHY": "OK", "WARNING": "Warning", "CRITICAL": "Critical"}
 
-# Same idea for a PSU's UP/DOWN/DISABLED/UNKNOWN vocabulary, which is a
-# separate reduction from the HEALTHY/WARNING/CRITICAL one above.
+# Same idea for a PSU's separate UP/DOWN/DISABLED/UNKNOWN vocabulary.
 _PSU_HEALTH_DETAIL_SAMPLES = {
     "UP": "operable",
     "DOWN": "inoperable",

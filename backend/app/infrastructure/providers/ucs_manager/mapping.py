@@ -224,15 +224,9 @@ def _attachments(
             docs/cisco-collectors.md, "Adapter interfaces, MACs and
             fabric attachments".
         cluster_name (str | None): `topSystem.name`, the domain's own
-            cluster name — shared by both FI-A and FI-B of one domain,
-            since UCS Manager exposes no per-FI hostname distinct from
-            it. Confirmed live 2026-09-07 against a real air-gapped
-            domain (ADR-0009's "Update (2026-09-07)"), previewed first
-            in `tools.verify_ucs_central`'s section 6 before being wired
-            in here. `fabric` (`"A"`/`"B"`) already disambiguates which
-            side within one domain; this names the domain itself, which
-            nothing else on an attachment did before — useful the moment
-            more than one domain is in the same fleet.
+            cluster name — shared by both FI-A and FI-B, since UCS
+            Manager has no per-FI hostname. See ADR-0009's "Update
+            (2026-09-07): `fabric_name` built and confirmed live".
 
     Returns:
         tuple[ProviderAttachment, ...]: One attachment per interface with a
@@ -293,27 +287,10 @@ def _cpu_model(cpu_units: list[Any]) -> str | None:
 _MEDIA_TYPE_MAP = {"hdd": "HDD", "ssd": "SSD", "nvme": "NVME"}
 
 # `StorageLocalDiskConsts.DISK_STATE_*` mapped onto `HealthSeverity`.
-# See docs/cisco-collectors.md, "CPU, memory and storage".
-#
-# Confirmed complete against the installed `ucsmsdk`'s own
-# `StorageLocalDiskConsts` (`DISK_STATE_*`, 20 values) after a live
-# UCS Central dry run, 2026-09-07, found `offline` and
-# `self-test-failed` reading UNKNOWN on real hardware — both real
-# failure states, not spelling variants of ones already mapped.
-# `disabled-for-removal` was already CRITICAL; `offline` now matches it
-# and Intersight's own `psus_from_supplies`-style CRITICAL set, which
-# already treats "offline" the same way. `zeroing` (a background wipe,
-# not observed live but present in the enum) joins `rebuilding`/
-# `copyback` as WARNING — a transitional RAID operation, not a fault.
-#
-# Two more values from that same run were confirmed NOT to belong here:
-# `unknown` is Cisco's own literal "no verdict" state, and the fallback
-# already answers UNKNOWN for it correctly. `NA` ("not applicable", the
-# single most common unmapped value at 725 of 18117 sampled disks) is
-# `StorageLocalDiskConsts.DISK_STATE_NA` — Cisco's own term for "this
-# field doesn't apply to this disk" rather than "unread" or "bad";
-# guessing a tier for it would be exactly the kind of confident wrong
-# answer this platform's `None`-means-unread contract exists to avoid.
+# Confirmed complete against the installed SDK's full 20-value enum, not
+# only what one fleet showed. See docs/cisco-collectors.md, "CPU, memory
+# and storage", and ADR-0009's "Update (2026-09-07): the health/oper
+# vocabulary gaps..." for why `NA`/`unknown` are deliberately unmapped.
 _DISK_HEALTH_MAP = {
     "good": "HEALTHY",
     "online": "HEALTHY",

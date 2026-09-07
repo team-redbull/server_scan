@@ -243,6 +243,23 @@ neither belongs to a collector:
   guess. `INVENTORY_GPU_MODELS` overrides the table per identifier; see
   `docs/adr/0021-built-in-gpu-catalog-with-model-matching.md`.
 
+Separately, four hardware models — `StorageDrive`, `Psu`, `Gpu`,
+`MemoryModule` — carry a `health_detail: str | None` alongside `health`,
+added 2026-09-07. Every provider reduces its own vendor-specific
+health/state vocabulary down to the platform's fixed `HEALTHY`/
+`WARNING`/`CRITICAL`/`UNKNOWN` (or `UP`/`DOWN`/`DISABLED`/`UNKNOWN` for a
+PSU) — deliberately, since that fixed vocabulary is what lets one health
+policy count `CRITICAL` drives identically across five vendors' spellings
+of "bad". But once reduced, two drives that are both `CRITICAL` can no
+longer be told apart — `self-test-failed` and `unconfigured-bad` looked
+identical, the exact ambiguity that came up diagnosing UCS/Intersight's
+own vocabulary gaps the same day. `health_detail` carries the raw state
+through, verbatim, purely for human diagnosis: `app.domain.services.
+health` never reads it, only `health` itself. Wired into every provider
+that populates `health` today; `MemoryModule.health_detail` exists for
+when a collector eventually reports per-DIMM detail — none does yet,
+`Memory.modules` is hardcoded empty in `IngestService`.
+
 ## What's implemented vs. planned
 
 **Slice 0**: configuration, error model, logging, request context,

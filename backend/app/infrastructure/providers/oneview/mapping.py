@@ -592,12 +592,6 @@ def psus_from(rows: list[dict[str, Any]] | None) -> tuple[dict[str, object], ...
                 "model": _opt_str(row.get("Model")),
                 "serial": _opt_str(row.get("SerialNumber")),
                 "health": _PSU_STATE_HEALTH.get(str(state), psu_health(row)),
-                # Whichever raw signal actually decided `health` above —
-                # HPE's own `state` when there is one (the preferred,
-                # more specific source), else the same generic Redfish
-                # `Health/State` pair `psu_health`'s fallback reduces
-                # (`..redfish.mapping.psus_from_supplies`'s own
-                # `health_detail` uses the identical combined form).
                 "health_detail": _opt_str(state) or _redfish_status_pair(row.get("Status")),
                 # "The maximum amount of power, in Watts, that the
                 # associated power supply is rated to deliver."

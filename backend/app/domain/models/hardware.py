@@ -30,13 +30,6 @@ class MemoryModule(BaseModel):
     speed_mhz: int | None = None
     serial: str | None = None
     health: str | None = None
-    # The raw vendor state `health` was reduced from — Redfish's `Status.
-    # Health`, Cisco's `disk_state`/`OperState`, HPE's own state string,
-    # verbatim, not renormalized. Diagnostic only: the health policy
-    # engine (`app.domain.services.health`) never reads this field, only
-    # `health` itself — two DIMMs both `CRITICAL` can still be told apart
-    # by what actually failed. `None` when the provider reported no raw
-    # state to preserve, same as every other unread field on this model.
     health_detail: str | None = None
 
 
@@ -58,8 +51,6 @@ class StorageDrive(BaseModel):
     capacity_bytes: int | None = None
     slot: str | None = None
     health: str | None = None
-    # The raw vendor state `health` was reduced from — see
-    # `MemoryModule.health_detail`'s docstring, same contract.
     health_detail: str | None = None
     firmware_version: str | None = None
     controller_id: str | None = None
@@ -80,8 +71,6 @@ class Gpu(BaseModel):
     serial: str | None = None
     memory_bytes: int | None = None
     health: str | None = None
-    # The raw vendor state `health` was reduced from — see
-    # `MemoryModule.health_detail`'s docstring, same contract.
     health_detail: str | None = None
     pci_address: str | None = None
     firmware_version: str | None = None
@@ -113,8 +102,6 @@ class Psu(BaseModel):
     model: str | None = None
     serial: str | None = None
     health: str | None = None
-    # The raw vendor state `health` was reduced from — see
-    # `MemoryModule.health_detail`'s docstring, same contract.
     health_detail: str | None = None
     capacity_watts: int | None = None
 

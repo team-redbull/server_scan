@@ -18,47 +18,14 @@ TEMPLATE_TYPES = frozenset({"initial-template", "updating-template"})
 _NON_BMC_ACCESS = frozenset({"in-band", "internal", "virtual"})
 
 # Cisco reports interface state with mostly-shared vocabulary across UCS
-# Manager, UCS Central and Intersight, so the translation to the
-# platform's own lives here rather than in any one provider. Duplicating
-# it would mean the next value a live fleet turns up gets mapped in one
-# collector and left as UNKNOWN in the other.
-#
-# "Mostly" — corrected 2026-09-07: this comment used to claim one shared
-# vocabulary outright, unchecked against a live Intersight tenant.
-# `equipment.Psu.OperState` there actually splits between `"OK"` (36
-# PSUs) and `"Operable"` (2), for the identical healthy state — a
-# REST-API spelling neither UCS Manager's nor UCS Central's XML API ever
-# reports, confirmed via `tools.verify_intersight`'s OperState vocabulary
-# check (ADR-0017, "A second field pass, 2026-09-07"). No genuinely
-# failed PSU/GPU/NIC was present on that tenant to confirm a DOWN/
-# DISABLED counterpart for Intersight's own vocabulary, so only "ok" is
-# added here — the existing UCS-XML failure strings below are carried
-# forward as a best guess for Intersight too, not as something this has
-# actually observed failing.
-# Confirmed complete against `AdaptorExtEthIf.OPER_STATE_*` (the installed
-# `ucsmsdk`'s own enum, 13 values) after a live UCS Central dry run,
-# 2026-09-07: `error-disabled`, `hardware-failure`, `no-license`,
-# `software-failure` and `udld-aggr-down` are five real values this map
-# had no entry for, none of which happened to appear on that fleet — a
-# gap closed from the authoritative enum rather than only from what one
-# run observed, unlike the live-observed additions above and below it.
-#
-# `indeterminate` (24% of that fleet's physical interfaces — common, not
-# an edge case) is **deliberately not mapped**. It is Cisco's own name
-# for "cannot be determined" — the literal definition of UNKNOWN in this
-# platform's vocabulary — so leaving it unmapped is the correct answer,
-# not a gap. See ADR-0009's "Update (2026-09-07)".
-#
-# `AdaptorHostEthIf.OPER_STATE_*` (a vNIC) is a **different, much larger
-# enum than `AdaptorExtEthIf`'s** (`accessibility-problem`,
-# `chassis-intrusion`, `dimm-disabled`, `thermal-problem`, ... — a
-# generic equipment-operability vocabulary, the same shape
-# `equipmentPsu.oper_state` uses) — not a link-state vocabulary at all.
-# On that same live fleet, 12551 of 12583 vNICs read `"unknown"` and only
-# 32 read `"operable"`: expected, not a bug, since almost none of those
-# equipment-fault conditions apply to a virtual interface with no DIMMs
-# or thermal sensors of its own. Nothing from that enum belongs in this
-# map on the strength of it being a link/oper vocabulary — it isn't one.
+# Manager, UCS Central and Intersight, so the translation lives here
+# rather than in any one provider. Confirmed complete against both
+# `AdaptorExtEthIf.OPER_STATE_*` and live Intersight `OperState` data;
+# `indeterminate` and a vNIC's own different (equipment-operability, not
+# link-state) vocabulary are deliberately left unmapped. See ADR-0009's
+# "Update (2026-09-07): the health/oper vocabulary gaps..." and
+# ADR-0017's "A second field pass (2026-09-07)" for what's confirmed and
+# why each omission is intentional, not a gap.
 _OPER_STATE_MAP = {
     "operable": "UP",
     "ok": "UP",

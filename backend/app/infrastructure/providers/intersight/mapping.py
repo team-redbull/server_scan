@@ -238,9 +238,6 @@ def drive(disk: Mapping[str, Any]) -> dict[str, object]:
         "media_type": _text(disk.get("Type")),
         "capacity_bytes": _capacity_bytes(disk),
         "health": _drive_health(disk),
-        # The raw state `health` was reduced from — same `Health`-then-
-        # `DriveState` precedence as `_drive_health` itself, so this
-        # names whichever field actually decided the reduced tier.
         "health_detail": _text(disk.get("Health")) or _text(disk.get("DriveState")),
     }
 
@@ -333,7 +330,6 @@ def psu(unit: Mapping[str, Any]) -> dict[str, object]:
         "model": _text(unit.get("Model")) or _text(unit.get("Pid")),
         "serial": _text(unit.get("Serial")),
         "health": normalize_oper_state(unit.get("OperState")),
-        # The raw OperState `health` was reduced from.
         "health_detail": _text(unit.get("OperState")),
         "capacity_watts": _as_int(unit.get("PsuWattage")),
     }
@@ -366,7 +362,6 @@ def gpu(card: Mapping[str, Any]) -> dict[str, object]:
         "temperature_celsius": None,
         "power_watts": None,
         "health": normalize_oper_state(card.get("OperState")),
-        # The raw OperState `health` was reduced from.
         "health_detail": _text(card.get("OperState")),
     }
 

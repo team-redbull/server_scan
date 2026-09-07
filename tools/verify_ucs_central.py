@@ -137,8 +137,7 @@ async def _run(show_names: int) -> int:
         disk_units = await client.query_classid("storageLocalDisk")
         ext_eth_ifs = await client.query_classid("adaptorExtEthIf")
         host_eth_ifs = await client.query_classid("adaptorHostEthIf")
-        # Section 6 below — a preview only, nothing reads this yet.
-        top_systems = await client.query_classid("topSystem")
+        top_systems = await client.query_classid("topSystem")  # Section 6 below.
     finally:
         await client.logout()
 
@@ -224,7 +223,7 @@ async def _run(show_names: int) -> int:
 
     _report_disk_health_vocabulary(disk_units)
     _report_operstate_vocabulary(ext_eth_ifs, host_eth_ifs)
-    _report_fabric_name_candidate(top_systems, domain_name_by_id)
+    _report_fabric_name(top_systems, domain_name_by_id)
 
     _header("VERDICT")
     localized = ownership.get("localized", 0)
@@ -257,11 +256,6 @@ async def _run(show_names: int) -> int:
 def _mapped_disk_health(disk_state: str) -> str:
     """
     A local mirror of `ucs_manager.mapping._disk_health`'s `_DISK_HEALTH_MAP`, for reporting only.
-
-    A local copy rather than importing the mapping module's private
-    table, matching `tools.verify_intersight`'s own convention (see its
-    `_mapped_drive_health`): this tool is a probe an operator runs, not a
-    caller entitled to the collector's internals.
 
     Args:
         disk_state (str): The raw `disk_state` value, already lower-cased.
@@ -298,12 +292,7 @@ def _report_disk_health_vocabulary(disk_units: list[Any]) -> None:
     """
     Cross-check every raw `disk_state` value this domain set reports against `_DISK_HEALTH_MAP`.
 
-    Prompted by a live report: some drives in a `--dry-run` read
-    `health=UNKNOWN`. `storageLocalDisk.disk_state` is a Cisco XML enum
-    (`StorageLocalDiskConsts.DISK_STATE_*`) — real, but not necessarily
-    complete against what a given firmware version actually emits — so
-    this groups every distinct raw value this fleet's disks report
-    instead of guessing which one is missing.
+    See ADR-0009's "Update (2026-09-07): the health/oper vocabulary gaps...".
 
     Args:
         disk_units (list[Any]): Every `storageLocalDisk` MO returned by
@@ -339,12 +328,7 @@ def _report_operstate_vocabulary(ext_eth_ifs: list[Any], host_eth_ifs: list[Any]
     """
     Cross-check every raw `oper_state` value this domain set reports against `normalize_oper_state`.
 
-    Prompted by a live report: some vNICs in a `--dry-run` read
-    `oper=UNKNOWN`. `normalize_oper_state` (`..ucs_common`) is the same
-    helper the Intersight collector uses, whose `"ok"` gap was found and
-    fixed 2026-09-07 against a live Intersight tenant — this settles
-    whether UCS Manager/Central's own vocabulary has a comparable gap of
-    its own, on real hardware rather than a guess.
+    See ADR-0009's "Update (2026-09-07): the health/oper vocabulary gaps...".
 
     Args:
         ext_eth_ifs (list[Any]): Every `adaptorExtEthIf` MO (physical
@@ -376,20 +360,9 @@ def _report_operstate_vocabulary(ext_eth_ifs: list[Any], host_eth_ifs: list[Any]
         _p("Every raw oper_state value observed maps to something other than UNKNOWN.")
 
 
-def _report_fabric_name_candidate(
-    top_systems: list[Any], domain_name_by_id: dict[str, str]
-) -> None:
+def _report_fabric_name(top_systems: list[Any], domain_name_by_id: dict[str, str]) -> None:
     """
-    Preview what `ProviderAttachment.fabric_name` could show, without wiring anything in.
-
-    `_attachments` (`ucs_manager/mapping.py`) leaves `fabric_name` `None`
-    on purpose: UCS Manager exposes no per-FI hostname, only
-    `topSystem.name` — the domain's own cluster name, shared by both FIs
-    of a pair. This section is diagnostic only, prompted by a live
-    question about whether that shared name is worth showing at all
-    before building the real (`ucs_manager/provider.py` +
-    `mapping.py`) plumbing for it. Nothing here changes what the
-    collector reports.
+    Report what `topSystem.name` (now `ProviderAttachment.fabric_name`) looks like per domain.
 
     Args:
         top_systems (list[Any]): Every `topSystem` MO returned by the
@@ -398,17 +371,15 @@ def _report_fabric_name_candidate(
             Central already shows for it in section 1
             (`computeSystem.name`), for comparison.
     """
-    _header("6. WHAT A FABRIC INTERCONNECT NAME COULD SHOW — topSystem.name, not yet wired in")
+    _header("6. FABRIC INTERCONNECT NAME — topSystem.name, now wired into fabric_name")
 
     if not top_systems:
         _p("no topSystem MOs returned — cannot preview a fabric_name value.")
         return
 
-    _p("fabric_name is None today because UCS Manager has no per-FI hostname — only the")
-    _p("domain's own shared cluster name (topSystem.name), identical for FI-A and FI-B of")
-    _p("one domain. This is what that value actually looks like on this fleet, next to what")
-    _p("Central already calls the same domain in section 1 (computeSystem.name) — compare")
-    _p("the two before deciding whether it's worth wiring into every fabric attachment line.")
+    _p("fabric_name now carries topSystem.name — the domain's own shared cluster name,")
+    _p("identical for FI-A and FI-B of one domain (UCS Manager has no per-FI hostname).")
+    _p('Confirmed live 2026-09-07; see ADR-0009\'s "fabric_name built and confirmed live".')
     _p()
     _p(f"{'domain':<10}{'topSystem.name':<28}{'topSystem.address':<18}{'Central calls it':<26}")
     for mo in sorted(top_systems, key=lambda m: str(getattr(m, "name", ""))):
@@ -417,13 +388,6 @@ def _report_fabric_name_candidate(
         address = str(getattr(mo, "address", "") or "—")
         central_name = domain_name_by_id.get(did, "—")
         _p(f"{did:<10}{name:<28}{address:<18}{central_name:<26}")
-
-    _p()
-    _p("If topSystem.name above is empty, generic, or identical to what Central already")
-    _p("calls the domain, wiring it in adds little a multi-domain fleet run doesn't already")
-    _p("get from the manager header line. If it's a real, distinct, human-recognizable name")
-    _p("for each domain, it's worth building — every fabric attachment line for that domain")
-    _p("would carry it (`fabric A (that name)` in place of the bare `fabric A` today).")
 
 
 def main(argv: list[str] | None = None) -> None:
