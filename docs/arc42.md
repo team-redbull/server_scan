@@ -170,10 +170,10 @@ ServerInventoryProvider (Protocol)
 | Provider | Status | Shape |
 |---|---|---|
 | `ucs_central` (+ `ucs_manager` as its engine) | Implemented, validated against a live UCS Central and a UCS Platform Emulator | Central lists domains; each domain's own UCS Manager supplies inventory |
-| `intersight` | Implemented; **field mapping never run against real data** (ADR-0017) | Fleet-wide OData list queries joined in memory |
+| `intersight` | Implemented, validated against a live on-prem PVA (2026-09-01, 2026-09-07) — a narrower OperState/Health vocabulary gap remains (ADR-0017) | Fleet-wide OData list queries joined in memory |
 | `redfish` | Implemented, validated | One BMC at a time from an inventory file |
-| `openmanage` | Implemented (ADR-0020) | OME says who exists and what it is called; each iDRAC says what it is, over Redfish |
-| `oneview` | Implemented; **never run against a live appliance** (ADR-0022) | Three bulk calls per appliance, `expand=all`; the only HPE source at any iLO generation |
+| `openmanage` | Implemented; **never run against a live appliance** (ADR-0020) | OME says who exists and what it is called; each iDRAC says what it is, over Redfish |
+| `oneview` | Implemented, validated against a live appliance (2026-09-07) — GPU field mapping remains unverified (ADR-0022) | Three bulk calls per appliance, `expand=all`; the only HPE source at any iLO generation |
 | `fake` | Implemented | Deterministic dev/CI data through the same port |
 
 Every `ManagerType` now has an entry in `PROVIDER_FACTORIES` except
@@ -411,7 +411,7 @@ go stale — treat its date as load-bearing.
 | Risk | Detail |
 |---|---|
 | **No authentication at all** | Every endpoint is open to anyone who can reach the Route, including all write endpoints. Deliberate and confirmed, but it is the release gate and nothing should go to production without it. |
-| **The Intersight collector's field mapping is mostly still unverified against real data** | Built entirely from the published contract; the DevNet sandbox is offline until ~2027. `tools/verify_intersight.py` against the user's own on-prem tenant (2026-09-01, 19 servers) confirmed auth, name resolution and — the highest-risk item — that `TotalMemory` is MiB as assumed (`docs/adr/0017`'s "first real tenant run"). A full `--dry-run` ingest has not been run yet, and everything else under ADR-0017's UNVERIFIED list (CPU/storage/adapter fields, region handling, clock-skew behaviour) is still contract-only. |
+| **The OpenManage (Dell) collector has never been run against live hardware** | The one collector left with no live-hardware pass at all — UCS Manager/Central, Intersight and OneView have all now been validated against real equipment (ADR-0009, ADR-0017, ADR-0022). Its hardware half reuses the Redfish mapping and inherits `REDFISH_STANDALONE`'s own validation for that half only; the OME identity/name-resolution half (`docs/adr/0020`) has no live-hardware proof of its own. |
 | **No staleness detection** | A CronJob pod is never scraped, so no collector-side metric can report its own absence. Nothing today answers "40 hosts have been failing for two weeks". `last_seen_at` is written on every ingest and read by nothing. This is the top item on the not-done list. |
 
 ### Medium
@@ -420,6 +420,7 @@ go stale — treat its date as load-bearing.
 |---|---|
 | The Redfish collector does not reach 10k | ~25 round trips per BMC; supported range ~400–1000 hosts per CronJob, sharded beyond that. Stated in ADR-0016 rather than hidden. |
 | Intersight requires an on-prem appliance | A licensed Cisco product this platform does not control — a deployment dependency no other collector carries. |
+| **Intersight's DOWN/CRITICAL vocabulary is unconfirmed** | Validated against a live on-prem PVA on 2026-09-01 and again 2026-09-07 (19 servers): auth, name resolution, `TotalMemory`-as-MiB, `cpu_model`, per-drive storage and GPU catalog matching are all confirmed, and a GPU-catalog matching bug plus an `OperState`/`Health` `"OK"`-spelling gap (silently reading PSUs and drives as UNKNOWN) were found and fixed the same day (`docs/adr/0017`'s "A second field pass (2026-09-07)"). What is left is narrower: no PSU, GPU or drive on that tenant has ever reported a failure state, so the DOWN/CRITICAL side of that same vocabulary is still contract-only. Demoted from High: every headline unknown that ADR listed (auth, the unit assumption, field mapping) is now settled. |
 | No rate limiting anywhere | |
 | Mongo HA/backup and Redis persistence | Documented as "the platform's problem"; nobody has actually stood either up. |
 | Manual dependency maintenance | Dependabot was deliberately removed (ADR-0013), making pin currency and CVE checks a standing quarterly chore. |

@@ -15,14 +15,19 @@ Reference — `dp00003271en_us` (OneView for VMs, 8.00 / API 4600) and
 (`sd00006056en_us`). The full research notes with reproduction
 instructions for every citation are `docs/notes/oneview-api.md`.
 
-**None of it has been confirmed against live HPE hardware.** There is no
-OneView equivalent of Cisco's UCS Platform Emulator: the 60-day trial is a
-real appliance, not a simulator, so with no HPE hardware attached it
-enumerates nothing and validates zero field mappings. That puts this
-collector in the same state ADR-0017 records for Intersight. Treat every
-line below as a documented contract, not as an observed fact, and run
-`uv run python -m tools.verify_oneview` before trusting a number.
-See `docs/adr/0022-oneview-only-hpe-collector.md`.
+**Confirmed against a live HPE appliance on 2026-09-07** (821 servers, 685
+service profiles, iLO 5 and iLO 6 both present) — see ADR-0022's
+"Results, 2026-09-07" for the full write-up, and this file's own dated
+corrections below for what that run found and fixed (a real storage-
+mapping bug and a PSU health-vocabulary bug, both same-day). Before that
+run, this reference was built entirely from HPE's own API Reference —
+there is no OneView equivalent of Cisco's UCS Platform Emulator, so
+everything here traced back to documentation rather than an observed
+fact. A fact not otherwise dated as confirmed live is still that
+documentation-derived state; run
+`uv run python -m tools.verify_oneview` before trusting a number this
+file doesn't already say was checked. See
+`docs/adr/0022-oneview-only-hpe-collector.md`.
 
 ## OneView is the only source, whatever the iLO
 

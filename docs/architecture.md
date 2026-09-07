@@ -429,9 +429,11 @@ integration that isn't `FakeProvider`. See
   Cisco's official `ucsmsdk` Python SDK (synchronous — wrapped in
   `asyncio.to_thread` throughout, since no async UCS SDK exists).
   Identity, hardware summary, service-profile/template resolution, NIC
-  MACs, fabric attachments, and CIMC/BMC address are all wired up; CPU
-  model string and per-drive storage detail are explicit v1 scope cuts
-  (see the ADR), not silent gaps.
+  MACs, fabric attachments, and CIMC/BMC address are all wired up. CPU
+  model string and per-drive storage detail started as explicit v1 scope
+  cuts (see the ADR) but were built and, as of the 2026-09-07 live
+  UCS Central run below, confirmed populated on real hardware — no
+  longer a gap.
 - A connection-resolution seam, `app.domain.ports.credentials.
   CredentialResolver`, and its one implementation,
   `EnvConnectionResolver` — one endpoint plus login per `ManagerType`,
@@ -476,6 +478,29 @@ integration that isn't `FakeProvider`. See
   servers named after their chassis slot rather than their service
   profile — which silently defeated both site parsing and
   classification.
+- **Validated again, 2026-09-07, against the user's own real, air-gapped
+  UCS Central domain** (`tools/run_collector.py --manager-type
+  UCS_CENTRAL --dry-run`, plus a UI check of one server and an SSH `free`
+  on its OpenShift node) — this closed every scope cut and open question
+  the UCSPE run above could not settle on its own. `total_memory`'s MB
+  assumption is now SETTLED correct: UCS's own UI reported the identical
+  raw total the collector used, and the node's lower `free` reading is
+  ordinary BIOS/kernel-reserved memory, not a units bug. `cpu_model` and
+  per-drive storage detail are confirmed populated on real hardware, not
+  just present in the mapping code. Fabric interconnect
+  `fabric_model`/`fabric_serial` were already populated (previously
+  undocumented), and `fabric_name` — the domain's own `topSystem.name`
+  cluster name, since UCS Manager has no per-FI hostname of its own — was
+  built and wired into every fabric attachment the same day, confirmed
+  live; `fabric_id` still has no source and stays `None`. Sampling 18,117
+  disks and 15,459 physical adapter interfaces found and fixed two real
+  vocabulary gaps — `_DISK_HEALTH_MAP` was missing `offline` and
+  `self-test-failed`, `_OPER_STATE_MAP` was missing five
+  `AdaptorExtEthIf` values — while confirming `NA`/`unknown` (disk) and
+  `indeterminate` (interface) are deliberately left unmapped: Cisco's own
+  terms for "doesn't apply", "no verdict" and "cannot be determined", not
+  gaps in the map. See ADR-0009's three 2026-09-07 update sections for
+  the full write-up.
 - Every `ManagerType` now has a collector except `UCS_MANAGER`, which
   deliberately has no entry point of its own (it is reached through
   `UCS_CENTRAL`); `tools.run_collector` says so in as many words rather
@@ -568,8 +593,24 @@ It deliberately does not collect `ManagementMode == UCSM` servers: those
 are exactly the ones `UCS_CENTRAL` owns, and since ingest correlates on
 `(vendor, serial_normalized)`, collecting both would make one document's
 `source_provider` and every mapped field flip on whichever CronJob ran
-last. `docs/adr/0017-intersight-collector.md` has the design; its
-mapping is still largely unvalidated against live hardware.
+last. `docs/adr/0017-intersight-collector.md` has the design.
+
+**Validated against the user's on-prem Private Virtual Appliance, twice**
+(2026-09-01, then again 2026-09-07). Auth, name resolution, and the
+`TotalMemory`-as-MiB assumption were confirmed on the first run, along
+with `cpu_model` and per-drive storage once a `ComputeBoard` join gap
+that had zeroed out both was found and fixed. The second run found and
+fixed two more real gaps: the GPU catalog never matched Intersight's own
+product-name spelling (a form-factor word before the capacity, plus a
+trailing wattage figure neither had a rule for), and
+`equipment.Psu.OperState`/`storage.PhysicalDisk.Health` both report a
+plain `"OK"` — a spelling neither UCS's own vocabulary map had, so PSUs
+and drives were silently reading `UNKNOWN` instead of `UP`/`HEALTHY`.
+Both are fixed. What remains unconfirmed is narrower than before: the
+DOWN/CRITICAL counterpart of that same vocabulary, since no PSU, GPU or
+drive on that tenant has ever reported a failure state. See
+`docs/adr/0017-intersight-collector.md`'s "A second field pass
+(2026-09-07, same tenant)" section.
 
 ### Dell (`OPENMANAGE`) — identity from OME, hardware from each iDRAC
 
@@ -589,6 +630,14 @@ It is therefore the one collector that needs **two** logins —
 account — and the run refuses to start without both, naming the
 variables. Full design: `docs/adr/0020-dell-identity-from-ome-hardware-
 from-redfish.md`; verified field facts: `docs/dell-collectors.md`.
+
+**Has never been run against a live appliance.** The hardware half
+reuses `app.infrastructure.providers.redfish`'s mapping, so it inherits
+`REDFISH_STANDALONE`'s own validation for that half only — the OME
+identity/name-resolution half has no live-hardware proof of its own. With
+UCS Manager/Central, Intersight and OneView all now validated against
+real equipment (see above and below), `OPENMANAGE` is the one collector
+left with no live-hardware pass at all.
 
 ### HPE (`ONEVIEW`) — one source, at every iLO generation
 

@@ -162,18 +162,21 @@ order of a hundred requests whether the tenant holds fifty servers or ten
 thousand, against the Redfish collector's ~25 *per BMC*. It excludes
 servers reporting `ManagementMode == UCSM` by default, because those are
 exactly the ones `UCS_CENTRAL` already collects; the two partition the
-Cisco fleet rather than fighting over it. **It has never been run against
-a live Intersight** — the DevNet sandbox is offline until ~2027 — so read
-`docs/adr/0017-intersight-collector.md` and follow
-`docs/test-intersight-collector.md` before trusting it in production.
-An air-gapped site needs an on-prem Private Virtual Appliance; it cannot
-reach `intersight.com`.
+Cisco fleet rather than fighting over it. **It was validated against the
+user's own on-prem Private Virtual Appliance on 2026-09-07**, which found
+and fixed a GPU-catalog matching bug and two health-status fields that
+were silently reading as unknown — see
+`docs/adr/0017-intersight-collector.md`'s "A second field pass
+(2026-09-07)" section. An air-gapped site needs an on-prem Private
+Virtual Appliance; it cannot reach `intersight.com`.
 
 `UCS_CENTRAL` covers the UCS-managed Cisco fleet. It asks UCS Central which domains are registered and what
 their addresses are, then reads each domain's inventory live from that
 domain's own UCS Manager — the data path validated end to end against a
-live Cisco UCS Platform Emulator (see `docs/adr/0009`'s validation
-sections). Central supplies the domain list and the service-profile
+live Cisco UCS Platform Emulator, and, as of 2026-09-07, against a real
+air-gapped UCS Central domain too (see `docs/adr/0009`'s validation
+sections, including the three dated "Update (2026-09-07)" entries).
+Central supplies the domain list and the service-profile
 names; the servers themselves come from the domains. `docs/adr/0014`
 covers the design, its costs, and what is still unproven — including that
 a domain not registered with Central cannot be collected at all.
@@ -185,8 +188,11 @@ server's own iDRAC is then read over Redfish for the hardware, because
 only the BMC reports measured values. It therefore needs two logins —
 `INVENTORY_OME_USERNAME`/`_PASSWORD` for the appliance and
 `INVENTORY_OME_BMC_USERNAME`/`_PASSWORD` for a shared read-only iDRAC
-account — and egress to the whole BMC network. See
-`docs/adr/0020-dell-identity-from-ome-hardware-from-redfish.md`.
+account — and egress to the whole BMC network. **It is now the only
+collector with no live-hardware pass of its own** — every other vendor
+collector has had one — though its hardware half reuses the Redfish
+mapping and so inherits `REDFISH_STANDALONE`'s validation for that part.
+See `docs/adr/0020-dell-identity-from-ome-hardware-from-redfish.md`.
 
 `ONEVIEW` collects HPE, and deliberately does **not** copy that split.
 The estate runs iLO 4, 5 and 6 in the same racks, and iLO 4 predates
@@ -198,11 +204,11 @@ OneView cannot report for an older machine is reported as `None` — "not
 read this run" — never as zero. Three bulk calls cover the whole
 appliance, because `GET /rest/server-hardware` returns the complete
 object per member and `expand=all` folds in each server's DIMMs, drives,
-GPUs and PCI devices. **It has never been run against a live appliance**,
-and there is no OneView equivalent of Cisco's UCS Platform Emulator, so
-run `uv run python -m tools.verify_oneview` against the real thing before
-scheduling it. See `docs/adr/0022-oneview-only-hpe-collector.md` and
-`docs/hpe-collectors.md`.
+GPUs and PCI devices. **It was validated against a live appliance on
+2026-09-07** (821 servers) — the run found and fixed a real
+storage-mapping bug the same day. See
+`docs/adr/0022-oneview-only-hpe-collector.md`'s "Results, 2026-09-07"
+section and `docs/hpe-collectors.md`.
 
 `UCS_MANAGER` is now the only manager type with no entry point of its
 own, and that is deliberate rather than missing: UCS Manager is reached
@@ -261,15 +267,17 @@ uv run python -m tools.run_collector --manager-type INTERSIGHT --dry-run
 uv run python -m tools.run_collector --manager-type INTERSIGHT
 ```
 
-Run the verifier first. This collector has never been run against a live
-Intersight, and it settles the one assumption that would otherwise
-silently mis-report every server's memory.
-`docs/field-test-checklist.md` is the short version — the four variables
-and the one command, plus what to send back; and
+Run the verifier first — it settles the one assumption that would
+otherwise silently mis-report every server's memory. This has already
+been checked once, against the user's own on-prem Private Virtual
+Appliance on 2026-09-07 (see `docs/adr/0017-intersight-collector.md`),
+but run it again against your own tenant before trusting it in
+production. `docs/field-test-checklist.md` is the short version — the
+four variables and the one command, plus what to send back; and
 `docs/test-intersight-collector.md` is the full runbook.
 
-OneView is in exactly the same unvalidated state, and has the same shape
-of pre-flight:
+OneView has the same shape of pre-flight, and was validated the same way
+— against the user's own live appliance, on 2026-09-07:
 
 ```bash
 export INVENTORY_ONEVIEW_IP=oneview.example.com   # bare host, never a URL
