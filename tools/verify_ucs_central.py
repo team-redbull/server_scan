@@ -26,6 +26,7 @@ import asyncio
 import os
 import re
 from collections import Counter
+from typing import Any
 
 from app.config import get_settings
 from app.domain.enums import ManagerType
@@ -33,7 +34,11 @@ from app.domain.ports.credentials import ManagerNotConfiguredError
 from app.infrastructure.credentials import EnvConnectionResolver
 from app.infrastructure.providers.ucs_central.client import UcsCentralClient
 from app.infrastructure.providers.ucs_central.provider import domain_id_from_dn
-from app.infrastructure.providers.ucs_common import TEMPLATE_TYPES, is_equipped
+from app.infrastructure.providers.ucs_common import (
+    TEMPLATE_TYPES,
+    is_equipped,
+    normalize_oper_state,
+)
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -125,6 +130,13 @@ async def _run(show_names: int) -> int:
         sp_meta = await client.query_classid("lsSPMeta")
         # Central's own per-domain inventory sync state.
         inventory_eps = await client.query_classid("inventoryDomainEp")
+        # Vocabulary checks, section 4/5 below — same classes
+        # `ucs_manager.provider` queries per domain, confirmed reachable
+        # centrally the same way computeBlade/computeRackUnit already are
+        # above.
+        disk_units = await client.query_classid("storageLocalDisk")
+        ext_eth_ifs = await client.query_classid("adaptorExtEthIf")
+        host_eth_ifs = await client.query_classid("adaptorHostEthIf")
     finally:
         await client.logout()
 
@@ -205,6 +217,9 @@ async def _run(show_names: int) -> int:
         for n in names[:show_names]:
             _p(f"  {n}")
 
+    _report_disk_health_vocabulary(disk_units)
+    _report_operstate_vocabulary(ext_eth_ifs, host_eth_ifs)
+
     _header("VERDICT")
     localized = ownership.get("localized", 0)
     if not servers:
@@ -231,6 +246,128 @@ async def _run(show_names: int) -> int:
     _p("          The domains listed in section 3 would lose their servers entirely.")
     _p("          Collect those domains through their own UCS Manager.")
     return 1
+
+
+def _mapped_disk_health(disk_state: str) -> str:
+    """
+    A local mirror of `ucs_manager.mapping._disk_health`'s `_DISK_HEALTH_MAP`, for reporting only.
+
+    A local copy rather than importing the mapping module's private
+    table, matching `tools.verify_intersight`'s own convention (see its
+    `_mapped_drive_health`): this tool is a probe an operator runs, not a
+    caller entitled to the collector's internals.
+
+    Args:
+        disk_state (str): The raw `disk_state` value, already lower-cased.
+
+    Returns:
+        str: HEALTHY, WARNING, CRITICAL, or UNKNOWN.
+    """
+    healthy = {
+        "good",
+        "online",
+        "unconfigured-good",
+        "global-hot-spare",
+        "dedicated-hot-spare",
+        "jbod",
+    }
+    warning = {
+        "predictive-failure",
+        "rebuilding",
+        "copyback",
+        "foreign-configuration",
+        "locked-foreign-configuration",
+    }
+    critical = {"bad", "failed", "unconfigured-bad", "disabled-for-removal"}
+    if disk_state in healthy:
+        return "HEALTHY"
+    if disk_state in warning:
+        return "WARNING"
+    if disk_state in critical:
+        return "CRITICAL"
+    return "UNKNOWN"
+
+
+def _report_disk_health_vocabulary(disk_units: list[Any]) -> None:
+    """
+    Cross-check every raw `disk_state` value this domain set reports against `_DISK_HEALTH_MAP`.
+
+    Prompted by a live report: some drives in a `--dry-run` read
+    `health=UNKNOWN`. `storageLocalDisk.disk_state` is a Cisco XML enum
+    (`StorageLocalDiskConsts.DISK_STATE_*`) — real, but not necessarily
+    complete against what a given firmware version actually emits — so
+    this groups every distinct raw value this fleet's disks report
+    instead of guessing which one is missing.
+
+    Args:
+        disk_units (list[Any]): Every `storageLocalDisk` MO returned by
+            the domain-wide query.
+    """
+    _header("4. DISK HEALTH VOCABULARY — why some drives read health=UNKNOWN")
+
+    counts: Counter[str] = Counter(
+        str(getattr(mo, "disk_state", "") or "").lower() for mo in disk_units
+    )
+    if not counts:
+        _p("no storageLocalDisk MOs returned.")
+        return
+
+    unknown_total = 0
+    _p(f"{'disk_state':<26}{'count':>7}  mapped")
+    for state, n in counts.most_common():
+        mapped = _mapped_disk_health(state)
+        flag = "  <- not recognized" if mapped == "UNKNOWN" else ""
+        _p(f"{state or '(empty)':<26}{n:>7}  -> {mapped}{flag}")
+        if mapped == "UNKNOWN":
+            unknown_total += n
+
+    _p(f"\n{unknown_total} of {sum(counts.values())} disk(s) read health=UNKNOWN.")
+    if unknown_total:
+        _p("A non-empty state above that still maps to UNKNOWN is a real spelling gap —")
+        _p("add it to `_DISK_HEALTH_MAP` in `ucs_manager/mapping.py` (`ucs_central` reuses")
+        _p("the same UcsManagerProvider per domain, so one fix covers both). An empty state")
+        _p("usually means an unequipped slot with no disk in it.")
+
+
+def _report_operstate_vocabulary(ext_eth_ifs: list[Any], host_eth_ifs: list[Any]) -> None:
+    """
+    Cross-check every raw `oper_state` value this domain set reports against `normalize_oper_state`.
+
+    Prompted by a live report: some vNICs in a `--dry-run` read
+    `oper=UNKNOWN`. `normalize_oper_state` (`..ucs_common`) is the same
+    helper the Intersight collector uses, whose `"ok"` gap was found and
+    fixed 2026-09-07 against a live Intersight tenant — this settles
+    whether UCS Manager/Central's own vocabulary has a comparable gap of
+    its own, on real hardware rather than a guess.
+
+    Args:
+        ext_eth_ifs (list[Any]): Every `adaptorExtEthIf` MO (physical
+            uplinks) returned by the domain-wide query.
+        host_eth_ifs (list[Any]): Every `adaptorHostEthIf` MO (vNICs)
+            returned by the domain-wide query.
+    """
+    _header("5. OperState VOCABULARY — why some interfaces read oper=UNKNOWN")
+
+    classes = {"adaptorExtEthIf (physical)": ext_eth_ifs, "adaptorHostEthIf (vNIC)": host_eth_ifs}
+    any_unrecognized = False
+    for label, mos in classes.items():
+        counts: Counter[str] = Counter(str(getattr(mo, "oper_state", "") or "") for mo in mos)
+        if not counts:
+            continue
+        _p(f"\n{label}:")
+        for raw, n in counts.most_common():
+            mapped = normalize_oper_state(raw)
+            flag = "  <- not recognized" if mapped == "UNKNOWN" else ""
+            _p(f"  {raw or '(empty)'!r:<20} x{n:<6} -> {mapped}{flag}")
+            if flag:
+                any_unrecognized = True
+
+    _p()
+    if any_unrecognized:
+        _p("A non-empty value above that still maps to UNKNOWN is a real spelling gap — add")
+        _p("it to `ucs_common._OPER_STATE_MAP` with the UP/DOWN/DISABLED it actually means.")
+    else:
+        _p("Every raw oper_state value observed maps to something other than UNKNOWN.")
 
 
 def main(argv: list[str] | None = None) -> None:

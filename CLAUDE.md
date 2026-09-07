@@ -895,14 +895,23 @@ all** — it reuses the Redfish mapping wholesale, so it inherits
 `--manager-type OPENMANAGE --dry-run` against a real OME appliance plus
 iDRAC. The natural next steps:
 
-1. **UCS's own leftovers, still open** and still only settleable on real
-   hardware: the `total_memory` MB assumption (UCSPE reports one
-   synthetic value for every model and contradicts itself elsewhere), a
-   fully *associated* service profile (the emulator's stopped at
-   `config-failure` for want of a boot policy, vNICs and a UUID pool),
-   and ADR-0009's original scope cuts — CPU model string, per-drive
-   storage detail, fabric interconnect identity. `docs/field-test-checklist.md`
-   already asks for a UCS Central dry run.
+1. **UCS's own leftovers — largely settled 2026-09-07 by a live UCS
+   Central dry run**, see ADR-0009's "Update (2026-09-07)". **Settled:**
+   `total_memory`'s MB assumption is correct (confirmed against the UCS
+   UI's own figure, and this also backs Intersight's identical
+   assumption); `cpu_model` and per-drive storage detail are confirmed
+   populated on real hardware, not just present in the mapping code;
+   fabric `fabric_model`/`fabric_serial` are confirmed populated too
+   (this was already implemented, just never recorded in the ADR until
+   now). **Still open:** a fully *associated* service profile (nothing
+   tested has gone past `config-failure` for want of a boot policy,
+   vNICs and a UUID pool); `fabric_name`/`fabric_id` genuinely stay
+   `None` — UCS Manager has no per-FI hostname, only a domain-shared
+   cluster name, so wiring that in is a real, doable, but not-yet-built
+   enhancement; and some drives/vNICs read `health`/`oper=UNKNOWN` on
+   the tested fleet, root cause not yet determined — `verify_ucs_central`
+   gained two new vocabulary-check sections (4, 5) for exactly this,
+   mirroring the ones that found Intersight's `"OK"` gaps, not yet run.
 
 2. **The Dell iDRAC GPU VRAM check** (`docs/field-test-checklist.md`
    part 3) — one `curl`, opportunistic, only if a Dell server with a GPU

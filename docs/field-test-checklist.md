@@ -199,20 +199,29 @@ the message tells you which of three situations you are in:
 
 ## Optional, and genuinely worth it while you are in there
 
-If UCS Central is reachable from the same machine, one dry run against it
-answers a question open since ADR-0009:
+**The `total_memory` MB question is now SETTLED, 2026-09-07** — a live
+UCS Central dry run confirmed the collector's number against the UCS
+UI's own figure exactly, which also backs Intersight's identical
+assumption. See ADR-0009's "Update (2026-09-07)" for the full write-up,
+including why the OS-visible (`free`/OpenShift) figure being *lower*
+than the collector's number is expected and not a units bug.
+
+What's still worth running if UCS Central is reachable:
 
 ```bash
+uv run python -m tools.verify_ucs_central --show-names 15 | tee ucs-central-verify.txt
 uv run python -m tools.run_collector --manager-type UCS_CENTRAL \
   --dry-run --limit 3 | tee ucs-dryrun.txt
 ```
 
-**Compare a server's reported `memory` line against what that machine
-really has.** ADR-0009 could never settle whether UCS reports total
-memory in MB against real hardware — the emulator gave one synthetic
-value for every model — and **the Intersight collector now carries the
-same assumption**. Confirming it on real Cisco hardware settles it for
-both collectors at once.
+`verify_ucs_central` now has two vocabulary-check sections (**4**, "DISK
+HEALTH VOCABULARY", and **5**, "OperState VOCABULARY") added 2026-09-07
+after a live dry run showed some drives/vNICs reading
+`health`/`oper=UNKNOWN` — the same shape of gap that turned out to be a
+real, fixable spelling gap for Intersight's `"OK"` string, twice. Send
+back both sections' output; a raw value there that isn't `(empty)` and
+still maps to UNKNOWN is a real fix, an `(empty)` one is likely just an
+unequipped slot or inactive interface.
 
 ---
 

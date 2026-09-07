@@ -445,3 +445,72 @@ always-zero fabric path counts, the chassis-slot naming — is fixed in the
 code being reused. Reimplementing this data path against UCS Central's
 replica instead would have thrown that evidence away. See
 `docs/adr/0014`'s 2026-08-17 update for the design and its costs.
+
+## Update (2026-09-07): live UCS Central dry run — `total_memory` SETTLED, other scope cuts confirmed already closed
+
+`uv run python -m tools.run_collector --manager-type UCS_CENTRAL --dry-run`
+against the user's own real UCS Central domain, plus a UI check of one
+server and an SSH `free` on its OpenShift node.
+
+- **`total_memory`'s MB assumption is SETTLED: correct.** UCS's own UI
+  reported the identical raw total the collector used (`786432`), and
+  `786432 MB ÷ 1024 = 768.0 GiB` matches the collector's printed
+  `memory` line exactly. `free` on the node itself read `792277320` KB
+  (≈755.6 GiB) — **lower than the collector's 768.0 GiB, and this is not
+  a units bug.** A BMC/CIMC's DIMM inventory reports raw installed
+  capacity; the kernel always sees less than that — top-of-memory holes
+  for MMIO/PCI BARs, a kdump reservation, and other BIOS/kernel-reserved
+  regions are ordinary on real hardware and have nothing to do with MB
+  vs. MiB. The two numbers answering two different questions (installed
+  vs. OS-visible) agreeing on their own separate premises, rather than
+  agreeing with each other, is the expected result — and it now also
+  retroactively confirms Intersight's identical `TotalMemory` assumption
+  (`docs/adr/0017`), since both collectors share the same MB-in,
+  MiB-conversion logic.
+- **`cpu_model` and per-drive storage detail are confirmed populated on
+  real hardware**, not just present in the mapping code (the 2026-08-16
+  update above closed these against SDK source, not live data). The user
+  saw a real model string on every server and real per-drive
+  `sys/rack-unit-14/board/storage-nvm1`-style DNs with serial and
+  SSD/NVMe/size for every disk. **`### Still not settled` above is
+  stale** on both these points as of this update — kept rather than
+  edited, per this file's own practice elsewhere, as a record of what
+  "still not settled" meant at the time.
+- **Fabric interconnect `fabric_model`/`fabric_serial` are also already
+  populated** (`ucs_manager/mapping.py`'s `_attachments`, joined through
+  a `networkElement` query) — undocumented here until now; the original
+  "Scope cuts" section above (`fabric_name`/`fabric_id`/`fabric_model`/
+  `fabric_serial`/... stay `None`) is stale on two of those four fields.
+  **`fabric_name`/`fabric_id` genuinely do stay `None`, and this is not
+  a missing print statement** — `_attachments`'s own docstring explains
+  why: UCS Manager exposes no per-FI hostname distinct from the domain's
+  shared cluster name in `topSystem.name` (confirmed again this session
+  against the installed `ucscsdk`'s `TopSystem` model, which does carry
+  `.name`/`.address`/`.mode`). A real per-FI name is a genuine capability
+  UCS Manager doesn't have; the domain's own cluster name is available
+  but shared between both FIs of a pair, so plumbing it into
+  `fabric_name` would be a real, doable, correctly-scoped enhancement —
+  not yet built, since it needs a new domain-local query and touches
+  `ucs_manager/provider.py` and `mapping.py` together, not a comment-only
+  fix. Track it against this ADR if built.
+- **Some drives read `health=UNKNOWN` and some vNICs read
+  `oper=UNKNOWN`** on the tested fleet. Root cause not yet determined —
+  `_DISK_HEALTH_MAP`/`_OPER_STATE_MAP` are both real Cisco XML
+  vocabularies but neither is provably complete against what this
+  fleet's actual firmware emits, the same shape of gap
+  `docs/adr/0017`'s "second field pass" found and fixed twice for
+  Intersight's `"OK"` string. `tools/verify_ucs_central.py` gained two
+  new sections for exactly this — **4, "DISK HEALTH VOCABULARY"** and
+  **5, "OperState VOCABULARY"** — which group every raw `disk_state`/
+  `oper_state` value this fleet's disks and interfaces report against
+  what the current mapping does with each. Not yet run; the next rerun
+  settles whether this is a real spelling gap (fix it) or genuinely
+  unequipped/inactive hardware (nothing to fix).
+- **The `[PHYSICAL]`-only fabric printout is confirmed working as
+  designed, not a display gap.** `tools/run_collector.py`'s dry-run only
+  prints `FI model/serial=...` for `PHYSICAL` attachments, never for a
+  `VNIC` one — matching the user's own independently-stated preference
+  ("I only want to see the FI of the physical, this is what really
+  matters") and the code comment already explaining why (a vNIC
+  structurally never carries a fabric relationship at all). No change
+  needed.
