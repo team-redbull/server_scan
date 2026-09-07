@@ -387,27 +387,36 @@ class TestStorage:
         """`CapacityGB` is documented by HPE as "the marketing capacity
         (base 10)". `CapacityMiB` is the real figure, and `SMR` is a hard
         disk the Redfish enum has no member for.
+
+        `LocalStorage.data` is a list of `HpeSmartStorageArrayController`
+        objects, each with its own `PhysicalDrives[]` — confirmed against
+        a live appliance 2026-09-07 (`docs/adr/0022`'s validation
+        section), which is what this fixture models rather than a flat
+        drive list.
         """
         member = _hardware()
         member["subResources"] = {
             "LocalStorage": {
                 "name": "LocalStorage",
                 "collectionState": "Collected",
-                "data": {
-                    "PhysicalDrives": [
-                        {
-                            "Id": "1I:1:1",
-                            "Model": "MB016000JWZFF",
-                            "SerialNumber": "ZL2A",
-                            "MediaType": "SMR",
-                            "InterfaceType": "SATA",
-                            "Location": "Port 1I Box 1 Bay 1",
-                            "CapacityGB": 16000,
-                            "CapacityMiB": 15259721,
-                            "Status": {"Health": "OK", "State": "Enabled"},
-                        }
-                    ]
-                },
+                "data": [
+                    {
+                        "type": "HpeSmartStorageArrayControllerV3",
+                        "PhysicalDrives": [
+                            {
+                                "Id": "1I:1:1",
+                                "Model": "MB016000JWZFF",
+                                "SerialNumber": "ZL2A",
+                                "MediaType": "SMR",
+                                "InterfaceType": "SATA",
+                                "Location": "Port 1I Box 1 Bay 1",
+                                "CapacityGB": 16000,
+                                "CapacityMiB": 15259721,
+                                "Status": {"Health": "OK", "State": "Enabled"},
+                            }
+                        ],
+                    }
+                ],
             }
         }
         server = server_from(hardware=member, profile=_profile(), manager_id="mgr_oneview")
@@ -422,23 +431,57 @@ class TestStorage:
             "LocalStorage": {
                 "name": "LocalStorage",
                 "collectionState": "Collected",
-                "data": {
-                    "PhysicalDrives": [
-                        {
-                            "Id": "1I:1:2",
-                            "MediaType": "HDD",
-                            "CapacityGB": 900,
-                            "CapacityLogicalBlocks": 1758174768,
-                            "BlockSizeBytes": 512,
-                        }
-                    ]
-                },
+                "data": [
+                    {
+                        "type": "HpeSmartStorageArrayControllerV3",
+                        "PhysicalDrives": [
+                            {
+                                "Id": "1I:1:2",
+                                "MediaType": "HDD",
+                                "CapacityGB": 900,
+                                "CapacityLogicalBlocks": 1758174768,
+                                "BlockSizeBytes": 512,
+                            }
+                        ],
+                    }
+                ],
             }
         }
         server = server_from(hardware=member, profile=_profile(), manager_id="mgr_oneview")
 
         assert server.storage_drives is not None
         assert server.storage_drives[0]["capacity_bytes"] == 1758174768 * 512
+
+    def test_two_controllers_drives_are_concatenated(self) -> None:
+        """A server with two Smart Array controllers reports drives under
+        both — `_physical_drives_v1` must flatten across controllers, not
+        just the first one.
+        """
+        member = _hardware()
+        member["subResources"] = {
+            "LocalStorage": {
+                "name": "LocalStorage",
+                "collectionState": "Collected",
+                "data": [
+                    {
+                        "type": "HpeSmartStorageArrayControllerV3",
+                        "PhysicalDrives": [{"Id": "1I:1:1", "CapacityMiB": 100}],
+                    },
+                    {
+                        "type": "HpeSmartStorageArrayControllerV3",
+                        "PhysicalDrives": [
+                            {"Id": "2I:1:1", "CapacityMiB": 200},
+                            {"Id": "2I:1:2", "CapacityMiB": 200},
+                        ],
+                    },
+                ],
+            }
+        }
+        server = server_from(hardware=member, profile=_profile(), manager_id="mgr_oneview")
+
+        assert server.storage_drives is not None
+        assert len(server.storage_drives) == 3
+        assert [d["id"] for d in server.storage_drives] == ["1I:1:1", "2I:1:1", "2I:1:2"]
 
     def test_v2_wins_where_a_server_reports_both(self) -> None:
         """A Gen10-Plus adapter provides V2 "instead of (or in addition
@@ -449,12 +492,69 @@ class TestStorage:
         member["subResources"]["LocalStorage"] = {
             "name": "LocalStorage",
             "collectionState": "Collected",
-            "data": {"PhysicalDrives": [{"Id": "old", "CapacityMiB": 1}]},
+            "data": [
+                {
+                    "type": "HpeSmartStorageArrayControllerV3",
+                    "PhysicalDrives": [{"Id": "old", "CapacityMiB": 1}],
+                }
+            ],
         }
         server = server_from(hardware=member, profile=_profile(), manager_id="mgr_oneview")
 
         assert server.storage_drives is not None
         assert server.storage_drives[0]["id"] == "0"
+
+    def test_an_empty_v2_read_falls_back_to_v1(self) -> None:
+        """The bug found against a live appliance 2026-09-07: V2 collected
+        and genuinely empty (`data: []`) is not the same as "this server
+        has no drives" — V1 held the real ones. Confirmed on
+        `ocp4-five-compute-08` (four SATA SSDs behind a Smart Array
+        P408i-p, mapped as zero drives before this fix).
+        """
+        member = _hardware()
+        member["subResources"]["LocalStorageV2"] = {
+            "name": "LocalStorageV2",
+            "collectionState": "Collected",
+            "data": {"Drives": []},
+        }
+        member["subResources"]["LocalStorage"] = {
+            "name": "LocalStorage",
+            "collectionState": "Collected",
+            "data": [
+                {
+                    "type": "HpeSmartStorageArrayControllerV3",
+                    "PhysicalDrives": [
+                        {"Id": "1I:1:1", "CapacityMiB": 457763},
+                        {"Id": "1I:1:2", "CapacityMiB": 457763},
+                    ],
+                }
+            ],
+        }
+        server = server_from(hardware=member, profile=_profile(), manager_id="mgr_oneview")
+
+        assert server.storage_drives is not None
+        assert len(server.storage_drives) == 2
+
+    def test_both_schemas_genuinely_empty_reports_zero_drives_not_unread(self) -> None:
+        """A diskless/boot-from-SAN server, where V2's empty read is the
+        real answer because V1 cannot be read at all — distinct from
+        neither subresource being readable (which stays `None`, see
+        `TestSubresourceStates`).
+        """
+        member = _hardware()
+        member["subResources"]["LocalStorageV2"] = {
+            "name": "LocalStorageV2",
+            "collectionState": "Collected",
+            "data": {"Drives": []},
+        }
+        member["subResources"]["LocalStorage"] = {
+            "name": "LocalStorage",
+            "collectionState": "InsufficientFirmware",
+            "data": {},
+        }
+        server = server_from(hardware=member, profile=_profile(), manager_id="mgr_oneview")
+
+        assert server.storage_drives == ()
 
 
 # --- NICs and the management-processor address ------------------------

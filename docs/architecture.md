@@ -611,10 +611,13 @@ HPE source in `docs/hpe-collectors.md`:
   passes it. An explicit `count` is always sent and a short read is logged
   at ERROR rather than hidden.
 
-**It has never run against a live appliance** and there is no OneView
-equivalent of UCSPE, so `uv run python -m tools.verify_oneview` — a
-read-only probe that writes nothing — is the outstanding action. See
-`docs/adr/0022-oneview-only-hpe-collector.md`.
+**Validated against a live appliance 2026-09-07** (821 servers) — core
+count and profile paging both confirmed correct, and a real storage
+mapping bug found and fixed the same day (`LocalStorage`'s data is a list
+of per-controller objects, not a flat drive list). See
+`docs/adr/0022-oneview-only-hpe-collector.md`'s "Results, 2026-09-07".
+GPU field mapping remains unverified — that estate has no GPU-bearing
+HPE server.
 
 ### Every collector now reports power supplies
 

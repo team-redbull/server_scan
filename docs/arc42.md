@@ -412,7 +412,6 @@ go stale — treat its date as load-bearing.
 |---|---|
 | **No authentication at all** | Every endpoint is open to anyone who can reach the Route, including all write endpoints. Deliberate and confirmed, but it is the release gate and nothing should go to production without it. |
 | **The Intersight collector's field mapping is mostly still unverified against real data** | Built entirely from the published contract; the DevNet sandbox is offline until ~2027. `tools/verify_intersight.py` against the user's own on-prem tenant (2026-09-01, 19 servers) confirmed auth, name resolution and — the highest-risk item — that `TotalMemory` is MiB as assumed (`docs/adr/0017`'s "first real tenant run"). A full `--dry-run` ingest has not been run yet, and everything else under ADR-0017's UNVERIFIED list (CPU/storage/adapter fields, region handling, clock-skew behaviour) is still contract-only. |
-| **The OneView collector has never touched a live appliance** | Every HPE field mapping comes from HPE's API Reference alone, and there is no OneView equivalent of Cisco's UCS Platform Emulator to close that (the 60-day trial is a real appliance, so with no HPE hardware attached it enumerates nothing). The highest-consequence unknowns are whether `processorCount * processorCoreCount` is the real core count and whether `/rest/server-profiles`' 256 cap is per request or per query — the second would mean an estate over 256 profiles cannot be fully enumerated. `uv run python -m tools.verify_oneview` settles both, is read-only, and is the outstanding action (ADR-0022, "What only a live appliance can settle"). |
 | **No staleness detection** | A CronJob pod is never scraped, so no collector-side metric can report its own absence. Nothing today answers "40 hosts have been failing for two weeks". `last_seen_at` is written on every ingest and read by nothing. This is the top item on the not-done list. |
 
 ### Medium
@@ -424,6 +423,7 @@ go stale — treat its date as load-bearing.
 | No rate limiting anywhere | |
 | Mongo HA/backup and Redis persistence | Documented as "the platform's problem"; nobody has actually stood either up. |
 | Manual dependency maintenance | Dependabot was deliberately removed (ADR-0013), making pin currency and CVE checks a standing quarterly chore. |
+| **OneView's GPU field mapping is still unverified** | Validated against a live appliance 2026-09-07 (821 servers) — core count and profile paging both confirmed correct, and a real storage-mapping bug was found and fixed the same day — but that estate has no GPU-bearing HPE server, so the GPU product-name-matching rules (ADR-0022, "GPU matching") remain built against realistic spellings, not observed ones. Demoted from High: every other headline unknown that ADR listed is now settled. |
 
 ### Low / accepted
 

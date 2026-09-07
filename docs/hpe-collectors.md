@@ -133,10 +133,11 @@ Version→release, for reading the table above: 8.50/5600, 9.00/6600,
 10.00/7600, 10.20/8000, 11.40/8800. HPE supports an API version for two
 years after its release.
 
-**UNVERIFIED:** what an appliance does when the header is omitted
-entirely. Documented as required; the omission case is not documented.
-`tools/verify_oneview.py` section 1 settles it by issuing the same
-request twice.
+**Confirmed 2026-09-07, against a live appliance:** omitting the header
+does not error — it silently serves an older schema (`status=200` either
+way, but `members[0].type` was `server-hardware-12` with the header and
+`server-hardware-1` without it). The header must always be sent; omitting
+it fails silently rather than loudly.
 
 ## Pagination, and the 256 ceiling
 
@@ -180,10 +181,10 @@ A collector that silently sees a third of the estate looks exactly like a
 healthy run against a smaller fleet — which is how a wrong number stays
 invisible for weeks.
 
-**UNVERIFIED and the highest-consequence open question:** whether the cap
-is per *request* (paging works) or per *query* (profile 257 is
-unreachable and the design needs `filter` sharding). The configuration
-maximum is 2500 assigned profiles, so this is not hypothetical.
+**Confirmed 2026-09-07, against a live appliance with 685 profiles:** the
+cap is **per request**, not per query. `nextPageUri` was followed past
+the first 256 and fetched all 685. Paging works; no `filter` sharding is
+needed even on an estate over the 256/request cap.
 
 ## The name trap
 
@@ -198,8 +199,15 @@ trap ADR-0009 records for UCS, in the same shape.
 
 The first is a bay location and carries neither a site token nor a
 classifiable pattern. The second is an OS hostname that only exists where
-HPE AMS is running — a decoy; what it contains without AMS is
-**UNVERIFIED**. Only the third is the operator's name.
+HPE AMS is running — a decoy. **Partially observed 2026-09-07**: on the
+one sampled server the probe printed, `serverName` (`CP-five-8504`)
+matched the profile name rather than `hardware.name`'s bay-location
+string (`CP-five-8504-ilo`) — but whether AMS was actually running on
+that host, and so whether this is the AMS-populated case or a
+coincidence of naming convention, was not established. Whether
+`serverName` is ever empty when AMS is absent is still open. Only the
+third (`server-profiles[].name`) is trusted as the operator's name either
+way — this collector never reads `serverName` for it.
 
 **Hardware with no assigned profile is skipped**, counted, and logged
 once per appliance as `oneview.hardware_without_profile`. Such a server
@@ -302,28 +310,54 @@ generation (`oneview.subresources_unreadable`, e.g.
 `{"InsufficientFirmware/iLO4": 112}`), not once per host: on a mixed
 estate a per-host line would bury the run's real output.
 
-**UNVERIFIED:** whether the *top-level* fields (`memoryMb`,
-`processorCount`, `portMap`) also come back empty on iLO 4. The docs say
-nothing either way, so the mapping treats an absent value as `None` and a
-present one as real, with no assumption in either direction.
-`tools/verify_oneview.py` section 4 prints a populated-fields table split
-by generation, which is the answer.
+**Confirmed on iLO 5/6, 2026-09-07 — still open for iLO 4** (this estate
+has none to test against): the top-level fields populate near-universally
+once collected — `memoryMb`/`processorCount`/`processorCoreCount`/
+`processorType` were 797/797 on iLO 5 and 24/24 on iLO 6;
+`portMap` was 781/797 and 23/24. The mechanism (per-subresource
+`collectionState` deciding `None` vs. real) works as designed on real
+data; whether iLO 4 specifically also returns `InsufficientFirmware` for
+the top-level fields (not just the named subresources) is still
+unverified without an iLO-4 host.
 
-**UNVERIFIED:** whether `subResources` is a JSON object keyed by name or
-an array of envelopes. HPE documents the fields, not the container. Both
-shapes are accepted; probe section 9 says which is real.
+**Confirmed 2026-09-07, against a live appliance: `subResources` is a
+JSON object keyed by name**, not an array — probe section 9 listed
+subresource names directly as dict keys. The array-shaped branch in
+`subresource()` is confirmed dead code for this appliance's API version
+(6000); kept rather than deleted, since a different appliance version
+could still use it and nothing rules that out.
 
 ## Storage — two schemas, one of them dangerous
 
 > "Starting with Gen 10 Plus, certain storage adapters will provide
 > `/localStorageV2` instead of (or in addition to) `/localStorage`."
 
-So both are read, and **V2 wins where a server reports both**.
+So both are read, and **V2 wins only when it actually reports at least
+one drive.** Confirmed against a live appliance 2026-09-07: a real server
+(`ocp4-five-compute-08`, four SATA SSDs behind a Smart Array P408i-p) had
+`LocalStorageV2` collected and genuinely empty (`data: {"Drives": []}`)
+while its real drives were under `LocalStorage`. Falling back only on an
+*unreadable* V2 (the original design) silently reported such a server as
+having zero drives; the collector now falls back whenever V2 yields no
+rows, whether that's because it's unreadable or because it read real and
+empty.
 
 **v1 is not a legacy path you can skip.** The split is at Gen10 Plus,
 which means this estate's iLO-4/Gen9 half answers `/localStorage` only.
 Both are read, and the schema is chosen by what the server actually
 offers rather than guessed from its model string.
+
+**`LocalStorage.data` is a list of `HpeSmartStorageArrayController`
+objects, never a flat drive list.** Also confirmed against a live
+appliance 2026-09-07, and the more consequential of the two storage bugs
+that run found: each controller object carries its own `PhysicalDrives[]`
+— mapping a controller object directly as if it were one drive produces a
+`capacity_bytes: None` "drive" per *controller*, not per disk, silently
+undercounting (or, for a single-controller server, reporting zero real
+drives entirely). `_physical_drives_v1()` walks every controller in the
+list and flattens their `PhysicalDrives[]` into one list before the
+per-drive mapper runs; a server with two controllers gets both
+controllers' drives concatenated, in controller order.
 
 `LocalStorageV2` is stock Redfish `Storage`: `Drives[]` with
 `CapacityBytes` documented in bytes, `MediaType`, `Protocol`,
@@ -386,11 +420,14 @@ which nothing downstream carries — then prefers `Static` → `DHCP` →
 `Lookup` → `Undefined`, and falls back to `mpHostName`. The result is
 stored as `https://<address>`.
 
-**UNVERIFIED:** neither the ordering nor the cardinality of
-`mpIpAddresses` is documented, and there is no statement that an entry is
-always present. This preference is a stated assumption. A wrong pick
-means a stored BMC address nothing can reach — exactly the risk ADR-0020
-carries for iDRAC addresses. Probe section 5 prints `mpHostInfo` verbatim.
+**Confirmed 2026-09-07, against a live appliance (821 servers): every
+server has a usable address.** 0 of 821 had no usable
+`mpIpAddresses` entry, and the `Static` preference resolved correctly on
+the sampled server (a `LinkLocal` IPv6 entry present alongside a `Static`
+IPv4 one, correctly skipped in favor of the static address). Neither the
+full ordering across all `type` values nor the guarantee that an entry is
+*always* present is fully proven by one estate's data, but the design
+held up against real, mixed IPv4/IPv6 `mpIpAddresses` lists.
 
 ## iLO identity
 
@@ -406,6 +443,14 @@ log say *which* hardware could not be read.
 
 `mpFirmwareVersion`'s format is undocumented (conventionally
 `2.78 Mar 15 2023`), so it is never parsed for a minimum-version gate.
+
+**Confirmed 2026-09-07, against a live appliance (821 servers, iLO 5 and
+iLO 6 both present):** `mpModel` is exactly the bare string the docs'
+one example suggested (`"iLO5"`, `"iLO6"`), with `mpFirmwareVersion`
+carrying the date-stamped version separately, matching the assumed
+format. The trailing-integer parse correctly derived generation 10/11
+(`shortModel` "Gen10"/"Gen11") for all 821 servers — no unrecognized
+`mpModel` value was seen.
 
 `mpLicenseType` is worth knowing about even though it is unused: `null`
 means "OneView encountered a problem while fetching the license type",
@@ -446,19 +491,36 @@ four 16GB GPUs it carries. A disagreeing capacity produces an honest miss
 that an operator fixes with `INVENTORY_GPU_MODELS`, never a confident
 wrong number.
 
-**UNVERIFIED:** the real strings this estate's appliances report. The
-rules above were built against realistic spellings, not observed ones.
-Probe section 7 prints every GPU string found with a CATALOG HIT/MISS
-verdict — that is the list to act on.
+**Still UNVERIFIED — run against a live appliance 2026-09-07, but that
+estate has no GPU-bearing HPE server.** Probe section 7 reported zero
+GPUs across all 821 servers, so neither the real product-name strings nor
+the catalog HIT/MISS verdict could be observed. The rules above remain
+built against realistic spellings, not observed ones. Re-run
+`tools/verify_oneview.py` against a GPU-equipped HPE server when one is
+available — that is still the outstanding action.
 
-**UNVERIFIED:** whether GPUs also appear under
+**Still UNVERIFIED, same reason:** whether GPUs also appear under
 `/rest/server-hardware/{id}/processors` as `ProcessorType: "GPU"`. If they
-do, a future Redfish pass would get GPUs for free on iLO 5+.
+do, a future Redfish pass would get GPUs for free on iLO 5+. No
+GPU-bearing host to test against yet.
 
 ## Power supplies
 
 **The one per-server call this collector makes, and the richest PSU
 data any collector here reports.**
+
+**Finding, 2026-09-07, against a live appliance: `expand=all` already
+carries `PowerSupplies` for most servers.** 688 of 821 servers' bulk
+sweep responses included a `PowerSupplies` subresource without the
+per-server `/powerSupplies` call being made at all — meaning
+`INVENTORY_ONEVIEW_COLLECT_PSUS` could default to `False` and still cover
+84% of this estate for free, falling back to the per-server call only for
+the remaining 133. Not yet acted on: the 688/821 split is one estate's
+snapshot, not a guarantee every appliance version includes
+`PowerSupplies` in its `expand=all` response, and changing the default
+is a real behavior change worth its own decision rather than a side
+effect of a field-test writeup. Left as a documented, actionable finding
+for whoever picks it up next.
 
 The history is worth keeping straight, because a first draft of this
 section got it wrong. `ProviderServer.psus` was added on 2026-09-01 and

@@ -10,12 +10,14 @@ or in the inventory database.
 | # | Target | Probe | The one answer that matters most |
 |---|---|---|---|
 | 1 | Intersight | `uv run python -m tools.verify_intersight` | Is `TotalMemory` MiB? If not, every server's memory is 4.86% high, silently. |
-| 2 | HPE OneView | `uv run python -m tools.verify_oneview` | Does `processorCount * processorCoreCount` equal the real core count? If not, every two-socket server's core count is halved, silently. |
+| 2 | HPE OneView | `uv run python -m tools.verify_oneview` | **Done 2026-09-07 — CONFIRMED.** See ADR-0022, "Results, 2026-09-07". |
 | 3 | A Dell iDRAC with a GPU | one `curl` (part 3) | Does iDRAC populate `TotalMemorySizeMiB` for an add-in GPU? Decides whether the built-in GPU catalog carries Dell or Redfish does. |
 
-Parts 1 and 2 are whole collectors that have never seen live hardware.
-Part 3 is much smaller — a single request settling one open question —
-so do it opportunistically if a Dell with a GPU is to hand.
+Part 1 is the one whole collector that has never seen live hardware.
+Part 2 (OneView) is done — kept below for the next appliance this ever
+needs running against, and because it's what the ADR's write-up points
+back to. Part 3 is much smaller — a single request settling one open
+question — so do it opportunistically if a Dell with a GPU is to hand.
 
 ---
 

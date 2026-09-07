@@ -339,8 +339,17 @@ permanent exemption.
 
 ## Status against real hardware
 
-**Nothing in this collector has ever run against a live OneView
-appliance, and there is no way to change that from this repository.**
+**Updated 2026-09-07: run against a live OneView appliance (821 server
+hardware members, 685 server profiles, iLO 5 and iLO 6 both present).**
+`uv run python -m tools.verify_oneview` was run by the user against their
+own estate — see "Results, 2026-09-07" below for what it settled, and the
+storage bug it surfaced (fixed the same day). The paragraphs below this
+one describe the *pre-run* state and are kept for the reasoning, not as a
+current claim.
+
+**Before this run, nothing in this collector had ever run against a live
+OneView appliance, and there was no way to change that from this
+repository.**
 
 Worth stating first, because it is the premise the whole OneView-only
 decision rests on: **the appliance really does manage the iLO-4 range.**
@@ -414,6 +423,110 @@ Ordered by how much damage a wrong guess does.
    not as a container. Both are accepted; the probe says which is real so
    the dead branch can be deleted. *Probe section 9.*
 
+### Results, 2026-09-07
+
+Every numbered question above is now settled, plus one the probe was not
+written to ask (the storage bug). Ordered to match the numbering above.
+
+0. **CONFIRMED.** `processorCount * processorCoreCount` matched
+   `sum(TotalCores)` on all 5 sampled servers (52 = 52 twice, 40 = 40
+   three times). The core-count mapping is correct as written.
+1. **PER REQUEST — paging works.** The appliance reported 685 profiles
+   total; following `nextPageUri` fetched all 685. An estate over 256
+   profiles is fully enumerable; no sharding is needed.
+2. **iLO 5 and iLO 6 both populate top-level fields near-universally**:
+   `memoryMb`/`processorCount`/`processorCoreCount`/`processorType` are
+   797/797 (iLO 5) and 24/24 (iLO 6); `portMap` is 781/797 and 23/24. The
+   feared "iLO-4-shaped" identity-only outcome does not happen on iLO
+   5/6 — this estate has no iLO 4 to test the original worst case
+   against, but the mechanism (per-subresource `collectionState`) is
+   confirmed working as designed on real data.
+3. **`mpModel` is a bare string** (`"iLO5"`, `"iLO6"`) with `mpFirmwareVersion`
+   as a separate field carrying date-stamped version strings (e.g.
+   `"3.15 Aug 11 2025"`). The trailing-integer parse correctly derived
+   generation 10/11 (`shortModel` "Gen10"/"Gen11") for all 821 servers —
+   no surprise value, no unknown-generation fallback triggered.
+4. **Every server has a usable static address.** 0 of 821 servers had no
+   usable `mpIpAddresses` entry; the `Static` preference resolved
+   correctly (`fe80:...` link-local entries present alongside and
+   correctly skipped).
+5. **Omitting `X-Api-Version` silently serves an older schema** —
+   `member[0].type` is `server-hardware-12` with the header and
+   `server-hardware-1` without it, both `status=200`. Confirms the header
+   must always be sent; a client that forgets it gets no error, just
+   quietly wrong (older) data.
+6. **Partially answered — whether AMS was running was not established.**
+   On the one sampled server, `serverName` (`CP-five-8504`) actually
+   matched the *profile* name, not `hardware.name`'s bay-location string
+   (`CP-five-8504-ilo`) — the opposite of what a bay-location decoy would
+   look like. Whether that is AMS genuinely reporting the OS hostname (and
+   this estate happens to name hosts the same as their profile) or AMS is
+   absent and `serverName` fell back to something else was not settled.
+   Either way, the profile name remains the only field this collector
+   trusts for `ProviderServer.name` — `serverName` is not read for it.
+   140 of 821 hardware members have no assigned profile at all and are
+   correctly skipped by the collector (no name it can use).
+7. **Not answerable in this estate — no GPU-bearing host.** No server's
+   `Devices` subresource reported a GPU, so neither "does a GPU also
+   appear under `/processors`" nor the catalog-matching question (8,
+   below) could be tested. Still open; needs a GPU-equipped HPE server.
+8. **Not answerable, same reason as 7.**
+9. **`subResources` is an object** (dict keyed by name), confirmed by the
+   probe's section 9 listing subresource names directly as dict keys
+   (`AdvancedMemoryProtection`, `Chassis`, `Devices`, `FirmwareInventory`,
+   `LocalStorage`, `LocalStorageV2`, `Memory`, `MemoryList`,
+   `NetworkAdapters`, `PowerSupplies`, `Processors`, `SoftwareInventory`,
+   `Thermal`). The array-shaped branch in `subresource()` is now
+   confirmed dead code for this appliance's API version (6000) — kept
+   rather than deleted, since a different appliance version could still
+   use it and nothing says otherwise.
+
+**Bonus finding, not originally an open question: `LocalStorage` (v1)
+mapped every server to zero drives.** `ocp4-five-compute-08` has a Smart
+Array P408i-p SR Gen10 controller with four 480 GB SATA SSDs (confirmed
+in the OneView UI) but the collector reported `drives: 0`. Root cause,
+two independent bugs in `backend/app/infrastructure/providers/oneview/
+mapping.py`, both fixed the same day:
+
+1. **Wrong shape assumed for `LocalStorage.data`.** The mapping treated
+   it as a flat list of drives. The real shape (confirmed against this
+   appliance) is a list of `HpeSmartStorageArrayController` objects, each
+   carrying its own `PhysicalDrives[]` — applying the per-drive mapper to
+   a controller object directly produced a `capacity_bytes: None` "drive"
+   per controller instead of the real drives underneath it. Fixed with a
+   new `_physical_drives_v1()` that flattens every controller's own
+   `PhysicalDrives[]` before mapping.
+2. **No fallback from a genuinely-empty V2 read to V1.** `_storage()`
+   only fell back to V1 when V2 was *unreadable* (`None`), never when V2
+   was collected-and-empty (`data: {"Drives": []}`) — which is exactly
+   what this appliance reports for a server whose real drives are under
+   V1. Fixed: V2 is now used only when it actually yields at least one
+   row; an empty V2 read falls back to V1, and V1's own empty/unreadable
+   result decides the final answer from there.
+3. **A related bug in `subresource_data()` itself, found while writing
+   the regression test for (2):** the key lookup used
+   `data.get("Members") or data.get("Drives") or data.get("PhysicalDrives")`,
+   and Python's `or` treats an empty list as falsy — so a genuinely
+   collected-and-empty `"Drives": []` silently fell through to the next
+   key and was reported as *unreadable* (`None`) rather than *empty*
+   (`[]`), contradicting the function's own documented contract. This is
+   what made bug (2) invisible to a naive test: `subresource_data` never
+   actually returned `[]` for an empty `Drives` list before this fix, so
+   the "V2 empty" case in `_storage()` was unreachable in practice. Fixed
+   by checking key *presence*, not truthiness.
+
+After the fix, `ocp4-five-compute-08` correctly reports 4 drives. See
+`tests/unit/infrastructure/providers/test_oneview_mapping.py`'s
+`TestStorage` for the regression coverage (real controller-list shape,
+the two-controllers-concatenate case, and the empty-V2-falls-back-to-V1
+case), all verified to fail against the pre-fix code.
+
+**One more finding, not acted on yet:** 688 of 821 servers' `expand=all`
+sweep already carried `PowerSupplies` with no per-server call needed —
+see `docs/hpe-collectors.md`'s "Power supplies" section for the number
+and why `INVENTORY_ONEVIEW_COLLECT_PSUS`'s default was left unchanged
+pending its own decision.
+
 ## Consequences
 
 - `--manager-type ONEVIEW` works; `tools/run_collector.py`'s
@@ -438,3 +551,10 @@ Ordered by how much damage a wrong guess does.
   same card, and the capacity check makes the one inexact rule
   self-validating, but it is a shared-code change and is called out here
   rather than buried in the HPE work.
+- **2026-09-07: this collector is now validated against real hardware.**
+  See "Results, 2026-09-07" above. Every open question but the GPU ones
+  (7, 8 — no GPU-bearing host in this estate) is settled, and one real
+  bug the probe was not written to catch (`LocalStorage` mapping every
+  server to zero drives) was found and fixed the same day. The GPU
+  questions stay open until a GPU-equipped HPE server is available to
+  test against.

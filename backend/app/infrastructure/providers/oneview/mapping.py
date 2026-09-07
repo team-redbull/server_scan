@@ -209,8 +209,22 @@ def subresource_data(hardware: dict[str, Any], name: str) -> list[dict[str, Any]
         return None
     data = envelope.get("data")
     if isinstance(data, dict):
-        # A Redfish-shaped collection: the rows live under `Members`.
-        data = data.get("Members") or data.get("Drives") or data.get("PhysicalDrives")
+        # A Redfish-shaped collection: the rows live under one of these
+        # keys. Checked by presence, not truthiness — `or`-chaining a
+        # genuinely-empty list (falsy) would fall through to the next
+        # key and report the whole subresource unreadable instead of
+        # collected-and-empty, contradicting this function's own
+        # contract above. Bug found 2026-09-07 writing a regression test
+        # for the OneView storage fallback (`docs/adr/0022`'s validation
+        # section) — an empty `LocalStorageV2.data.Drives: []` was
+        # silently becoming `None` here, before `_storage()` ever got a
+        # chance to fall back to V1.
+        for key in ("Members", "Drives", "PhysicalDrives"):
+            if key in data:
+                data = data[key]
+                break
+        else:
+            data = None
     if not isinstance(data, list):
         return None
     return [row for row in data if isinstance(row, dict)]
@@ -418,6 +432,34 @@ def _drive_v1(drive: dict[str, Any]) -> dict[str, object]:
     }
 
 
+def _physical_drives_v1(controllers: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """
+    Flatten every array controller's own drive list into one list.
+
+    `LocalStorage.data` is a list of `HpeSmartStorageArrayController`
+    objects, each carrying its own `PhysicalDrives[]` — never a flat
+    drive list itself. Confirmed against a live appliance 2026-09-07 (see
+    `docs/adr/0022-oneview-only-hpe-collector.md`'s validation section):
+    applying `_drive_v1` straight to a controller object produced a
+    `capacity_bytes: None` "drive" per controller instead of the real
+    drives underneath it, so every server mapped as zero drives.
+
+    Args:
+        controllers (list[dict[str, Any]]): The `LocalStorage` envelope's
+            raw rows — one per array controller.
+
+    Returns:
+        list[dict[str, Any]]: Every controller's `PhysicalDrives[]`
+            entries, concatenated in controller order.
+    """
+    drives: list[dict[str, Any]] = []
+    for controller in controllers:
+        physical = controller.get("PhysicalDrives")
+        if isinstance(physical, list):
+            drives.extend(row for row in physical if isinstance(row, dict))
+    return drives
+
+
 def _storage(
     hardware: dict[str, Any],
 ) -> tuple[tuple[dict[str, object], ...] | None, int | None]:
@@ -425,7 +467,13 @@ def _storage(
     Read the server's drives from whichever local-storage schema it answers on.
 
     A Gen10-Plus adapter reports `LocalStorageV2` instead of (or alongside)
-    `LocalStorage`; V2 is tried first and wins whenever both are present.
+    `LocalStorage`; V2 is tried first and used whenever it actually yields
+    drives. An empty V2 read (`data: []`, genuinely collected and empty)
+    falls back to V1 rather than being taken as "zero drives" — a live
+    appliance has been seen reporting exactly that shape while V1 held the
+    real drives (confirmed 2026-09-07, see `docs/adr/0022`'s validation
+    section). V2's empty read is trusted only once V1 is confirmed
+    unreadable too.
 
     Args:
         hardware (dict[str, Any]): One `/rest/server-hardware` member.
@@ -435,13 +483,20 @@ def _storage(
             drives and their total capacity, both `None` when neither
             subresource could be read.
     """
-    rows = subresource_data(hardware, LOCAL_STORAGE_V2)
-    mapper = _drive_v2
-    if rows is None:
-        rows = subresource_data(hardware, LOCAL_STORAGE)
-        mapper = _drive_v1
-    if rows is None:
-        return None, None
+    v2_rows = subresource_data(hardware, LOCAL_STORAGE_V2)
+    if v2_rows:
+        rows, mapper = v2_rows, _drive_v2
+    else:
+        v1_rows = subresource_data(hardware, LOCAL_STORAGE)
+        if v1_rows is not None:
+            rows, mapper = _physical_drives_v1(v1_rows), _drive_v1
+        elif v2_rows is not None:
+            # V2 was genuinely read and is empty, and V1 could not be
+            # read at all — trust V2's real (if empty) answer rather
+            # than reporting "not read" for a server that has none.
+            rows, mapper = v2_rows, _drive_v2
+        else:
+            return None, None
     drives = tuple(mapper(row) for row in rows if not is_absent(row))
     sizes = [
         drive["capacity_bytes"] for drive in drives if isinstance(drive["capacity_bytes"], int)

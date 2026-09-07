@@ -229,10 +229,12 @@ above the per-site ones, summed from a `by_installation_type` object
 **Every planned vendor collector now exists.** Cisco Intersight
 (ADR-0017), Dell OpenManage (ADR-0020) and HPE OneView (ADR-0022) all
 shipped after UCS, alongside `REDFISH_STANDALONE` for machines no
-aggregator owns. Two of them — `INTERSIGHT` and `ONEVIEW` — have never
-had their field mappings run against live hardware, which is a different
-state from every collector before them and is the outstanding action on
-the repo. Three platform-wide changes landed with that work and are worth
+aggregator owns. **`ONEVIEW` was validated against a live appliance on
+2026-09-07** (821 servers) — see ADR-0022's "Results, 2026-09-07" for
+what it settled and the storage-mapping bug it found and fixed the same
+day. `INTERSIGHT` has still never had its field mappings run against live
+hardware, which remains the outstanding action on the repo. Three
+platform-wide changes landed with that work and are worth
 knowing before reading any collector: a **built-in GPU catalog**
 (ADR-0021) fills in VRAM the Cisco and HPE APIs do not report (Redfish
 does, so a real reading wins), **`Server.unread_fields`**
@@ -389,16 +391,21 @@ The one exception is power supplies, which cost a request per server
 (`INVENTORY_ONEVIEW_COLLECT_PSUS`, on by default,
 `INVENTORY_ONEVIEW_PSU_CONCURRENCY` bounding the fan-out).
 
-**Like Intersight, it has never been run against live hardware**, and
-unlike UCS there is nothing that could change that from this repo: HPE's
-60-day OneView trial is a *real appliance*, not a hardware simulator, so
-with no HPE hardware attached it enumerates nothing. `uv run python -m
-tools.verify_oneview` — read-only, writes nothing, logs out — is the
-outstanding action, and `docs/field-test-checklist.md` (part 2) says what
-to run and what to bring back. Its headline answer is whether
-`processorCount * processorCoreCount` is the real core count; the
-highest-consequence one is whether `/rest/server-profiles`' 256 cap is
-per request or per query, because the *name* comes from the profile.
+**Validated against a live appliance on 2026-09-07** (821 servers, 685
+profiles, iLO 5 and iLO 6 both present) — `uv run python -m
+tools.verify_oneview` was the outstanding action, and now has been run.
+Both headline questions are settled: `processorCount *
+processorCoreCount` matched the real core count on every sampled server,
+and the `/rest/server-profiles` 256 cap is **per request**, not per
+query — paging fetched all 685 profiles, so an estate over the cap is
+still fully enumerable with no sharding needed. The run also found a real
+bug, fixed the same day: `LocalStorage` (the v1 storage schema) was
+mapping every server to zero drives, because `LocalStorage.data` is a
+list of per-controller objects (each with its own `PhysicalDrives[]`),
+not a flat drive list, and a separately-empty `LocalStorageV2` read
+wasn't falling back to v1 at all. See ADR-0022's "Results, 2026-09-07"
+for the full write-up and the two open questions it could not settle
+(both GPU-related — this estate has no GPU-bearing HPE server).
 
 ### What's explicitly NOT done yet (in rough priority order the user has confirmed)
 
@@ -410,16 +417,17 @@ per request or per query, because the *name* comes from the profile.
    MongoDB's `last_seen_at` (written on every ingest, currently read by
    nothing). Until that lands, staleness is the manual query in
    `docs/test-redfish-standalone-collector.md` §6.
-1. **Live-hardware validation of the two unproven collectors.** Every
-   vendor collector is now *written* — Dell (ADR-0020) and HPE
+1. **Live-hardware validation of the remaining unproven collector.**
+   Every vendor collector is now *written* — Dell (ADR-0020) and HPE
    (ADR-0022) both shipped, so "build the next vendor collector" is no
-   longer on this list. What is left is proof: `INTERSIGHT` and
-   `ONEVIEW` have never had their field mappings run against real
-   hardware, and UCS's own emulator run found five defects that were
-   invisible without it. `uv run python -m tools.verify_intersight` and
-   `uv run python -m tools.verify_oneview` are the two commands;
-   `docs/field-test-checklist.md` has both, with what to send back.
-   Record what each settles in its ADR.
+   longer on this list. `ONEVIEW` was validated against a live appliance
+   on 2026-09-07 (see ADR-0022's "Results, 2026-09-07"), and the run
+   found a real storage-mapping bug (fixed the same day) that would have
+   stayed invisible without it — the same shape of finding UCS's own
+   emulator run produced five of. **`INTERSIGHT` is the one collector
+   left with no live-hardware proof.** `uv run python -m
+   tools.verify_intersight` is the command; `docs/field-test-checklist.md`
+   part 1 says what to send back. Record what it settles in ADR-0017.
 
    **The research bar for any future vendor work is unchanged**, so it
    is kept here rather than deleted with the item it belonged to:
@@ -839,45 +847,39 @@ quarterly, or before any release you care about:
 
 The most recent user direction was: real vendor collectors first,
 deployment/CD gaps and auth deliberately parked. **Every planned vendor
-collector now exists**, so the phase that direction described is finished
-in code and unfinished in proof. The natural next steps:
+collector now exists**, and as of 2026-09-07 `ONEVIEW` joined
+`UCS_CENTRAL`/`UCS_MANAGER` as validated against real hardware — see
+ADR-0022's "Results, 2026-09-07". `INTERSIGHT` is the one collector left
+with no live-hardware run at all. The natural next steps:
 
-1. **Run the two probes against real hardware.** This is the highest-value
-   action on the repo and it is not more code.
+1. **Run the Intersight probe against real hardware.** This is the
+   highest-value action on the repo and it is not more code.
    `uv run python -m tools.verify_intersight` against the on-prem
    Intersight (the user has one reachable from the air-gapped
-   environment) and `uv run python -m tools.verify_oneview` against the
-   OneView appliance. Both are read-only.
-   `docs/field-test-checklist.md` is the operator-facing version of both
-   errands. Record what each settles in ADR-0017 / ADR-0022 rather than
-   only in a chat reply — a result nobody wrote down is a result the next
-   session re-derives.
+   environment). Read-only. `docs/field-test-checklist.md` part 1 is the
+   operator-facing version of this errand. Record what it settles in
+   ADR-0017 rather than only in a chat reply — a result nobody wrote down
+   is a result the next session re-derives.
 
-   For Intersight the answer to look for is the `TotalMemory` unit and a
-   full `--dry-run` ingest (auth, name resolution and the MiB assumption
-   were confirmed on 2026-09-01; the rest of ADR-0017's UNVERIFIED list
-   was not). For OneView it is the core-count check and whether paging
-   gets past the 256-profile ceiling.
+   The answer to look for is the `TotalMemory` unit and a full
+   `--dry-run` ingest (auth, name resolution and the MiB assumption were
+   confirmed on 2026-09-01; the rest of ADR-0017's UNVERIFIED list was
+   not).
 
-2. **Give the Dell collector a seeded shape.** The UI half of this item
-   is done: `SOURCE_PROVIDERS` now lists all five collectors, and the
-   guard that was supposed to catch its drift no longer *restates* the
-   set of implemented collectors — it derives it from
-   `tools.run_collector.PROVIDER_FACTORIES`, which is the one source of
-   truth. That is why the drift was invisible: the guard had drifted
-   along with the list it guarded and stayed green.
+   **OneView's own probe is done** — see ADR-0022's "Results,
+   2026-09-07" and the "Key technical facts" HPE section above. Its
+   remaining open question (GPU field mapping) needs a GPU-equipped HPE
+   server, not a repeat run.
 
-   What is left is the seeder. `COLLECTOR_TYPES` shapes four of the five,
-   and `tests/unit/infrastructure/providers/test_generator.py`'s
-   `_UNSEEDED_COLLECTORS` now names `OPENMANAGE` as a deliberate,
-   documented exclusion rather than an oversight — so a *sixth* collector
-   with no shape fails that test, but Dell's stays a known gap. It is not
-   a list entry: a Dell server collected through OME is read over
-   Redfish, so `provider_type_for` cannot tell it apart from a
-   `REDFISH_STANDALONE` Dell by `external_id` prefix, which is the
-   discriminator every other collector uses. Seeding it means carrying
-   the collector on the generated server instead of reading it back off
-   `external_id`.
+2. ~~Give the Dell collector a seeded shape~~ — **already done, this item
+   is stale.** `_UNSEEDED_COLLECTORS` is empty,
+   `COLLECTOR_TYPES` shapes all five collectors including `OPENMANAGE`,
+   and `provider_type_for` discriminates Dell by `server.vendor` rather
+   than by `external_id` prefix. Verified 2026-09-07 (Phase 11 of
+   `docs/notes/2026-09-refactor-plan.md`) — kept here, struck through
+   rather than deleted, as a reminder that this exact item was stale once
+   before and someone should double-check before trusting it a third
+   time.
 
 3. **UCS's own leftovers, still open** and still only settleable on real
    hardware: the `total_memory` MB assumption (UCSPE reports one
