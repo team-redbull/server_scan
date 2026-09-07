@@ -27,10 +27,15 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-from app.domain.enums import HealthSeverity, Vendor
+from app.domain.enums import Vendor
 from app.domain.ports.provider import ProviderNic, ProviderServer
 from app.domain.value_objects.mac_address import normalize_mac
-from app.infrastructure.providers.redfish.mapping import health_of, is_absent, media_type_of
+from app.infrastructure.providers.redfish.mapping import (
+    health_of,
+    is_absent,
+    media_type_of,
+    psu_health,
+)
 
 _MIB = 1024 * 1024
 
@@ -65,23 +70,36 @@ POWER_SUPPLIES = "PowerSupplies"
 # pattern applies. See docs/hpe-collectors.md, "CPU threads".
 PROCESSORS = "Processors"
 
-# `Oem.Hpe.PowerSupplyStatus.State` -> this platform's health. Mapped
-# rather than flattened to a boolean: OneView distinguishes a PSU that
-# lost AC input from one that is degraded from one that failed outright,
-# and the health engine's `power.failed_psu_count` metric can use the
-# difference. Anything not listed falls back to Redfish `Status.Health`.
+# `Oem.Hpe.PowerSupplyStatus.State` -> this platform's PSU vocabulary
+# (`UP`/`DOWN`/`DISABLED`/`UNKNOWN` — `app.domain.models.hardware.
+# Psu.health`, and what `power.failed_psu_count` counts `DOWN` from).
+# **Deliberately not `HealthSeverity`**: a `Psu.health` of `"CRITICAL"`
+# would count as zero failures forever, since `facts.py` checks
+# `== "DOWN"` — this is exactly the bug this dict shipped with from
+# 2026-09-01 until it was found and fixed 2026-09-07, discovered only by
+# comparing OneView's vocabulary against every other collector's (see
+# `..redfish.mapping.psu_health`'s own docstring for the same warning,
+# and `..redfish.mapping._PSU_STATE`'s comment — this is the third time
+# this exact confusion has shipped in this codebase). `Degraded` and the
+# voltage warnings map to `UNKNOWN`, not `DOWN`, matching
+# `..redfish.mapping.psu_health`'s "still delivering power" rule for
+# Redfish's own `Warning` — a policy against `power.failed_psu_count`
+# must not fire for a PSU that has not lost redundancy. Anything not
+# listed falls back to `psu_health`, the same Redfish-vocabulary fallback
+# `psus_from_supplies` uses, since a OneView PSU row is itself
+# Redfish-schema-shaped.
 _PSU_STATE_HEALTH: dict[str, str] = {
-    "Ok": HealthSeverity.HEALTHY.value,
-    "GoodInStandby": HealthSeverity.HEALTHY.value,
-    "Degraded": HealthSeverity.WARNING.value,
-    "WarningHighInputVoltage": HealthSeverity.WARNING.value,
-    "WarningLowInputVoltage": HealthSeverity.WARNING.value,
-    "Failed": HealthSeverity.CRITICAL.value,
-    "ACPowerLost": HealthSeverity.CRITICAL.value,
-    "OverVoltage": HealthSeverity.CRITICAL.value,
-    "OverCurrent": HealthSeverity.CRITICAL.value,
-    "OverTemperature": HealthSeverity.CRITICAL.value,
-    "FanFailure": HealthSeverity.CRITICAL.value,
+    "Ok": "UP",
+    "GoodInStandby": "UP",
+    "Degraded": "UNKNOWN",
+    "WarningHighInputVoltage": "UNKNOWN",
+    "WarningLowInputVoltage": "UNKNOWN",
+    "Failed": "DOWN",
+    "ACPowerLost": "DOWN",
+    "OverVoltage": "DOWN",
+    "OverCurrent": "DOWN",
+    "OverTemperature": "DOWN",
+    "FanFailure": "DOWN",
 }
 
 # `mpModel` is documented with exactly one example value, `iLO4` — no
@@ -519,10 +537,12 @@ def psus_from(rows: list[dict[str, Any]] | None) -> tuple[dict[str, object], ...
 
     OneView reports more about a PSU than either Cisco collector does:
     a rated capacity in documented Watts, and an HPE-specific state that
-    separates `Failed` from `Degraded` from `ACPowerLost`. That state is
-    preferred over the generic Redfish `Status.Health` because it is the
-    more specific answer; `Status.Health` is the fallback for a state
-    this platform has no mapping for.
+    separates `Failed` from `Degraded` from `ACPowerLost`. That state,
+    via `_PSU_STATE_HEALTH`, is preferred over the generic Redfish
+    `Status.Health`/`Status.State` (`psu_health`) because it is the more
+    specific answer; `psu_health` is the fallback for a state this
+    platform has no mapping for — both report in the same
+    `UP`/`DOWN`/`DISABLED`/`UNKNOWN` vocabulary, never `HealthSeverity`.
 
     Args:
         rows (list[dict[str, Any]] | None): `PowerSupplies` entries, or
@@ -547,7 +567,7 @@ def psus_from(rows: list[dict[str, Any]] | None) -> tuple[dict[str, object], ...
                 "id": str(row.get("MemberId") or row.get("Name") or index),
                 "model": _opt_str(row.get("Model")),
                 "serial": _opt_str(row.get("SerialNumber")),
-                "health": _PSU_STATE_HEALTH.get(str(state), health_of(row)),
+                "health": _PSU_STATE_HEALTH.get(str(state), psu_health(row)),
                 # "The maximum amount of power, in Watts, that the
                 # associated power supply is rated to deliver."
                 "capacity_watts": _opt_int(row.get("PowerCapacityWatts")),

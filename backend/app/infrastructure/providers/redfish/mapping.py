@@ -562,9 +562,16 @@ _PSU_STATE = {
 }
 
 
-def _psu_health(supply: dict[str, Any]) -> str:
+def psu_health(supply: dict[str, Any]) -> str:
     """
     One power supply's state, in the platform's vocabulary.
+
+    Public (not `_`-prefixed) because `..oneview.mapping.psus_from`
+    reuses it as its own fallback — a OneView `/powerSupplies` row is "in
+    JSON format based on RedFish schema" per HPE's own docs, so the
+    generic Redfish `Status.Health`/`Status.State` reading applies there
+    too, once HPE's own richer `Oem.Hpe.PowerSupplyStatus.State` has
+    nothing to say.
 
     `Status.Health` decides it when present, because a PSU that is
     `Enabled` but `Critical` is a failed PSU, not a working one. `Warning`
@@ -632,7 +639,7 @@ def psus_from_supplies(
                 or None,
                 "model": supply.get("Model") or None,
                 "serial": supply.get("SerialNumber") or None,
-                "health": _psu_health(supply),
+                "health": psu_health(supply),
                 "capacity_watts": _as_int(
                     supply.get("PowerCapacityWatts") or supply.get("CapacityWatts")
                 ),

@@ -575,3 +575,19 @@ pending its own decision.
   every other collector, all of which get a real thread count for free
   as a field on data already being fetched. See `docs/hpe-collectors.md`,
   "CPU threads".
+- **A real bug, found asking "how do I know if a PSU is up or down" about
+  this collector's own output: PSU health was reported in the wrong
+  vocabulary from 2026-09-01 (when `psus` was added) until 2026-09-07.**
+  `Psu.health` was `HEALTHY`/`WARNING`/`CRITICAL` (`HealthSeverity`)
+  instead of `UP`/`DOWN`/`DISABLED`/`UNKNOWN` — the vocabulary every
+  other collector uses and the only one `power.failed_psu_count`
+  (`facts.py`, `health == "DOWN"`) actually counts. So OneView's
+  failed-PSU count was silently `0` for every server, always, regardless
+  of real PSU state. No shipped default health policy reads that metric
+  yet, so this never produced a wrong health *verdict* — but the number
+  itself was wrong for the whole time this collector has existed. Fixed
+  by remapping `_PSU_STATE_HEALTH`'s values and reusing
+  `..redfish.mapping.psu_health` (made public for this) as the fallback
+  instead of `health_of`. See `docs/hpe-collectors.md`, "Power supplies"
+  — including why this is the third time this exact vocabulary
+  confusion has shipped in this codebase.

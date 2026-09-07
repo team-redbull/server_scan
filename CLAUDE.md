@@ -588,6 +588,13 @@ non-obvious enough to bite you.
   `power.failed_psu_count` compares to `"DOWN"`, not `"FAILED"`. Redfish's
   `Warning` maps to `UNKNOWN` rather than `DOWN` on purpose: a degraded
   supply still delivering power has not lost redundancy.
+  **Corrected 2026-09-07: this rule was itself false for OneView from
+  2026-09-01 until that date** — its PSU mapping reported `HealthSeverity`
+  values instead, so `power.failed_psu_count` silently counted zero
+  failed PSUs for every HPE server the whole time. Found on a live run
+  and fixed the same day; see ADR-0022's "Results, 2026-09-07" and
+  `docs/hpe-collectors.md`'s "Power supplies" for why this is the third
+  time this exact confusion has shipped here.
 - **HPE's traps, all of which cost real research** — full detail in
   `docs/hpe-collectors.md`, the decisions in ADR-0022:
   - **The name comes from the server profile.** `server-hardware.name` is

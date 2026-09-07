@@ -497,7 +497,7 @@ class TestPowerSupplies:
         servers = await _collect(provider)
 
         assert servers[0].psus is not None
-        assert servers[0].psus[0]["health"] == "CRITICAL"
+        assert servers[0].psus[0]["health"] == "DOWN"
         assert servers[0].psus[0]["capacity_watts"] == 800
 
     async def test_switching_it_off_makes_no_per_server_call_at_all(self) -> None:

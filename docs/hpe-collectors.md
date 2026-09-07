@@ -571,14 +571,39 @@ HPE's `Oem.Hpe.PowerSupplyStatus.State` distinguishes `Failed` from
 | `Status.Health` | the generic Redfish rollup |
 | `Model`, `SerialNumber`, `MemberId` | free text |
 
-**The HPE state decides health, not a boolean.** It is the more specific
-answer — a PSU that lost AC input is a different operational fact from
-one that is degraded from one that failed — so `Failed`, `ACPowerLost`,
-`OverVoltage`, `OverCurrent`, `OverTemperature` and `FanFailure` map to
-CRITICAL, `Degraded` and the voltage warnings to WARNING, `Ok` and
-`GoodInStandby` to HEALTHY. A state this platform has no mapping for
-falls back to `Status.Health`. `Status.State == "Absent"` is an empty bay
-and contributes no PSU at all.
+**The HPE state decides health, not a boolean, and it reports in
+`UP`/`DOWN`/`DISABLED`/`UNKNOWN` — never `HealthSeverity`.** It is the
+more specific answer — a PSU that lost AC input is a different
+operational fact from one that is degraded from one that failed — so
+`Failed`, `ACPowerLost`, `OverVoltage`, `OverCurrent`, `OverTemperature`
+and `FanFailure` map to `DOWN`, `Degraded` and the voltage warnings to
+`UNKNOWN` (a degraded supply still delivering power has not lost
+redundancy — the same rule `..redfish.mapping.psu_health` applies to
+Redfish's own `Warning`), `Ok` and `GoodInStandby` to `UP`. A state this
+platform has no mapping for falls back to `psu_health` itself, since a
+OneView PSU row is "in JSON format based on RedFish schema" — the same
+`Status.Health`/`Status.State` reading `psus_from_supplies` uses for
+Dell and standalone BMCs. `Status.State == "Absent"` is an empty bay and
+contributes no PSU at all.
+
+**This was a real bug from 2026-09-01 to 2026-09-07: the mapping used to
+report `HealthSeverity` values (`HEALTHY`/`WARNING`/`CRITICAL`)
+instead.** `power.failed_psu_count` (`facts.py`) counts a PSU as failed
+by checking `health == "DOWN"` — a string this mapping never produced,
+so every HPE server's failed-PSU count was silently `0` regardless of
+real state, for as long as OneView had ever run. No shipped default
+health policy reads `power.failed_psu_count` yet, so this never produced
+a visibly wrong health verdict — but the metric itself was wrong for
+anyone querying it directly or writing a policy against it. Found while
+investigating a live-hardware run's own output (not by inspection alone)
+and fixed the same day; see `docs/adr/0022`'s "Results, 2026-09-07"
+section. This is the *third* time this exact confusion — a vendor rollup
+mapped to `HealthSeverity` where `power.failed_psu_count` expects
+`UP`/`DOWN`/`DISABLED`/`UNKNOWN` — has shipped in this codebase (the
+first was `facts.py`'s own original `"OK"` literal check; the second was
+Intersight's `psu()`, corrected before it ever shipped un-fixed — see
+that function's own docstring). Worth a shared guard if a fourth
+collector is ever added.
 
 Two documentation notes worth keeping: `LineInputVoltage`'s own
 description says "in Watts", **which is an error in HPE's doc** — it is

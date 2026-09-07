@@ -642,11 +642,15 @@ class TestPsus:
     def test_no_power_supply_data_is_unread_not_empty(self) -> None:
         assert _mapped().psus is None
 
-    def test_the_hpe_state_decides_health_not_a_boolean(self) -> None:
+    def test_the_hpe_state_decides_health_in_the_platforms_up_down_vocabulary(self) -> None:
         """OneView separates a PSU that lost AC input from one that is
-        degraded from one that failed outright. Flattening those to
-        healthy/unhealthy throws away the distinction the health engine
-        can act on.
+        degraded from one that failed outright, and each maps onto
+        `UP`/`DOWN`/`UNKNOWN` — never `HealthSeverity` (`HEALTHY`/
+        `WARNING`/`CRITICAL`), which is what a 2026-09-01 to 2026-09-07
+        bug shipped instead: `facts.py` counts `power.failed_psu_count`
+        by checking `health == "DOWN"`, so a `Psu.health` of `"CRITICAL"`
+        was silently counted as zero failures, forever, for every HPE
+        server. Fixed 2026-09-07 against a live appliance.
         """
         rows = [
             {
@@ -673,11 +677,34 @@ class TestPsus:
         psus = psus_from(rows)
 
         assert psus is not None
-        assert [p["health"] for p in psus] == ["HEALTHY", "CRITICAL", "WARNING"]
+        assert [p["health"] for p in psus] == ["UP", "DOWN", "UNKNOWN"]
         assert psus[0]["capacity_watts"] == 800
         assert psus[0]["serial"] == "5WBXK0GLLDF123"
 
-    def test_an_unmapped_state_falls_back_to_the_redfish_health(self) -> None:
+    def test_power_failed_psu_count_actually_counts_a_failed_oneview_psu(self) -> None:
+        """The regression that matters most: reproduces
+        `app.domain.services.health.facts.extract_facts`'s own counting
+        rule (`sum(1 for h in psu_healths if h == "DOWN")`) directly
+        against this mapping's output, rather than only asserting the
+        health string looks right in isolation.
+        """
+        psus = psus_from(
+            [
+                {"MemberId": "0", "Oem": {"Hpe": {"PowerSupplyStatus": {"State": "Ok"}}}},
+                {"MemberId": "1", "Oem": {"Hpe": {"PowerSupplyStatus": {"State": "Failed"}}}},
+            ]
+        )
+
+        assert psus is not None
+        failed = sum(1 for psu in psus if psu["health"] == "DOWN")
+        assert failed == 1
+
+    def test_an_unmapped_state_falls_back_to_the_shared_redfish_vocabulary(self) -> None:
+        """The fallback is `..redfish.mapping.psu_health` — the same
+        `UP`/`DOWN`/`DISABLED`/`UNKNOWN` vocabulary, reused because a
+        OneView PSU row is itself Redfish-schema-shaped, never
+        `health_of`'s `HealthSeverity` (that was the bug).
+        """
         psus = psus_from(
             [
                 {"MemberId": "0", "Status": {"Health": "Critical"}, "Oem": {"Hpe": {}}},
@@ -686,7 +713,7 @@ class TestPsus:
         )
 
         assert psus is not None
-        assert [p["health"] for p in psus] == ["CRITICAL", "HEALTHY"]
+        assert [p["health"] for p in psus] == ["DOWN", "UP"]
 
     def test_an_absent_bay_is_not_a_power_supply(self) -> None:
         assert psus_from([{"MemberId": "1", "Status": {"State": "Absent"}}]) == ()
@@ -705,7 +732,7 @@ class TestPsus:
         )
 
         assert server.psus is not None
-        assert server.psus[0]["health"] == "CRITICAL"
+        assert server.psus[0]["health"] == "DOWN"
 
 
 class TestCpuThreads:
