@@ -17,13 +17,27 @@ TEMPLATE_TYPES = frozenset({"initial-template", "updating-template"})
 
 _NON_BMC_ACCESS = frozenset({"in-band", "internal", "virtual"})
 
-# Cisco reports interface state with one vocabulary across UCS Manager,
-# UCS Central and Intersight, so the translation to the platform's own
-# lives here rather than in any one provider. Duplicating it would mean
-# the next value a live fleet turns up gets mapped in one collector and
-# left as UNKNOWN in the other.
+# Cisco reports interface state with mostly-shared vocabulary across UCS
+# Manager, UCS Central and Intersight, so the translation to the
+# platform's own lives here rather than in any one provider. Duplicating
+# it would mean the next value a live fleet turns up gets mapped in one
+# collector and left as UNKNOWN in the other.
+#
+# "Mostly" — corrected 2026-09-07: this comment used to claim one shared
+# vocabulary outright, unchecked against a live Intersight tenant.
+# `equipment.Psu.OperState` there actually splits between `"OK"` (36
+# PSUs) and `"Operable"` (2), for the identical healthy state — a
+# REST-API spelling neither UCS Manager's nor UCS Central's XML API ever
+# reports, confirmed via `tools.verify_intersight`'s OperState vocabulary
+# check (ADR-0017, "A second field pass, 2026-09-07"). No genuinely
+# failed PSU/GPU/NIC was present on that tenant to confirm a DOWN/
+# DISABLED counterpart for Intersight's own vocabulary, so only "ok" is
+# added here — the existing UCS-XML failure strings below are carried
+# forward as a best guess for Intersight too, not as something this has
+# actually observed failing.
 _OPER_STATE_MAP = {
     "operable": "UP",
+    "ok": "UP",
     "up": "UP",
     "link-up": "UP",
     "admin-down": "DISABLED",

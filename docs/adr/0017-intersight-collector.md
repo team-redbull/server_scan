@@ -792,21 +792,20 @@ row. See `tests/unit/domain/test_gpu_catalog.py`'s
 `test_a_trailing_wattage_figure_is_stripped_like_marketing_noise` — both
 confirmed to fail on the pre-fix code.
 
-**Found, not yet fixed: `normalize_oper_state` may not recognize
-Intersight's own `OperState` vocabulary at all.** The PSU section above
-(2026-09-01) asserted `psu()`'s `health` uses "the same vocabulary
-`gpu()` already uses for the identical OperState-sourced pattern" — true
-as a statement about the code, but that assumption was never checked
-against a live tenant. A UI check on this tenant's server showed
-`OperState: OK` for both PSUs. `ucs_common._OPER_STATE_MAP` was written
-for UCS Manager's XML vocabulary (`"operable"`, `"inoperable"`,
-`"link-up"`, ...) and has no `"ok"` entry, so `normalize_oper_state("OK")`
-falls through to `UNKNOWN` — silently, the same failure mode ADR-0017's
-own PSU section describes for the *health engine's* now-fixed literal-
-`"OK"` bug, just one layer lower, in the field this collector reports
-rather than in the fact that reads it. This affects three call sites
-identically: `psu()`, `gpu()`, and `attachment()`'s `oper_state`
-(`intersight/mapping.py`).
+**Found and fixed: `normalize_oper_state` did not recognize Intersight's
+own `OperState` vocabulary.** The PSU section above (2026-09-01) asserted
+`psu()`'s `health` uses "the same vocabulary `gpu()` already uses for the
+identical OperState-sourced pattern" — true as a statement about the
+code, but that assumption was never checked against a live tenant. A UI
+check on this tenant's server showed `OperState: OK` for both PSUs.
+`ucs_common._OPER_STATE_MAP` was written for UCS Manager's XML vocabulary
+(`"operable"`, `"inoperable"`, `"link-up"`, ...) and had no `"ok"` entry,
+so `normalize_oper_state("OK")` fell through to `UNKNOWN` — silently, the
+same failure mode this ADR's own PSU section describes for the *health
+engine's* now-fixed literal-`"OK"` bug, just one layer lower, in the
+field this collector reports rather than in the fact that reads it. This
+affects three call sites identically: `psu()`, `gpu()`, and
+`attachment()`'s `oper_state` (`intersight/mapping.py`).
 
 Cisco's Intersight API reference and its generated Python/Go SDKs do not
 enumerate `OperState`'s allowed values at all (confirmed: the field is a
@@ -816,12 +815,54 @@ not) — there is no contract to read this from, only a live tenant.
 VOCABULARY"**, which reads `equipment/Psus`, `graphics/Cards`,
 `adapter/HostEthInterfaces` and `adapter/ExtEthInterfaces` directly and
 prints every distinct raw `OperState` value each reports, alongside what
-`normalize_oper_state` currently does with it — so the next run against
-this tenant settles it with data instead of a UI screenshot. **This is
-now the fix's own outstanding action**: rerun `verify_intersight`, read
-section 7, and add whatever `_OPER_STATE_MAP` is missing (`"ok"` at
-minimum) with the failure-state values a genuinely down PSU/GPU/NIC
-reports — which this tenant may not have one of to show.
+`normalize_oper_state` currently does with it.
+
+**Section 7's output against this tenant, same day:**
+
+```
+equipment/Psus  (PSU health):
+    'OK'                x36      -> UNKNOWN   <- not recognized
+    'Operable'          x2       -> UP
+
+graphics/Cards  (GPU health):
+    ''                  x1       -> UNKNOWN   <- not recognized
+
+adapter/HostEthInterfaces  (vNIC oper_state):
+    'Down'              x33      -> DOWN
+    ''                  x10      -> UNKNOWN   <- not recognized
+
+adapter/ExtEthInterfaces  (physical port oper_state):
+    'Up'                x75      -> UP
+    'Down'              x37      -> DOWN
+```
+
+Two things this settles, and one it does not:
+
+- **`equipment.Psu.OperState` genuinely splits between `"OK"` (36) and
+  `"Operable"` (2) for the identical healthy state on one tenant** —
+  Intersight does not even use one consistent spelling with itself,
+  let alone with UCS Manager/Central's XML vocabulary. `"ok"` is now
+  added to `_OPER_STATE_MAP` (mapped to `UP`); `"operable"` already
+  worked. See `tests/unit/infrastructure/providers/test_intersight_mapping.py`'s
+  `test_psu_health_recognizes_the_live_intersight_ok_spelling`, confirmed
+  failing pre-fix.
+- **The empty-string rows are not the same bug and were not changed.**
+  `graphics/Cards` and `adapter/HostEthInterfaces` both report `''` for
+  some rows — a field genuinely not populated, not a spelling this
+  collector fails to recognize. `normalize_oper_state("")` correctly
+  answers `UNKNOWN` for "no data", the same as it would for `None`; there
+  is nothing to add a map entry for.
+- **Still not settled: the DOWN/DISABLED counterpart to Intersight's own
+  `OperState` vocabulary.** `adapter/ExtEthInterfaces` reports `"Up"`/
+  `"Down"` (already recognized, case-insensitively) but nothing on this
+  tenant showed a failed PSU or GPU, so whether a genuinely down one
+  reports `"inoperable"` (carried forward from UCS's vocabulary, on the
+  guess that Intersight's backend partly shares it) or something else
+  entirely — `"Critical"`, `"Failed"`, `"NotOk"` — is unconfirmed. The
+  existing DOWN/DISABLED entries are kept as a best guess, not as
+  something this run actually observed failing. Worth another
+  `verify_intersight` run if this estate ever has a failed PSU/GPU/NIC to
+  compare against.
 
 ---
 

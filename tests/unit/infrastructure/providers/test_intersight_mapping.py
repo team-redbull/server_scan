@@ -362,6 +362,19 @@ def test_psu_health_uses_the_oper_state_vocabulary_not_ok_failed() -> None:
     assert failed["health"] == "DOWN"
 
 
+def test_psu_health_recognizes_the_live_intersight_ok_spelling() -> None:
+    """Confirmed live 2026-09-07 (`tools.verify_intersight`'s OperState
+    vocabulary check, section 7): this tenant's 38 PSUs split between
+    `"OK"` (36) and `"Operable"` (2) for the identical healthy state —
+    a REST-API spelling neither UCS Manager's nor UCS Central's XML API
+    ever reports, which `_OPER_STATE_MAP` had no entry for at all before
+    this. Every `"OK"` PSU silently read UNKNOWN, not UP. See
+    ADR-0017, "A second field pass (2026-09-07)".
+    """
+    unit = mapping.psu({"PsuId": "1", "OperState": "OK"})
+    assert unit["health"] == "UP"
+
+
 def test_psu_capacity_and_id() -> None:
     unit = mapping.psu({"PsuId": "1", "Model": "PSU-750W", "Serial": "PSU-1", "PsuWattage": "750"})
     assert unit["id"] == "1"

@@ -335,15 +335,28 @@ read `docs/adr/0017-intersight-collector.md` before touching it:
    `INVENTORY_INTERSIGHT_MANAGEMENT_MODES` overrides it, for an estate
    whose UCS domains are not registered with Central at all.
 
-**It has never been run against a live Intersight.** The DevNet sandbox
-went offline 2026-08-01 with no committed return before ~Q1 2027, and
-there is no downloadable emulator equivalent to UCSPE, so everything was
-built against the OpenAPI contract as rendered by the installed SDK's
-generated models. `TotalMemory` carries **no documented unit anywhere**
-and is assumed MiB; if that is wrong every server's memory is 4.86% high,
-silently. `uv run python -m tools.verify_intersight` settles it in one
-query by summing a real server's DIMMs — run it before scheduling
-anything, and record the result in ADR-0017.
+**Corrected 2026-09-07 — this used to say it had never been run against a
+live Intersight; it now has, twice, against the user's on-prem Private
+Virtual Appliance.** The DevNet sandbox is still offline (went dark
+2026-08-01, no committed return before ~Q1 2027) and there is still no
+downloadable emulator equivalent to UCSPE, so the mapping was still built
+against the OpenAPI contract rather than a test target — but two live
+field passes on 2026-09-01 and 2026-09-07 (`uv run python -m
+tools.verify_intersight` against a real, if small, 19-20-server tenant)
+have since confirmed and fixed real defects the contract alone couldn't
+have caught: a `ComputeBoard`-only join gap that zeroed out storage and
+`cpu_model` (fixed 2026-09-01), a GPU catalog matcher that couldn't
+recognize Intersight's own product-name spelling (`"NVIDIA T4 PCIe 16GB
+70W"`, fixed 2026-09-07), and PSU/GPU/NIC health silently reading UNKNOWN
+because `equipment.Psu.OperState` reports `"OK"`, a spelling
+`normalize_oper_state` had no entry for (`"ok"` added 2026-09-07 — see
+ADR-0017's "second field pass" section). **`TotalMemory`'s unit is
+SETTLED: MiB**, confirmed against the Intersight UI's own "Memory
+Capacity" figure to the decimal (`786432 ÷ 1024 = 768.0` GiB exactly).
+**Still open:** a full `--manager-type INTERSIGHT --dry-run` ingest has
+not been run on this tenant, and the DOWN/DISABLED counterpart to
+Intersight's `OperState` vocabulary is unconfirmed — nothing on this
+tenant has actually failed yet to check it against.
 
 An air-gapped site reaches Intersight **only** through an on-prem
 Intersight; `intersight.com` is public internet and a *Connected* Virtual
@@ -860,24 +873,27 @@ quarterly, or before any release you care about:
 
 The most recent user direction was: real vendor collectors first,
 deployment/CD gaps and auth deliberately parked. **Every planned vendor
-collector now exists**, and as of 2026-09-07 `ONEVIEW` joined
-`UCS_CENTRAL`/`UCS_MANAGER` as validated against real hardware — see
-ADR-0022's "Results, 2026-09-07". `INTERSIGHT` is the one collector left
-with no live-hardware run at all. The natural next steps:
+collector now exists**, and as of 2026-09-07 both `ONEVIEW` and
+`INTERSIGHT` have had live field passes against real hardware — see
+ADR-0022's "Results, 2026-09-07" and ADR-0017's "second field pass". The
+natural next steps:
 
-1. **Run the Intersight probe against real hardware.** This is the
-   highest-value action on the repo and it is not more code.
-   `uv run python -m tools.verify_intersight` against the on-prem
-   Intersight (the user has one reachable from the air-gapped
-   environment). Read-only. `docs/field-test-checklist.md` part 1 is the
-   operator-facing version of this errand. Record what it settles in
-   ADR-0017 rather than only in a chat reply — a result nobody wrote down
-   is a result the next session re-derives.
-
-   The answer to look for is the `TotalMemory` unit and a full
-   `--dry-run` ingest (auth, name resolution and the MiB assumption were
-   confirmed on 2026-09-01; the rest of ADR-0017's UNVERIFIED list was
-   not).
+1. **Finish settling Intersight.** Two live passes so far (2026-09-01,
+   2026-09-07 — `uv run python -m tools.verify_intersight` against the
+   user's on-prem Private Virtual Appliance, a small 19-20-server tenant)
+   have confirmed auth, name resolution and the `TotalMemory` MiB
+   assumption, and found and fixed three real defects: the
+   `ComputeBoard`-only join gap (storage/`cpu_model`), a GPU catalog
+   matcher that couldn't recognize Intersight's own product-name spelling,
+   and `equipment.Psu.OperState`'s `"ok"` spelling reading UNKNOWN instead
+   of UP. What's still open: **a full `--manager-type INTERSIGHT
+   --dry-run` ingest has never been run**, and the DOWN/DISABLED
+   counterpart to Intersight's `OperState` vocabulary is unconfirmed —
+   nothing on this tenant has failed yet to check it against, so that one
+   needs either a real fault or a different tenant, not just a rerun.
+   `docs/field-test-checklist.md` part 1 is the operator-facing version of
+   this errand; record what a further run settles in ADR-0017 rather than
+   only in a chat reply.
 
    **OneView's own probe is done** — see ADR-0022's "Results,
    2026-09-07" and the "Key technical facts" HPE section above. Its

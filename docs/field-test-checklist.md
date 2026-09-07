@@ -40,15 +40,18 @@ uv run python -m tools.verify_intersight --show-names 15 | tee intersight-verify
 Send back `intersight-verify.txt`. That is the whole errand, and it is
 safe to run repeatedly.
 
-**Output section 7, "OperState VOCABULARY", added 2026-09-07, is the
-other open question a rerun settles.** A UI check on this tenant showed
-`OperState: OK` for a PSU, a value `normalize_oper_state` does not
-recognize — see ADR-0017, "A second field pass (2026-09-07)". Section 7
-prints every raw `OperState` value `equipment.Psu`, `graphics.Card` and
-both adapter-interface classes report and flags any this collector would
-silently read as UNKNOWN. If nothing is flagged, that only proves this
-tenant reported no failed hardware to compare against — say so rather
-than reading a clean section 7 as proof DOWN/DISABLED are covered too.
+**Output section 7, "OperState VOCABULARY", added 2026-09-07 — the `"ok"`
+half is DONE, the DOWN/DISABLED half is still open.** A live run against
+this tenant found `equipment.Psu.OperState` split between `"OK"` (36
+PSUs) and `"Operable"` (2), a spelling `normalize_oper_state` had no
+entry for; `"ok"` is now in `ucs_common._OPER_STATE_MAP`. See ADR-0017,
+"A second field pass (2026-09-07)" for the full section 7 output and what
+it did and didn't settle. **Still open:** no PSU, GPU or NIC on that
+tenant was actually down, so the DOWN/DISABLED spellings Intersight's own
+API uses are unconfirmed — the map's UCS-XML failure strings
+(`"inoperable"`, `"failed"`, ...) are carried forward as a guess, not a
+verified fact. A rerun is only worth another look if this estate ever has
+a genuinely failed PSU/GPU/NIC to check section 7 against.
 
 If the probe passes and you want to see the actual server records it
 would ingest — still writing nothing — add:
