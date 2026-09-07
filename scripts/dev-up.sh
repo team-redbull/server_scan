@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # Bring up MongoDB + Redis for local development with nothing beyond a
 # working `podman` (or `docker`) binary — no compose provider required.
-# This machine has rootless podman 4.9 but no `podman-compose` and no
-# `docker-compose` plugin installed, so `compose.yaml` (the documented,
-# spec-standard path) isn't runnable out of the box here; this script is
-# the zero-extra-tooling fallback for exactly that situation, per spec
-# section 52 ("`docker compose up` must be sufficient for development").
+# `docker compose up -d mongo redis` and `podman-compose up -d mongo
+# redis` both work fine here too (measured 2026-09-05, see CLAUDE.md's
+# "Which compose" section) — this script is the fallback for an
+# environment with neither installed, and the one path the air-gapped
+# and CI environments can rely on without assuming any compose provider
+# exists at all.
 #
 # Usage:
 #   scripts/dev-up.sh          # start mongo + redis

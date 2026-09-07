@@ -277,9 +277,10 @@ and exposed via reclassify/recalculate endpoints.
   `MongoAuditEventRepository` exposes only `record()` — no `update`/
   `delete` method exists on the class at all, so no code path in this
   codebase *can* alter or remove a recorded event. `AuditService.record()`
-  is the one place every mutation (classification rule CRUD, health
-  policy CRUD, maintenance changes, and real classification/health
-  transitions from `reclassify`/`recalculate`/ingestion) goes through.
+  is the one place every mutation (maintenance changes, and real
+  classification/health transitions from `reclassify`/`recalculate`/
+  ingestion) goes through. Classification-rule and health-policy CRUD are
+  no longer in that list — both are read-only now, see Slice 5 below.
 - Ingestion emits `SERVER_CREATED` for genuinely new servers and
   `CLASSIFICATION_CHANGED`/`HEALTH_STATUS_CHANGED` only on a real
   transition — never a generic "updated" event, since ingestion touches
@@ -303,51 +304,26 @@ and exposed via reclassify/recalculate endpoints.
   neutral (`name` + opaque `external_id`), landed alongside slice 4
   because it touches the same `ProviderServer` → `Server` ingestion path.
 
-334 backend tests (unit/integration/api) and the full frontend
+1084 backend tests (unit/integration/api) and the full frontend
 lint/typecheck/test/build pipeline pass.
 
-**Slice 5**: the classification-rule and health-policy admin UIs
-(`frontend/src/features/classification/`, `frontend/src/features/
-health/`) — backend untouched this slice.
-
-- Both editors share one shape: a form for the rule/policy fields, a
-  debounced live preview (`PreviewPanel`, hitting the backend's real
-  preview endpoints — no client-side re-implementation of resolution
-  logic), and a `HistoryPanel` reading the slice-4 audit trail filtered
-  to the entity being edited. `source` selection drives which single
-  scope field (`site_id`/`manager_type`/`vendor`, or none) is shown and
-  required, and the priority-band hint — mirroring
-  `validate_rule_write`/`HealthPolicy._priority_within_band` exactly
-  (`PRIORITY_BANDS`, `requiredScopeField` in both editors).
-- A system (seeded) rule or policy renders locked: every field disabled
-  except `enabled`, matching that the backend only permits an enable/
-  disable update to a `system: true` record.
-- The health-policy editor's `ConditionBuilder` is an MVP visual builder
-  (one leaf, or one level of `all_of`/`any_of`) over the closed condition
-  grammar, with a JSON "Advanced" escape hatch for anything deeper — it
-  never hand-rolls its own validation, the preview endpoint is the source
-  of truth for whether a condition is well-formed.
-- `ShadowPanel` is the UI surfacing of the `policy_key` shadowing
-  mechanism (ADR-0005): given the draft's `policy_key`, it lists sibling
-  policies from the same family (excluding the policy being edited) so an
-  author isn't blind to what they're about to shadow or be shadowed by —
-  a pure client-side derivation over `GET /health-policies`, no dedicated
-  backend endpoint, and no client-side re-implementation of the
-  precedence resolution itself.
-- The dev-only Vite proxy had a real route collision fixed this slice: a
-  plain `"/health"` prefix match was swallowing the SPA's own
-  `/health-policies` client routes and sending them to the backend's
-  liveness endpoints, breaking a hard refresh on those pages. Fixed by
-  anchoring the proxy key to a regex (`"^/health/"`), verified live
-  against the running dev stack (`GET /health-policies` and
-  `/health-policies/new` now serve `index.html`; `/health/live` still
-  proxies correctly).
-- Verified live against the running dev stack (not just the unit/
-  component test suite): classification-rule and health-policy preview
-  endpoints called directly and via the SPA's dev proxy return real
-  results from the seeded 1,000-server dataset, and backend validation
-  errors (out-of-band priority, missing required scope field) surface
-  through to the API exactly as the editor's error formatting expects.
+**Slice 5**, as originally built: the classification-rule and
+health-policy admin UIs — a form per rule/policy, a debounced live
+preview against the backend's preview endpoints, a `ConditionBuilder`
+visual builder over the health-policy condition grammar, and a
+`ShadowPanel` surfacing which sibling policies a draft would shadow
+(ADR-0005). **That entire subsystem was subsequently removed.** Rules and
+policies are seeded, code-defined, and ship with every deployment so that
+every installation classifies and scores identically — nothing about them
+is meant to be end-user-editable, which the write endpoints and their
+editors existed to do. `classification_rules.py`/`health_policies.py`
+expose only `GET` routes today; `frontend/src/features/rules/RulesPage.tsx`
+is the one page, read-only, replacing both editors and their preview
+panels. See CLAUDE.md's "Current status" section for the commits
+(`f9ab059`, `27b20a8`) and `docs/notes/2026-09-audit-deploy-ci-docs.md`
+§4 for how this section came to describe a subsystem that no longer
+exists — the corrections there are the reason this paragraph reads the
+way it does now rather than the original ~40-line writeup.
 
 **Slice 6**: the 10k/50k performance pass — verifying, against real-scale
 data rather than test fixtures, that the platform's stated ~10k-with-

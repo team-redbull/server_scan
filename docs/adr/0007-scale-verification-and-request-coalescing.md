@@ -162,3 +162,30 @@ absorbed into "performance pass: done."
   there's real production search-term distribution to reason about the
   hint-vs-current trade-off with, or if it starts showing up as a real
   operational complaint rather than a benchmark artifact.
+- **Updated 2026-09-06/2026-09-07 (Phase 5 research, Phase 11 of the
+  production-hardening pass): the named mechanism is confirmed, but the
+  numbers above do not reproduce under the current seed** — this is a
+  measurement caveat, not a retraction. Re-measured with `explain()`
+  against both a 10k and a 50k `--seed 42` dataset
+  (`docs/notes/2026-09-research-performance.md` §7.3):
+  - **Confirmed**: at 50k, a low-selectivity search (`^ocp-dell`, 1,570
+    matches) plans as `IXSCAN[name_id]` with the regex applied as a
+    `FETCH`-stage filter, examining 1,604 documents to return 51 — the
+    exact mechanism described above. At 10k the planner instead chose
+    `search_tokens` for the same query. MongoDB really does flip plans
+    with scale, exactly as this ADR predicted a `search_tokens` hint
+    would force it to.
+  - **Did not reproduce**: the zero-match case is the *cheapest* query in
+    the set at both scales (0-1 keys, 0 documents, ≤1 ms), because the
+    planner already picks `search_tokens` for it — nothing approaches the
+    700-800 ms p99 measured originally. `--seed 42` puts 1,570 servers
+    (3% of the fleet) behind the low-selectivity term above, not the
+    "roughly a quarter" this ADR's original scenario describes — a
+    different seed distribution, not a different mechanism, and not
+    directly comparable to the original p99s either (those were measured
+    under 20 concurrent callers post-coalescing; the re-measurement is
+    single-query `explain()` plans).
+  - The action remains what it was: revisit if this shows up as a real
+    operational complaint, with production search-term distribution to
+    reason about the hint trade-off against. Nothing here changes the
+    coalescing decision this ADR is actually about.

@@ -3,12 +3,12 @@
 Companion to `docs/notes/2026-09-audit.md` (findings, with IDs referenced
 here) and the seven `docs/notes/2026-09-research-*.md` files.
 
-**Status: approved 2026-09-06. Phases 1-10 done, committed, and pushed to
+**Status: approved 2026-09-06. Phases 1-11 done, committed, and pushed to
 `dev-refactor` (`686160f`, `453f47e`+`8dfed16`+`517cfce`, `c90968a`,
 `4806d21`+`6066cc5`+`2920510`, `b5d6702`, `37d1cce`, `a669a97`, `8d463b8`,
-Phase 9's own commit, Phase 10's own commit respectively — Phase 2 shipped
-as three commits and Phase 4 as three instead of one, see their own
-sections for why). Phase 6
+Phase 9's own commit, Phase 10's own commit, Phase 11's own commit
+respectively — Phase 2 shipped as three commits and Phase 4 as three
+instead of one, see their own sections for why). Phase 6
 also surfaced and fixed an unrelated dev-tooling bug (`d448822`):
 `scripts/dev-up.sh down` never removed Mongo's named volume, so `down &&
 up` silently kept the previous run's data instead of the empty database
@@ -18,8 +18,8 @@ added declared node20, CI's own deprecation annotation caught it on the
 very next run; `e38de2a` — docs only) plus one out-of-band, user-requested
 feature between Phase 8 and 9 (`734717e`, its own section below,
 "Between Phase 8 and 9"): all five collectors now log/print a
-`took=`/`collector.run_complete` run duration. **Phase 11 next** — the
-last phase actually scheduled in this pass; Phase 12 stays deliberately
+`took=`/`collector.run_complete` run duration. **Every phase actually
+scheduled in this pass is now done.** Phase 12 stays deliberately
 deferred (see its own section).
 
 Ordering follows the brief: contract and architecture first while the diff
@@ -778,12 +778,101 @@ completion: **127 files, ~2,700 insertions**.
 
 ## Phase 11 — Documentation truth pass
 
-**Commit:** `docs: correct 18 statements that describe a shape this code no longer has`
+**Shipped as `docs: correct 18 statements that describe a shape this code no longer has`.**
 
-The 18 false statements (audit §4.6), the `CLAUDE.md` corrections
-(§4.1–§4.5), and an ADR-0007 update recording that its named mechanism
-still holds at 50k while its numbers do not reproduce under the current
-seed distribution — **an ADR update, not a code change**.
+The full 18-item table lives in `docs/notes/2026-09-audit-deploy-ci-docs.md`
+§4, not `2026-09-audit.md` §4 item 6 (which only summarizes it as "18
+false statements" with five examples) — the plan's own "audit §4.6"
+pointer sent the wrong direction, worth recording here so the next
+session doesn't hunt for a §4.6 that doesn't exist in the file it names.
+
+**Re-verified each of the 18 against the current tree before touching
+anything, per this session's own established practice** ("re-measure
+rather than trust"): 4 of the 18 were already resolved by later phases
+and needed no change — `pip-audit` is clean (Phase 3's `cryptography`
+bump), `classification_rules.py`/`health_policies.py` module docstrings
+were already fixed by Phase 10, and
+`docs/test-redfish-standalone-collector.md`'s flagged `site_id=one`
+example no longer exists in the file at all. The remaining 14 were fixed:
+
+- `docs/architecture.md` — the ~40-line Slice 5 admin-UI/`ConditionBuilder`/
+  `ShadowPanel` writeup rewritten to describe the real read-only merged
+  rules/policies page, framed explicitly as "this subsystem was
+  subsequently removed" rather than silently swapped; "334 backend
+  tests" → 1084 (re-measured via `pytest --collect-only`); dropped
+  "classification rule CRUD, health policy CRUD" from what
+  `AuditService.record()` covers.
+- `docs/arc42.md` — Source-filter claim (offers 5, not 3, verified in
+  `frontend/src/api/sites.ts`), ADR count (18 → 23, and the ADR-0023 row
+  itself was missing from the index table — added), Q6's "reaches …
+  editors" (dropped), the stale "arc42 corrects CLAUDE.md" note (both
+  documents already agree since convention 6 was corrected), and the
+  risk register's Source-filter/Dell-seeding entries (both resolved —
+  `SOURCE_PROVIDERS` has all five, `OPENMANAGE` is in the generator's
+  `COLLECTOR_TYPES`) replaced with what's actually still a risk (a future
+  hand-maintained list could drift the same way) plus a note that the
+  docstring convention is done for backend/tools but not the frontend.
+- `README.md` — "admin UIs" → the real read-only-merged-page description;
+  the ASCII diagram's "classification/health-policy editors" → "read-only
+  rules/policies page"; the self-contradiction between "eventually Dell
+  OpenManage/HPE OneView" (line 58) and "five collectors exist today"
+  (line 152) resolved in favor of the true state; the Source-filter/Dell
+  seeding paragraph rewritten to name what the generator's `collector_for`
+  actually does (Dell → `OPENMANAGE`, not folded into
+  `REDFISH_STANDALONE`) rather than describing a gap that closed. Found
+  and fixed one item outside the original 18 while re-verifying this
+  section: `uv run ruff check --select D .` was described as "not a CI
+  gate" — Phase 10 made `D` part of the main `ruff check .` gate, so that
+  line was already stale from this pass's own earlier work.
+- `docs/diagrams/runtime-architecture.architecture.json` +
+  `runtime-architecture.html` — added `openmanage`/`oneview` components
+  via the `archify` skill rather than hand-editing 14k lines of generated
+  SVG. Non-trivial: fitting a 5-source fan-in into the existing 3-source
+  layout needed the `collectors` box grown from 66px to 140px tall (more
+  room for the five incoming ports) and alternating `labelDx`/`labelDy`
+  offsets on all five vendor-read connections to clear
+  `composition/label-route-clearance` — iterated against
+  `archify validate` until showcase profile passed clean (9/9 checks, 0
+  errors, 0 warnings), then `deliver`, with source evidence verified
+  against this repo. `visual-check` (real-browser evidence) could not run
+  — no Chrome/Chromium available in this environment — so the deterministic
+  delivery receipt is the only verification this diagram got; a human or
+  image-capable review is still owed before calling the diagram's
+  *appearance*, not just its structural correctness, settled.
+- `CLAUDE.md:295` and `docs/arc42.md`'s own copy of the same sentence —
+  `_PROVIDER_FACTORIES` → `PROVIDER_FACTORIES` (the symbol is public, no
+  leading underscore; CLAUDE.md already used the correct name elsewhere
+  in the same file, which is how the audit caught it). The many
+  `_PROVIDER_FACTORIES` mentions inside `docs/adr/*.md` were **left
+  alone** — ADRs are point-in-time historical records in this project's
+  convention, not living documents, and at least one of them may predate
+  whatever later renamed the symbol; only the two currently-living
+  documents were corrected.
+- `scripts/dev-up.sh` — the header's false "no `docker-compose` plugin
+  installed" claim (CLAUDE.md's own 2026-09-05 measurement found Docker
+  Compose v5.5.1 present and `docker compose` the *preferred* path) and
+  its citation of the 75-section chat spec (convention 1 explicitly
+  forbids "the spec says so" as a justification) both rewritten to state
+  the script's real reason for existing: it needs no compose provider at
+  all, which is what the air-gapped and CI paths actually depend on.
+- `docs/adr/0007-scale-verification-and-request-coalescing.md` — a dated
+  addendum (2026-09-06/07), not a rewrite, recording
+  `docs/notes/2026-09-research-performance.md` §7.3's re-measurement:
+  the named mechanism (MongoDB flips between an `IXSCAN[search_tokens]`
+  plan and an `IXSCAN[name_id]`-plus-`FETCH`-filter plan depending on
+  scale) is confirmed at 50k, but the specific 700-800ms zero-match p99
+  does not reproduce under `--seed 42` — the zero-match case is the
+  *cheapest* query in the set at both 10k and 50k now, because the
+  planner already picks `search_tokens` for it. Attributed to a
+  materially different seed distribution (1,570 servers behind the
+  measured low-selectivity term, 3% of the fleet, not "roughly a
+  quarter"), not a wrong original measurement — the coalescing decision
+  this ADR is actually about is unaffected either way.
+
+Documentation-only change; no `ruff`/`ty`/`pytest` gate applies. Verified
+by re-grepping every corrected claim after editing to confirm zero
+remaining stale hits (a couple of `git grep`s per item), and by the
+`archify validate`/`deliver` receipts for the diagram.
 
 ---
 

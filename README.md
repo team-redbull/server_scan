@@ -23,7 +23,9 @@ far, in order:
 3. Health policy engine (declarative conditions, `policy_key`
    override/shadowing).
 4. Maintenance windows and an append-only audit trail.
-5. Classification-rule and health-policy admin UIs.
+5. Classification-rule and health-policy UIs — since made read-only and
+   merged into one page; rules and policies ship with the platform, so
+   every deployment classifies and scores identically.
 6. A 10k/50k-scale performance pass (real index-coverage verification and
    load testing, not just fixture-sized tests).
 7. Playwright E2E coverage of the critical admin flows.
@@ -55,8 +57,8 @@ per-slice writeup and `docs/adr/` for the individual design decisions.
 
 This is the one idea worth understanding before anything else: **there is
 no single "sync" process.** Each hardware vendor's manager (Cisco UCS
-Central, Cisco Intersight, and eventually Dell OpenManage Enterprise and
-HPE OneView) gets its own small collector program, and each collector runs as
+Central, Cisco Intersight, Dell OpenManage Enterprise, and HPE OneView)
+gets its own small collector program, and each collector runs as
 its own **Kubernetes `CronJob`** — one CronJob per manager *type*, not per
 physical manager. On a schedule, a CronJob's pod:
 
@@ -93,8 +95,8 @@ INVENTORY_SITES="nyc:New York City,tlv:Tel Aviv,bat-yam:Bat Yam,five:Site Five"
 
 `code:Display Name`, comma-separated; the display half is optional.
 Changing it renames or adds a site across the API, the site cards, the
-inventory filter, both policy editors and the seeded classification rules
-at once — no code change, no image rebuild, which matters when the images
+inventory filter and the seeded classification rules at once — no code
+change, no image rebuild, which matters when the images
 have to cross an air gap. In Helm it is `config.sites`, which lands in
 the ConfigMap the API *and* every collector read, because a collector
 derives each server's site at ingest and the two halves must agree. A
@@ -134,8 +136,8 @@ standalone".
                                                                             │
                                                                             ▼
                                                        React admin UI (inventory table,
-                                                       server detail, classification/
-                                                       health-policy editors)
+                                                       server detail, read-only rules/
+                                                       policies page)
 ```
 
 MongoDB is the only thing that ties a collector run to what the UI shows
@@ -343,13 +345,10 @@ What you get mirrors the collectors that exist. Cisco blades arrive
 as `source_provider=UCS_CENTRAL` with Central-rooted DNs, service-profile
 org paths and fabric attachments; Cisco rack units arrive as
 `INTERSIGHT` with `intersight/<moid>` ids and no org path; HPE ProLiants
-arrive as `ONEVIEW` with `/rest/server-hardware/<uuid>` ids; and
-everything else — Dell and `standalone` whiteboxes — arrives as
-`REDFISH_STANDALONE` with `redfish://` addresses. (`OPENMANAGE` is
-deliberately not seeded — Dell is reached through OME plus each iDRAC,
-and the generator has no second-hop shape for that yet. The UI's Source
-filter has not caught up with `ONEVIEW` or `OPENMANAGE` either; it still
-offers three values.) Each collector's
+arrive as `ONEVIEW` with `/rest/server-hardware/<uuid>` ids; Dell servers
+arrive as `OPENMANAGE`; and genuinely standalone whiteboxes arrive as
+`REDFISH_STANDALONE` with `redfish://` addresses. All five collectors are
+seeded and all five are filterable from the UI's Source filter. Each collector's
 *absences* are reproduced too, because a fixture richer than the real
 thing hides the gaps worth seeing. Names span the estate's real shapes,
 including a deliberate minority carrying no site token, so "Unassigned"
@@ -409,13 +408,16 @@ npm run lint && npm run typecheck && npm run test -- --run && npm run build
 npm run test:e2e                  # Playwright — needs the dev stack + backend + frontend all running
 ```
 
+Docstring coverage against CLAUDE.md's convention 8 is a real CI gate
+now (`D` is part of `uv run ruff check .` above, per
+`docs/notes/2026-09-refactor-plan.md` Phase 10), not a local-only check.
+
 Not CI gates, but worth running locally when touching a lot of code at
 once: `uvx vulture backend/app tools --min-confidence 80` (dead code —
-expect two known false positives, `__aexit__`'s unused `exc_type`/`tb`),
-`npx knip` from `frontend/` (unused exports — currently the ~450 LOC left
-behind by the removed rule/policy editors, tracked as its own cleanup),
-and `uv run ruff check --select D .` (docstring coverage against
-CLAUDE.md's convention 8).
+expect two known false positives, `__aexit__`'s unused `exc_type`/`tb`)
+and `npx knip` from `frontend/` (unused exports — currently the ~450 LOC
+left behind by the removed rule/policy editors, tracked as its own
+cleanup).
 
 The integration tests need the dev stack; without it they skip rather
 than fail, and the whole directory reports `60 skipped` in about five

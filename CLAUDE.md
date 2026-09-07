@@ -297,7 +297,7 @@ disproved and could not settle.
 `INTERSIGHT` (Cisco servers no UCS domain owns), `OPENMANAGE` (Dell),
 `ONEVIEW` (HPE) and `REDFISH_STANDALONE` (every machine no aggregator
 owns).** Every `ManagerType` now has an entry in
-`tools/run_collector.py`'s `_PROVIDER_FACTORIES` **except `UCS_MANAGER`,
+`tools/run_collector.py`'s `PROVIDER_FACTORIES` **except `UCS_MANAGER`,
 whose absence is deliberate rather than pending** — it is reached through
 `UCS_CENTRAL`, which discovers each domain's address at runtime, so there
 is nothing to point a CronJob at. The tool says exactly that rather than

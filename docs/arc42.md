@@ -11,7 +11,7 @@ of a technical explanation is a second copy to keep true:
 
 | For | Read |
 |---|---|
-| Why a decision was made | `docs/adr/` — 18 records, cited throughout below |
+| Why a decision was made | `docs/adr/` — 23 records, cited throughout below |
 | How a subsystem actually works | `docs/architecture.md` |
 | Verified Cisco implementation facts | `docs/cisco-collectors.md` |
 | Working in this repo | `CLAUDE.md` |
@@ -176,7 +176,7 @@ ServerInventoryProvider (Protocol)
 | `oneview` | Implemented; **never run against a live appliance** (ADR-0022) | Three bulk calls per appliance, `expand=all`; the only HPE source at any iLO generation |
 | `fake` | Implemented | Deterministic dev/CI data through the same port |
 
-Every `ManagerType` now has an entry in `_PROVIDER_FACTORIES` except
+Every `ManagerType` now has an entry in `PROVIDER_FACTORIES` except
 `UCS_MANAGER`, whose absence is deliberate rather than pending: it is
 reached through `UCS_CENTRAL`, which discovers each domain's address at
 runtime.
@@ -332,9 +332,9 @@ record; that is the entire scaffolding. Every endpoint is open to anyone
 who can reach the Route.
 
 This is a deliberate, repeatedly-confirmed deferral to the last slice,
-and it is the release gate. Note that `CLAUDE.md` describes this as
-"`AuthProvider`/RBAC scaffolding"; no such class exists, and this
-document is the accurate one.
+and it is the release gate. `CLAUDE.md` was corrected to match this
+document (convention 6) — both now agree that no `AuthProvider`/RBAC
+scaffolding exists.
 
 ---
 
@@ -367,6 +367,7 @@ of it.
 | 0020 | Dell: identity from OME, hardware from each iDRAC over Redfish |
 | 0021 | A built-in GPU catalog, matched by model string as well as Cisco PID |
 | 0022 | HPE is collected from OneView only, at every iLO generation |
+| 0023 | `ServerInventoryProvider` becomes an ABC with a `collect()` template method |
 
 ---
 
@@ -393,7 +394,7 @@ Modifiability ─ a new vendor is a new module; a site rename is a config change
 | Q3 | MongoDB becomes unreachable | `/health/ready` fails (503) and the orchestrator stops routing traffic. |
 | Q4 | An operator saves a pathological regex | Rejected at *write* time against a canary suite of pathological inputs. One that still times out at evaluation is skipped and counted, never stalling the run. |
 | Q5 | 50,000 servers, concurrent list requests | Keyset pagination + lean projections + request coalescing. Measured p50/p95/p99 in ADR-0007. |
-| Q6 | A site is renamed | One environment variable, pod restart. Reaches API, UI, filters, editors and seeded rules. No code change, no image rebuild. |
+| Q6 | A site is renamed | One environment variable, pod restart. Reaches API, UI, filters and seeded rules. No code change, no image rebuild. |
 | Q7 | Two classification rules tie and disagree | Winner is deterministic (lowest id); the disagreement is persisted in `conflicts[]` so the authoring mistake surfaces. |
 | Q8 | A collector is pointed at a wrong/half-configured vendor | Fails before any connection with a message naming the exact variables to set (exit 2). |
 | Q9 | A new vendor collector is added | New provider module + factory entry + CronJob. No change to API, engines or frontend. |
@@ -432,16 +433,16 @@ go stale — treat its date as load-bearing.
   cannot be caught at startup — only by looking at the resulting
   inventory. `--dry-run` prints the resolved site per server for this.
 - Frontend copies of `ManagerType` are hand-maintained (now guarded by a
-  test after they silently drifted). The inventory page's **Source**
-  filter is a separate hand-maintained list that the guard does not
-  cover, and it still offers only `UCS_CENTRAL`/`INTERSIGHT`/
-  `REDFISH_STANDALONE` — `OPENMANAGE` and `ONEVIEW` servers cannot be
-  filtered for.
-- The fake-data generator seeds four of the five collectors; there is no
-  `OPENMANAGE` shape, so Dell's OME-plus-iDRAC path has no seeded data.
-- The repo is mid-migration to the docstring convention (CLAUDE.md
-  convention 8); older files still carry the previous inline-comment
-  style.
+  test after they silently drifted). `SOURCE_PROVIDERS`
+  (`frontend/src/api/sites.ts`) is one such list — it now covers all five
+  collectors and is itself guarded by
+  `tests/unit/test_frontend_manager_types.py`, but nothing stops a future
+  hand-maintained list elsewhere from drifting the same way this one once
+  did.
+- Every backend function and `tools/` script has a docstring now
+  (convention 8, `docs/notes/2026-09-refactor-plan.md` Phase 10); the
+  frontend was not part of that pass and still follows its own,
+  lighter-weight commenting convention.
 
 ---
 
