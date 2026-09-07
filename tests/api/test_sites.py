@@ -129,13 +129,23 @@ async def test_every_site_reports_every_installation_type(
     resp = await client.get("/api/v1/sites")
 
     assert resp.status_code == 200
-    for item in resp.json()["items"]:
+    body = resp.json()
+    for item in body["items"]:
         assert set(item["by_installation_type"]) == {
             "HOSTED_CLUSTER",
             "UPI",
             "UNCLASSIFIED",
         }
         assert all(slice_["total"] == 0 for slice_ in item["by_installation_type"].values())
+
+    # The fleet-wide summary is zero-filled the same way every site is,
+    # not merely absent when there is nothing in the database yet.
+    assert body["fleet"]["total"] == 0
+    assert set(body["fleet"]["by_installation_type"]) == {
+        "HOSTED_CLUSTER",
+        "UPI",
+        "UNCLASSIFIED",
+    }
 
 
 async def test_installation_type_slices_sum_to_the_site_total(
@@ -223,3 +233,57 @@ async def test_unassigned_bucket_slices_by_installation_type_too(
 
     assert unassigned["total"] == 1
     assert unassigned["by_installation_type"]["UPI"]["total"] == 1
+
+
+async def test_fleet_summary_sums_every_site_including_unassigned(
+    app_context: tuple[AsyncClient, MongoServerRepository],
+) -> None:
+    """The backend now computes the fleet-wide total in the same
+    aggregation pass as the per-site breakdown, so it must equal what
+    summing every `items` entry by hand would give — across more than
+    one site, including the unassigned bucket, which is part of the
+    fleet whatever its hostname says.
+    """
+    client, repo = app_context
+    await repo.upsert(
+        _make_server(
+            0,
+            site_id="tlv",
+            vendor=Vendor.CISCO,
+            health=HealthSeverity.CRITICAL,
+            installation_type=InstallationType.UPI,
+        )
+    )
+    await repo.upsert(
+        _make_server(
+            1,
+            site_id="nyc",
+            vendor=Vendor.DELL,
+            health=HealthSeverity.HEALTHY,
+            installation_type=InstallationType.HOSTED_CLUSTER,
+            maintenance_enabled=True,
+        )
+    )
+    await repo.upsert(_make_server(2, installation_type=InstallationType.UPI))
+
+    body = (await client.get("/api/v1/sites")).json()
+    fleet = body["fleet"]
+
+    assert fleet["total"] == 3
+    assert fleet["in_maintenance"] == 1
+    assert fleet["by_health"]["CRITICAL"] == 1
+    assert fleet["by_health"]["HEALTHY"] == 1
+    # Server 2 (unassigned) defaults to Dell too, so this is 2, not 1.
+    assert {v["vendor"]: v["count"] for v in fleet["by_vendor"]} == {
+        "dell": 2,
+        "cisco": 1,
+        "hp": 0,
+        "standalone": 0,
+    }
+    assert fleet["by_installation_type"]["UPI"]["total"] == 2
+    assert fleet["by_installation_type"]["HOSTED_CLUSTER"]["total"] == 1
+    assert fleet["by_installation_type"]["UNCLASSIFIED"]["total"] == 0
+
+    # And it must equal what the frontend used to compute itself, by hand,
+    # from the same items array — the whole point of moving this server-side.
+    assert fleet["total"] == sum(item["total"] for item in body["items"])

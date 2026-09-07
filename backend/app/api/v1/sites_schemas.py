@@ -46,13 +46,24 @@ class SiteStats(Breakdown):
     name: str
 
     # Keyed by `InstallationType` value, always containing every one.
-    # The fleet-wide UPI/hosted totals are summed from these client-side,
-    # exactly as the "across all sites" card sums the sites themselves —
-    # a derived number can then never disagree with the cards beside it.
+    by_installation_type: dict[str, Breakdown] = Field(default_factory=dict)
+
+
+class FleetSummary(Breakdown):
+    """Every site summed together, sliced further by installation type.
+
+    Folded from the same `site_breakdown()` aggregation rows `SiteStats`
+    is built from (`app.api.v1.sites._pivot`), in the same backend pass —
+    not summed from the per-site `items` client-side, so a second
+    consumer of this endpoint gets the identical fleet-wide number
+    without reimplementing the sum.
+    """
+
     by_installation_type: dict[str, Breakdown] = Field(default_factory=dict)
 
 
 class SiteStatsListResponse(BaseModel):
-    """Every configured site's statistics, plus "Unassigned"."""
+    """Every configured site's statistics, plus "Unassigned", plus the fleet-wide summary."""
 
     items: list[SiteStats]
+    fleet: FleetSummary

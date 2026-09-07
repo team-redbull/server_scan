@@ -49,17 +49,48 @@ function site(
   };
 }
 
+/** Test-fixture-only: mirrors what the backend's own aggregation now
+ * computes, so the mock response is internally consistent without hand
+ * deriving every number. Not a reimplementation the page component uses
+ * — SitesOverviewPage reads `fleet` straight off the response.
+ */
+function sumBreakdowns(records: Breakdown[]): Breakdown {
+  const result = breakdown();
+  for (const record of records) {
+    result.total += record.total;
+    result.in_maintenance += record.in_maintenance;
+    for (const entry of record.by_vendor) {
+      const existing = result.by_vendor.find((v) => v.vendor === entry.vendor);
+      if (existing) existing.count += entry.count;
+    }
+    for (const [severity, count] of Object.entries(record.by_health)) {
+      result.by_health[severity as keyof typeof result.by_health] += count;
+    }
+  }
+  return result;
+}
+
+const SITE_ITEMS = [
+  site("tlv", "Tel Aviv", {
+    UPI: { total: 30, by_health: { UNKNOWN: 0, HEALTHY: 28, INFO: 0, WARNING: 0, CRITICAL: 2 } },
+    HOSTED_CLUSTER: { total: 12 },
+  }),
+  site("nyc", "New York City", {
+    UPI: { total: 5 },
+    HOSTED_CLUSTER: { total: 3, by_health: { UNKNOWN: 0, HEALTHY: 2, INFO: 0, WARNING: 0, CRITICAL: 1 } },
+  }),
+];
+
 const SITES_RESPONSE = {
-  items: [
-    site("tlv", "Tel Aviv", {
-      UPI: { total: 30, by_health: { UNKNOWN: 0, HEALTHY: 28, INFO: 0, WARNING: 0, CRITICAL: 2 } },
-      HOSTED_CLUSTER: { total: 12 },
-    }),
-    site("nyc", "New York City", {
-      UPI: { total: 5 },
-      HOSTED_CLUSTER: { total: 3, by_health: { UNKNOWN: 0, HEALTHY: 2, INFO: 0, WARNING: 0, CRITICAL: 1 } },
-    }),
-  ],
+  items: SITE_ITEMS,
+  fleet: {
+    ...sumBreakdowns(SITE_ITEMS),
+    by_installation_type: {
+      UPI: sumBreakdowns(SITE_ITEMS.map((s) => s.by_installation_type.UPI)),
+      HOSTED_CLUSTER: sumBreakdowns(SITE_ITEMS.map((s) => s.by_installation_type.HOSTED_CLUSTER)),
+      UNCLASSIFIED: sumBreakdowns(SITE_ITEMS.map((s) => s.by_installation_type.UNCLASSIFIED)),
+    },
+  },
 };
 
 function renderPage() {
@@ -102,7 +133,7 @@ describe("SitesOverviewPage", () => {
     vi.unstubAllGlobals();
   });
 
-  it("sums the three fleet-wide cards from the per-site slices", async () => {
+  it("renders the three fleet-wide cards from the backend's own fleet summary", async () => {
     renderPage();
 
     await waitFor(() => {
@@ -127,6 +158,42 @@ describe("SitesOverviewPage", () => {
       "href",
       "/servers?installation_type=HOSTED_CLUSTER",
     );
+  });
+
+  it("trusts the backend's fleet field rather than recomputing it from items", async () => {
+    // Deliberately inconsistent with SITE_ITEMS (which sum to 50): if this
+    // renders anyway, the page is reading `fleet` as given, not summing
+    // `items` itself — the whole point of moving this computation server
+    // side.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () =>
+            Promise.resolve({
+              items: SITE_ITEMS,
+              fleet: {
+                ...breakdown({ total: 999 }),
+                by_installation_type: {
+                  UPI: breakdown(),
+                  HOSTED_CLUSTER: breakdown(),
+                  UNCLASSIFIED: breakdown(),
+                },
+              },
+            }),
+        }),
+      ),
+    );
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: "Across all sites" })).toBeInTheDocument();
+    });
+
+    expect(within(card("Across all sites")).getByText("999")).toBeInTheDocument();
   });
 
   it("carries health into the installation-type cards", async () => {

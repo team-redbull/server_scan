@@ -2,10 +2,10 @@ import type { KeyboardEvent, MouseEvent, ReactNode } from "react";
 import { Link, useNavigate } from "react-router";
 
 import { UNASSIGNED_SITE_ID } from "@/api/sites";
-import type { Breakdown, SiteStats, VendorCount } from "@/api/sites";
+import type { Breakdown, FleetSummary, SiteStats } from "@/api/sites";
 import { SEVERITY_GLYPH } from "@/components/severity";
 import { useSitesQuery } from "@/features/sites/hooks";
-import type { HealthSeverity, InstallationType } from "@/types/server";
+import type { HealthSeverity } from "@/types/server";
 
 /**
  * The landing page: a fleet-wide row (everything, UPI, hosted cluster)
@@ -46,86 +46,43 @@ function vendorLabel(vendor: string): string {
 }
 
 /**
- * Sum any set of breakdowns into one.
- *
- * Used for both fleet-wide rows: "across all sites" sums the site
- * records, and each installation-type card sums that type's slice out of
- * every site. Derived here rather than served as extra rows of its own so
- * a total can never disagree with the cards it was summed from.
- *
- * Args:
- *   records: the breakdowns to add together.
- *
- * Returns:
- *   Breakdown: their element-wise sum.
- */
-function sumBreakdowns(records: Breakdown[]): Breakdown {
-  const by_vendor: VendorCount[] = [];
-  const by_health: Record<string, number> = {};
-  let total = 0;
-  let in_maintenance = 0;
-
-  for (const record of records) {
-    total += record.total;
-    in_maintenance += record.in_maintenance;
-    for (const entry of record.by_vendor) {
-      const existing = by_vendor.find((v) => v.vendor === entry.vendor);
-      if (existing) {
-        existing.count += entry.count;
-      } else {
-        by_vendor.push({ ...entry });
-      }
-    }
-    for (const [severity, count] of Object.entries(record.by_health)) {
-      by_health[severity] = (by_health[severity] ?? 0) + count;
-    }
-  }
-
-  return {
-    total,
-    by_vendor,
-    by_health: by_health as Record<HealthSeverity, number>,
-    in_maintenance,
-  };
-}
-
-/**
  * The three fleet-wide cards: everything, then each installation type.
  *
  * `unassigned` is included in all of them — those servers are in the
- * fleet whatever their hostname says.
+ * fleet whatever their hostname says. The numbers come straight off the
+ * backend's own `fleet` summary (`app.api.v1.sites._pivot`, folded from
+ * the same aggregation rows the per-site cards are), not summed here —
+ * so this page can never disagree with a second consumer of the same
+ * endpoint.
  *
  * Args:
- *   items: the per-site records as returned by `GET /api/v1/sites`.
+ *   fleet: the fleet-wide summary as returned by `GET /api/v1/sites`.
  *
  * Returns:
  *   CardSpec[]: the top row, in fixed order.
  */
-function fleetCards(items: SiteStats[]): CardSpec[] {
-  const slice = (type: InstallationType): Breakdown =>
-    sumBreakdowns(items.map((site) => site.by_installation_type[type]));
-
+function fleetCards(fleet: FleetSummary): CardSpec[] {
   return [
     {
       key: "__all__",
       name: "Across all sites",
       subtitle: "servers, every site",
       to: "/servers",
-      stats: sumBreakdowns(items),
+      stats: fleet,
     },
     {
       key: "UPI",
       name: "UPI",
       subtitle: "servers, every site",
       to: "/servers?installation_type=UPI",
-      stats: slice("UPI"),
+      stats: fleet.by_installation_type.UPI,
     },
     {
       key: "HOSTED_CLUSTER",
       name: "Hosted cluster",
       subtitle: "servers, every site",
       to: "/servers?installation_type=HOSTED_CLUSTER",
-      stats: slice("HOSTED_CLUSTER"),
+      stats: fleet.by_installation_type.HOSTED_CLUSTER,
     },
   ];
 }
@@ -326,7 +283,7 @@ function SectionHeading({ children }: { children: string }) {
 export function SitesOverviewPage() {
   const { data, isPending, isError, error } = useSitesQuery();
 
-  const fleet = data ? fleetCards(data.items) : [];
+  const fleet = data ? fleetCards(data.fleet) : [];
   const sites = data ? siteCards(data.items) : [];
   const fleetTotal = fleet[0]?.stats.total ?? 0;
 

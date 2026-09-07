@@ -26,6 +26,7 @@ from fastapi import APIRouter, Depends
 
 from app.api.v1.sites_schemas import (
     Breakdown,
+    FleetSummary,
     SiteStats,
     SiteStatsListResponse,
     VendorCount,
@@ -53,10 +54,13 @@ router = APIRouter(prefix="/api/v1", tags=["sites"])
 # read path here follows.
 _STATS_TTL_SECONDS = 30
 
-# The `:2:` is a schema version, bumped whenever `SiteStats` grows a
-# field: a deploy that kept the old key would serve up to 30 seconds of
-# payloads missing the new one, which validate fine and render as zeroes.
-_STATS_CACHE_KEY = "si:2:sites:stats"
+# The `:3:` is a schema version, bumped whenever this response's shape
+# changes: a deploy that kept the old key would try to validate up to 30
+# seconds of cached payloads against the new schema. Most field additions
+# validate fine and render as zeroes; `fleet` is a new required field, so
+# an old payload without it would fail validation outright rather than
+# degrade quietly — this version bump is what avoids that.
+_STATS_CACHE_KEY = "si:3:sites:stats"
 
 # The key servers are counted under when their name carries no site.
 UNASSIGNED_SITE_ID = "unassigned"
@@ -160,8 +164,10 @@ def _accumulate(entry: Breakdown, row: SiteBreakdownRow) -> None:
         entry.by_vendor[position].count += row.count
 
 
-def _pivot(rows: list[SiteBreakdownRow], sites: SiteCatalog) -> list[SiteStats]:
-    """Fold the flat `$group` buckets into one record per site.
+def _pivot(
+    rows: list[SiteBreakdownRow], sites: SiteCatalog
+) -> tuple[list[SiteStats], FleetSummary]:
+    """Fold the flat `$group` buckets into one record per site, and one fleet-wide summary.
 
     Every configured site is seeded first so the shape of the response
     does not depend on what happens to be in the database — the UI can
@@ -172,18 +178,32 @@ def _pivot(rows: list[SiteBreakdownRow], sites: SiteCatalog) -> list[SiteStats]:
     sites exist, so reconfiguring `INVENTORY_SITES` reaches the UI with
     no frontend change at all.
 
+    The fleet-wide summary is folded from the same rows in the same pass
+    rather than a second aggregation or a second pass over `rows` — every
+    row already belongs to exactly one site and is accumulated into the
+    fleet totals alongside its site's own.
+
     Args:
         rows (list[SiteBreakdownRow]): The aggregation's flat buckets.
         sites (SiteCatalog): The configured sites.
 
     Returns:
-        list[SiteStats]: One record per site, plus "Unassigned".
+        tuple[list[SiteStats], FleetSummary]: One record per site plus
+            "Unassigned", and the totals across all of them.
     """
     stats: dict[str, SiteStats] = {
         definition.code: _empty_stats(definition.code, name=definition.name)
         for definition in sites.definitions
     }
     stats[UNASSIGNED_SITE_ID] = _empty_stats(UNASSIGNED_SITE_ID, name="Unassigned")
+
+    fleet = FleetSummary(
+        by_vendor=[VendorCount(vendor=vendor, count=0) for vendor in _VENDOR_ORDER],
+        by_health=dict.fromkeys(_HEALTH_ORDER, 0),
+        by_installation_type={
+            installation: _empty_breakdown() for installation in _INSTALLATION_ORDER
+        },
+    )
 
     for row in rows:
         site_id = row.site_id or UNASSIGNED_SITE_ID
@@ -195,13 +215,19 @@ def _pivot(rows: list[SiteBreakdownRow], sites: SiteCatalog) -> list[SiteStats]:
             entry = stats[UNASSIGNED_SITE_ID]
 
         _accumulate(entry, row)
+        _accumulate(fleet, row)
 
         installation = entry.by_installation_type.get(row.installation_type or "")
         if installation is None:
             installation = entry.by_installation_type[InstallationType.UNCLASSIFIED.value]
         _accumulate(installation, row)
 
-    return list(stats.values())
+        fleet_installation = fleet.by_installation_type.get(row.installation_type or "")
+        if fleet_installation is None:
+            fleet_installation = fleet.by_installation_type[InstallationType.UNCLASSIFIED.value]
+        _accumulate(fleet_installation, row)
+
+    return list(stats.values()), fleet
 
 
 @router.get("/sites", response_model=SiteStatsListResponse)
@@ -220,15 +246,14 @@ async def list_sites(
 
     Returns:
         SiteStatsListResponse: One record per configured site, plus
-            "Unassigned".
+            "Unassigned", plus the fleet-wide summary across all of them.
     """
     cached = await cache.get(_STATS_CACHE_KEY)
     if cached is not None:
         return SiteStatsListResponse.model_validate(cached)
 
-    response = SiteStatsListResponse(
-        items=_pivot(await repo.site_breakdown(), site_catalog(settings.sites))
-    )
+    items, fleet = _pivot(await repo.site_breakdown(), site_catalog(settings.sites))
+    response = SiteStatsListResponse(items=items, fleet=fleet)
     await cache.set(
         _STATS_CACHE_KEY, response.model_dump(mode="json"), ttl_seconds=_STATS_TTL_SECONDS
     )

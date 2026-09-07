@@ -40,15 +40,22 @@ export interface Breakdown {
 export interface SiteStats extends Breakdown {
   site_id: SiteStatsId;
   name: string;
-  /** Always contains every `InstallationType` key, including empty ones.
-   * The fleet-wide UPI/hosted totals are summed from these rather than
-   * served as rows of their own, so they can never disagree with the
-   * per-site cards beside them. */
+  /** Always contains every `InstallationType` key, including empty ones. */
+  by_installation_type: Record<InstallationType, Breakdown>;
+}
+
+/** Every site summed together, sliced further by installation type — the
+ * fleet-wide "Across all sites"/UPI/hosted-cluster cards. Computed
+ * backend-side from the same aggregation `items` is built from, not
+ * summed from `items` here, so it can never disagree with what a second
+ * consumer of this endpoint would compute for itself. */
+export interface FleetSummary extends Breakdown {
   by_installation_type: Record<InstallationType, Breakdown>;
 }
 
 export interface SiteStatsListResponse {
   items: SiteStats[];
+  fleet: FleetSummary;
 }
 
 export function listSites(): Promise<SiteStatsListResponse> {
