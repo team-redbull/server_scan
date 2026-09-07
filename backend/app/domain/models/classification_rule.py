@@ -93,7 +93,6 @@ class RuleFlags(BaseModel):
 class RuleStats(BaseModel):
     """Runtime statistics tracked for a classification rule's matches."""
 
-    match_count: int = 0
     last_matched_at: datetime | None = None
     timeout_count: int = 0
     quarantined: bool = False

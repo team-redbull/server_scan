@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from app.domain.enums import InstallationType, ManagerType, Vendor
 from app.domain.models.classification_rule import ClassificationRule
@@ -36,9 +36,8 @@ class RuleFlagsSchema(BaseModel):
 
 
 class RuleStatsSchema(BaseModel):
-    """A classification rule's accumulated match/timeout/quarantine counters."""
+    """A classification rule's accumulated timeout/quarantine counters."""
 
-    match_count: int
     last_matched_at: datetime | None
     timeout_count: int
     quarantined: bool
@@ -101,7 +100,6 @@ class ClassificationRuleResponse(BaseModel):
             priority=rule.priority,
             order=rule.order,
             stats=RuleStatsSchema(
-                match_count=rule.stats.match_count,
                 last_matched_at=rule.stats.last_matched_at,
                 timeout_count=rule.stats.timeout_count,
                 quarantined=rule.stats.quarantined,
@@ -118,26 +116,3 @@ class ClassificationRuleListResponse(BaseModel):
     """The full list of classification rules."""
 
     items: list[ClassificationRuleResponse]
-
-
-class ClassificationPreviewRequest(BaseModel):
-    """A draft rule to preview matches for, before it has a name or priority.
-
-    Only `field` and `pattern` are required — a draft may be previewed
-    before the author has settled on the rest of a rule's shape.
-    """
-
-    installation_type: InstallationType | None = None
-    scope: RuleScopeSchema = Field(default_factory=RuleScopeSchema)
-    field: str
-    pattern: str
-    flags: RuleFlagsSchema = Field(default_factory=RuleFlagsSchema)
-
-
-class ClassificationPreviewResponse(BaseModel):
-    """How many servers a previewed rule would match, with a sample."""
-
-    matched_count: int
-    truncated: bool
-    sample: list[dict[str, str]]
-    mode: str

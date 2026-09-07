@@ -77,7 +77,6 @@ export function defaultRuleFlags(): RuleFlags {
 }
 
 export interface RuleStats {
-  match_count: number;
   last_matched_at: string | null;
   timeout_count: number;
   quarantined: boolean;
@@ -107,10 +106,5 @@ export interface ClassificationRuleResponse {
 
 export interface ClassificationRuleListResponse {
   items: ClassificationRuleResponse[];
-}
-
-export interface ClassificationPreviewSample {
-  id: string;
-  name: string;
 }
 
