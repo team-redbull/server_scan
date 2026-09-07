@@ -70,16 +70,7 @@ spec:
                   value: {{ .Values.collectors.oneview.pageSize | quote }}
                 - name: INVENTORY_ONEVIEW_VERIFY_TLS
                   value: {{ .Values.collectors.oneview.verifyTls | quote }}
-                - name: INVENTORY_MONGO_URI
-                  valueFrom:
-                    secretKeyRef:
-                      name: {{ .Values.db.secretName }}
-                      key: mongo-uri
-                - name: INVENTORY_REDIS_URI
-                  valueFrom:
-                    secretKeyRef:
-                      name: {{ .Values.db.secretName }}
-                      key: redis-uri
+                {{- include "serverInventory.dbEnv" . | nindent 16 }}
               envFrom:
                 - configMapRef:
                     name: {{ .Release.Name }}-api-config

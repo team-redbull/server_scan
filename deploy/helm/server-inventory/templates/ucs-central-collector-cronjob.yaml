@@ -51,16 +51,7 @@ spec:
                 # the pattern above.
                 - name: INVENTORY_UCS_CENTRAL_DOMAIN_CONCURRENCY
                   value: {{ .Values.collectors.ucsCentral.domainConcurrency | quote }}
-                - name: INVENTORY_MONGO_URI
-                  valueFrom:
-                    secretKeyRef:
-                      name: {{ .Values.db.secretName }}
-                      key: mongo-uri
-                - name: INVENTORY_REDIS_URI
-                  valueFrom:
-                    secretKeyRef:
-                      name: {{ .Values.db.secretName }}
-                      key: redis-uri
+                {{- include "serverInventory.dbEnv" . | nindent 16 }}
               envFrom:
                 - configMapRef:
                     name: {{ .Release.Name }}-api-config

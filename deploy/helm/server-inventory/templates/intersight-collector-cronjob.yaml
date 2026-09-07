@@ -71,16 +71,7 @@ spec:
                   value: {{ .Values.collectors.intersight.readTimeoutSeconds | quote }}
                 - name: INVENTORY_INTERSIGHT_RUN_BUDGET_SECONDS
                   value: {{ .Values.collectors.intersight.runBudgetSeconds | quote }}
-                - name: INVENTORY_MONGO_URI
-                  valueFrom:
-                    secretKeyRef:
-                      name: {{ .Values.db.secretName }}
-                      key: mongo-uri
-                - name: INVENTORY_REDIS_URI
-                  valueFrom:
-                    secretKeyRef:
-                      name: {{ .Values.db.secretName }}
-                      key: redis-uri
+                {{- include "serverInventory.dbEnv" . | nindent 16 }}
               envFrom:
                 - configMapRef:
                     name: {{ .Release.Name }}-api-config

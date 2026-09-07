@@ -30,23 +30,7 @@ spec:
           env:
             - name: INVENTORY_ENVIRONMENT
               value: production
-            - name: INVENTORY_MONGO_URI
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.db.secretName }}
-                  key: mongo-uri
-            - name: INVENTORY_REDIS_URI
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.db.secretName }}
-                  key: redis-uri
-            {{- if or .Values.backend.cursorSecret .Values.backend.existingCursorSecret }}
-            - name: INVENTORY_CURSOR_SECRET
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.backend.existingCursorSecret | default (printf "%s-cursor-secret" .Release.Name) }}
-                  key: cursor-secret
-            {{- end }}
+            {{- include "serverInventory.dbEnv" . | nindent 12 }}
           envFrom:
             - configMapRef:
                 name: {{ .Release.Name }}-api-config

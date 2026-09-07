@@ -63,16 +63,7 @@ spec:
                   value: {{ .Values.collectors.ome.bmcVerifyTls | quote }}
                 - name: INVENTORY_OME_BMC_PORT
                   value: {{ .Values.collectors.ome.bmcPort | quote }}
-                - name: INVENTORY_MONGO_URI
-                  valueFrom:
-                    secretKeyRef:
-                      name: {{ .Values.db.secretName }}
-                      key: mongo-uri
-                - name: INVENTORY_REDIS_URI
-                  valueFrom:
-                    secretKeyRef:
-                      name: {{ .Values.db.secretName }}
-                      key: redis-uri
+                {{- include "serverInventory.dbEnv" . | nindent 16 }}
               envFrom:
                 - configMapRef:
                     name: {{ .Release.Name }}-api-config
