@@ -36,6 +36,11 @@ const SEVERITIES: Record<HealthSeverity, SeverityStyle> = {
     glyph: SEVERITY_GLYPH.CRITICAL,
     className: "bg-[var(--tint-critical)] text-[var(--text-on-critical)]",
   },
+  MAJOR: {
+    label: "Major",
+    glyph: SEVERITY_GLYPH.MAJOR,
+    className: "bg-[var(--tint-major)] text-[var(--text-on-major)]",
+  },
   WARNING: {
     label: "Warning",
     glyph: SEVERITY_GLYPH.WARNING,

@@ -40,6 +40,7 @@ import type { ServerSummary } from "@/types/server";
  * to zero. */
 const ROW_ACCENT: Record<HealthSeverity, string> = {
   CRITICAL: "border-l-2 border-l-[var(--color-status-critical)]",
+  MAJOR: "border-l-2 border-l-[var(--text-on-major)]",
   WARNING: "border-l-2 border-l-[var(--color-status-warning)]",
   INFO: "border-l-2 border-l-transparent",
   HEALTHY: "border-l-2 border-l-transparent",

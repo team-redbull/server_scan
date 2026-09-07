@@ -97,6 +97,19 @@ def _fully_read(**overrides: Any) -> ProviderServer:
                 "health_detail": "inoperable",
             },
         ),
+        # Redfish is the only provider that reports DIMM health, and this
+        # fixture is a Dell reached over Redfish — so "fully read" has to
+        # include it, or every assertion here flags it as unread.
+        "memory_modules": (
+            {
+                "slot": "DIMM.Socket.A1",
+                "size_bytes": 64 * 1024**3,
+                "type": "DDR5",
+                "speed_mhz": 4800,
+                "serial": "DIMM-1",
+                "health": HealthSeverity.HEALTHY.value,
+            },
+        ),
     }
     base.update(overrides)
     return ProviderServer(**base)

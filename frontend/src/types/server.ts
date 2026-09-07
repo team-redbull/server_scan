@@ -36,7 +36,7 @@ export type Vendor = "dell" | "cisco" | "hp" | "standalone";
 export type SiteCode = string;
 
 export type HealthSeverity =
-  "UNKNOWN" | "HEALTHY" | "INFO" | "WARNING" | "CRITICAL";
+  "UNKNOWN" | "HEALTHY" | "INFO" | "WARNING" | "MAJOR" | "CRITICAL";
 
 /** Link/operational state as reported for a physical/logical network link. */
 export type LinkState = "UP" | "DOWN" | "UNKNOWN" | "DISABLED";

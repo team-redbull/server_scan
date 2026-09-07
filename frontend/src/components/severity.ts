@@ -22,6 +22,10 @@ import type { HealthSeverity } from "@/types/server";
  */
 export const SEVERITY_GLYPH: Record<HealthSeverity, string> = {
   CRITICAL: "◆", // filled diamond
+  // Distinct from both neighbours in shape, not just colour: MAJOR sits
+  // between WARNING and CRITICAL, and the two most severe tiers are the
+  // ones that must never be confused in greyscale.
+  MAJOR: "⬟", // filled pentagon
   WARNING: "▲", // filled triangle
   INFO: "■", // filled square
   HEALTHY: "●", // filled circle

@@ -30,5 +30,5 @@ mongo_ping_failures_total = Counter(
 cache_operations_total = Counter(
     "cache_operations_total",
     "Cache operations by outcome",
-    labelnames=("operation", "outcome"),  # outcome: hit|miss|error
+    labelnames=("operation", "outcome"),
 )

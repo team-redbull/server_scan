@@ -16,6 +16,7 @@ const HEALTH_SEVERITIES = [
   "HEALTHY",
   "INFO",
   "WARNING",
+  "MAJOR",
   "CRITICAL",
 ] as const;
 // One class string for every filter control so the bar reads as a single

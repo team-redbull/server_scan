@@ -37,7 +37,7 @@ class MetricDef:
 
     name: str
     type: MetricType
-    category: str  # cpu | memory | storage | network | connectivity | power
+    category: str  # cpu | memory | storage | network | connectivity | power | gpu
     description: str
     resolver: Callable[[dict[str, Any]], Any]
     enum_values: tuple[str, ...] | None = None
@@ -217,6 +217,141 @@ def build_default_registry() -> MetricRegistry:
             category="power",
             description="Count of PSUs with health == DOWN",
             resolver=lambda f: _get(f, "power.failed_psu_count", 0),
+        )
+    )
+    registry.register(
+        MetricDef(
+            name="storage.warning_drive_count",
+            type=MetricType.INT,
+            category="storage",
+            description="Count of drives with health == WARNING",
+            resolver=lambda f: _get(f, "storage.warning_drive_count", 0),
+        )
+    )
+    registry.register(
+        MetricDef(
+            name="storage.total_bytes",
+            type=MetricType.INT,
+            category="storage",
+            description="Total storage capacity across all drives, in bytes",
+            resolver=lambda f: _get(f, "storage.total_bytes", 0),
+        )
+    )
+    registry.register(
+        MetricDef(
+            name="storage.os_disk_count",
+            type=MetricType.INT,
+            category="storage",
+            description="Drives identified as OS disks (the smallest capacity present)",
+            resolver=lambda f: _get(f, "storage.os_disk_count", 0),
+        )
+    )
+    registry.register(
+        MetricDef(
+            name="storage.os_bad_disk_count",
+            type=MetricType.INT,
+            category="storage",
+            description="OS disks reporting WARNING or CRITICAL health",
+            resolver=lambda f: _get(f, "storage.os_bad_disk_count", 0),
+        )
+    )
+    registry.register(
+        MetricDef(
+            name="storage.data_disk_count",
+            type=MetricType.INT,
+            category="storage",
+            description="Drives that are not OS disks",
+            resolver=lambda f: _get(f, "storage.data_disk_count", 0),
+        )
+    )
+    registry.register(
+        MetricDef(
+            name="storage.data_bad_disk_count",
+            type=MetricType.INT,
+            category="storage",
+            description="Non-OS drives reporting WARNING or CRITICAL health",
+            resolver=lambda f: _get(f, "storage.data_bad_disk_count", 0),
+        )
+    )
+    registry.register(
+        MetricDef(
+            name="server.name_has_10tb",
+            type=MetricType.BOOL,
+            category="storage",
+            description="Whether the server's name carries the 10TB token",
+            resolver=lambda f: _get(f, "server.name_has_10tb", False),
+        )
+    )
+    registry.register(
+        MetricDef(
+            name="server.name_has_5tb",
+            type=MetricType.BOOL,
+            category="storage",
+            description="Whether the server's name carries the 5TB token",
+            resolver=lambda f: _get(f, "server.name_has_5tb", False),
+        )
+    )
+    registry.register(
+        MetricDef(
+            name="memory.dimm_count",
+            type=MetricType.INT,
+            category="memory",
+            description="Number of fitted DIMMs reported",
+            resolver=lambda f: _get(f, "memory.dimm_count", 0),
+        )
+    )
+    registry.register(
+        MetricDef(
+            name="memory.degraded_dimm_count",
+            type=MetricType.INT,
+            category="memory",
+            description="DIMMs reporting WARNING or CRITICAL health",
+            resolver=lambda f: _get(f, "memory.degraded_dimm_count", 0),
+        )
+    )
+    registry.register(
+        MetricDef(
+            name="network.interface_count",
+            type=MetricType.INT,
+            category="network",
+            description="Number of network interfaces reported",
+            resolver=lambda f: _get(f, "network.interface_count", 0),
+        )
+    )
+    registry.register(
+        MetricDef(
+            name="network.links_up_count",
+            type=MetricType.INT,
+            category="network",
+            description="Count of interfaces with link_state == UP",
+            resolver=lambda f: _get(f, "network.links_up_count", 0),
+        )
+    )
+    registry.register(
+        MetricDef(
+            name="gpu.count",
+            type=MetricType.INT,
+            category="gpu",
+            description="Number of GPUs reported",
+            resolver=lambda f: _get(f, "gpu.count", 0),
+        )
+    )
+    registry.register(
+        MetricDef(
+            name="gpu.failed_count",
+            type=MetricType.INT,
+            category="gpu",
+            description="Count of GPUs reporting CRITICAL or DOWN health",
+            resolver=lambda f: _get(f, "gpu.failed_count", 0),
+        )
+    )
+    registry.register(
+        MetricDef(
+            name="gpu.uncorrectable_error_count",
+            type=MetricType.INT,
+            category="gpu",
+            description="Uncorrectable ECC errors summed across the server's GPUs",
+            resolver=lambda f: _get(f, "gpu.uncorrectable_error_count", 0),
         )
     )
     return registry

@@ -54,6 +54,10 @@
   --tint-healthy: oklch(0.95 0.04 152);
   --tint-info: oklch(0.95 0.04 245);
   --tint-warning: oklch(0.95 0.05 78);
+  /* Hue 45: orange, sitting between warning's amber (78) and critical's
+     red (25), so the three most severe tiers read as one escalating ramp
+     rather than three unrelated colours. */
+  --tint-major: oklch(0.95 0.05 45);
   --tint-critical: oklch(0.95 0.04 25);
   --tint-maintenance: oklch(0.95 0.04 300);
   --tint-unknown: oklch(0.95 0.004 260);
@@ -61,6 +65,7 @@
   --text-on-healthy: oklch(0.42 0.11 152);
   --text-on-info: oklch(0.42 0.13 245);
   --text-on-warning: oklch(0.42 0.1 78);
+  --text-on-major: oklch(0.44 0.14 45);
   --text-on-critical: oklch(0.45 0.17 25);
   --text-on-maintenance: oklch(0.42 0.12 300);
   --text-on-unknown: oklch(0.42 0.008 260);
@@ -92,6 +97,7 @@
     --tint-healthy: oklch(0.3 0.06 152);
     --tint-info: oklch(0.3 0.06 245);
     --tint-warning: oklch(0.32 0.07 78);
+    --tint-major: oklch(0.32 0.08 45);
     --tint-critical: oklch(0.32 0.09 25);
     --tint-maintenance: oklch(0.3 0.06 300);
     --tint-unknown: oklch(0.28 0.006 260);
@@ -99,6 +105,7 @@
     --text-on-healthy: oklch(0.85 0.13 152);
     --text-on-info: oklch(0.85 0.11 245);
     --text-on-warning: oklch(0.87 0.13 78);
+    --text-on-major: oklch(0.86 0.13 45);
     --text-on-critical: oklch(0.84 0.13 25);
     --text-on-maintenance: oklch(0.85 0.11 300);
     --text-on-unknown: oklch(0.8 0.006 260);

@@ -180,6 +180,7 @@ function CountLink({ to, className, children }: { to: string; className: string;
 function SiteCard({ card, emphasis }: { card: CardSpec; emphasis?: boolean }) {
   const { stats } = card;
   const critical = stats.by_health.CRITICAL;
+  const major = stats.by_health.MAJOR;
   const warning = stats.by_health.WARNING;
   const unknown = stats.by_health.UNKNOWN;
   const info = stats.by_health.INFO;
@@ -214,6 +215,15 @@ function SiteCard({ card, emphasis }: { card: CardSpec; emphasis?: boolean }) {
           >
             <span aria-hidden="true">{SEVERITY_GLYPH.CRITICAL}</span>
             <span className="tabular">{critical}</span> critical
+          </CountLink>
+        )}
+        {major > 0 && (
+          <CountLink
+            to={withHealthFilter(card.to, "MAJOR")}
+            className="inline-flex cursor-pointer items-center gap-1.5 font-medium text-[var(--text-on-major)] underline-offset-2 hover:underline"
+          >
+            <span aria-hidden="true">{SEVERITY_GLYPH.MAJOR}</span>
+            <span className="tabular">{major}</span> major
           </CountLink>
         )}
         {warning > 0 && (

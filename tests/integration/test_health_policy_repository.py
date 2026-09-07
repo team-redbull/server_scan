@@ -146,13 +146,12 @@ async def test_default_system_policies_round_trip(mongo_holder: MongoClientHolde
         await repo.upsert(policy)
 
     policies = await repo.list_all(enabled_only=True)
-    assert len(policies) == 3
-    keys = {p.policy_key for p in policies}
-    assert keys == {
-        "connectivity.fabric_paths_down_warning",
-        "connectivity.fabric_paths_down_critical",
-        "storage.failed_drive",
-    }
+    # Against the seeded set itself, not a copy of it: this test is about the
+    # round trip through Mongo, and a hardcoded list turns every new default
+    # policy into a failure here rather than in the tests that own them.
+    expected = default_system_policies()
+    assert len(policies) == len(expected)
+    assert {p.policy_key for p in policies} == {p.policy_key for p in expected}
     assert all(p.system for p in policies)
     assert all(p.source == "SYSTEM_DEFAULT" for p in policies)
 

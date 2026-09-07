@@ -4,7 +4,14 @@ import { describe, expect, it } from "vitest";
 import { StateBadge } from "@/components/StateBadge";
 import type { HealthSeverity } from "@/types/server";
 
-const SEVERITIES: HealthSeverity[] = ["HEALTHY", "INFO", "WARNING", "CRITICAL", "UNKNOWN"];
+const SEVERITIES: HealthSeverity[] = [
+  "HEALTHY",
+  "INFO",
+  "WARNING",
+  "MAJOR",
+  "CRITICAL",
+  "UNKNOWN",
+];
 
 const NOT_IN_MAINTENANCE = { enabled: false, reason: null };
 
