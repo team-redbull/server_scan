@@ -470,17 +470,24 @@ for the full write-up and the two open questions it could not settle
    MongoDB's `last_seen_at` (written on every ingest, currently read by
    nothing). Until that lands, staleness is the manual query in
    `docs/test-redfish-standalone-collector.md` §6.
-1. **Live-hardware validation of the remaining unproven collector.**
-   Every vendor collector is now *written* — Dell (ADR-0020) and HPE
-   (ADR-0022) both shipped, so "build the next vendor collector" is no
-   longer on this list. `ONEVIEW` was validated against a live appliance
-   on 2026-09-07 (see ADR-0022's "Results, 2026-09-07"), and the run
-   found a real storage-mapping bug (fixed the same day) that would have
-   stayed invisible without it — the same shape of finding UCS's own
-   emulator run produced five of. **`INTERSIGHT` is the one collector
-   left with no live-hardware proof.** `uv run python -m
-   tools.verify_intersight` is the command; `docs/field-test-checklist.md`
-   part 1 says what to send back. Record what it settles in ADR-0017.
+1. **Live-hardware validation — `OPENMANAGE` is now the one collector
+   with no pass of its own.** Every other one has had a real run:
+   `UCS_MANAGER`/`UCS_CENTRAL` against UCSPE and, as of 2026-09-07, a
+   real air-gapped domain too (ADR-0009's dated "Update" sections);
+   `ONEVIEW` against a live appliance (ADR-0022's "Results,
+   2026-09-07" — a real storage-mapping bug found and fixed the same
+   day); `INTERSIGHT` against the user's on-prem Private Virtual
+   Appliance, also 2026-09-07 (ADR-0017's "second field pass" — five
+   real defects found and fixed, from a `ComputeBoard` join gap to
+   `"OK"` reading UNKNOWN across PSU/GPU/drive health). `OPENMANAGE`
+   reuses the Redfish mapping for hardware, so it inherits
+   `REDFISH_STANDALONE`'s own validation for that half, but nothing has
+   run `--manager-type OPENMANAGE --dry-run` against a real OME
+   appliance plus iDRAC — that's the one gap left here. Narrower open
+   items on the already-validated collectors: Intersight's DOWN/CRITICAL
+   `OperState`/`Health` vocabulary (needs a genuinely failed component
+   to check against, not a rerun) and UCS's fully-*associated* service
+   profile (nothing tested has gone past `config-failure`).
 
    **The research bar for any future vendor work is unchanged**, so it
    is kept here rather than deleted with the item it belonged to:
