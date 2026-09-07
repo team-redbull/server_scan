@@ -38,14 +38,24 @@ registry.access.redhat.com/ubi9/ubi-minimal:9.8       # backend runtime (Contain
 registry.access.redhat.com/ubi9/nodejs-22:latest      # frontend build stage — discarded, not shipped (frontend/Containerfile)
 registry.access.redhat.com/ubi9/nginx-124:latest      # frontend runtime (frontend/Containerfile)
 
-# --- 3. Platform-provisioned dependencies (required to run, but not
-#         chosen or shipped by this repo — see deploy/README.md) ---
+# --- 3. Platform-provisioned dependencies (required to run) ---
 # MongoDB is the system of record; Redis is an optional cache-aside layer
-# every read path degrades past on any failure. Neither is created by the
-# Helm chart (deploy/helm/server-inventory) — it only consumes a
-# pre-existing Secret naming their URIs. Pick your own production-grade
-# images/versions and HA/backup strategy; the versions below are only
-# what this repo's own local-dev stack (scripts/dev-up.sh) uses, offered
-# as a known-compatible starting point, not a production recommendation.
+# every read path degrades past on any failure. The Helm chart defaults to
+# consuming a pre-existing Secret naming their URIs rather than creating
+# either — pick your own production-grade images/versions and HA/backup
+# strategy. The versions below are only what this repo's own local-dev
+# stack (scripts/dev-up.sh) uses, offered as a known-compatible starting
+# point, not a production recommendation.
 docker.io/library/mongo:8              # local dev only — see deploy/README.md for why production Mongo is out of this chart's scope
 docker.io/library/redis:8-alpine       # local dev only — same
+
+# Only if you set `mongodb.enabled` / `redis.enabled` and let the chart
+# bundle them (Bitnami subcharts, vendored under
+# deploy/helm/server-inventory/charts/). Bitnami's charts default the tag
+# to `latest`, which is a development build since Bitnami's August 2025
+# catalog change and is not mirrorable as a version — pin one explicitly
+# (values.yaml shows how) BEFORE syncing, or the mirror holds a moving
+# target. Version tags for the free catalog live under `bitnamilegacy/*`,
+# frozen at August 2025.
+docker.io/bitnamilegacy/mongodb:<pin a tag>   # only with mongodb.enabled
+docker.io/bitnamilegacy/redis:<pin a tag>     # only with redis.enabled

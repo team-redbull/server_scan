@@ -19,8 +19,20 @@ pre-rendered copy either.
 
 ## Scope
 
-These manifests deploy the **API and collectors only**. They deliberately
-do **not** stand up MongoDB or Redis in the cluster:
+The chart deploys the API, the collectors and — since 0.2.0 — optionally
+the frontend, MongoDB and Redis. Which of those it stands up is four
+independent switches, so a deployment picks its own shape:
+
+| Value | Default | What it adds |
+|---|---|---|
+| *(always)* | — | API Deployment/Service/Route/ConfigMap |
+| `frontend.enabled` | `false` | The React SPA (Deployment/Service/Route) |
+| `mongodb.enabled` | `false` | A bundled MongoDB (Bitnami subchart) |
+| `redis.enabled` | `false` | A bundled Redis (Bitnami subchart) |
+| `collectors.<vendor>.enabled` | `false` | That vendor's CronJob |
+
+**Both databases stay off by default**, because the original reasoning
+still holds for a real production estate:
 
 - MongoDB is the system of record and, in a real air-gapped production
   estate, is expected to already exist as an operated service (with its
@@ -31,10 +43,63 @@ do **not** stand up MongoDB or Redis in the cluster:
   cache miss or a Redis outage (`app.infrastructure.redis`), so Redis is
   never a hard dependency for this platform to run.
 
-Both connection strings arrive via a `Secret` (`server-inventory-db`, keys
+What bundling exists for is the case that reasoning does not cover: a lab,
+a demo or a small site with no operated MongoDB/Redis to point at. Turning
+`mongodb.enabled` on means this chart owns the lifecycle of the platform's
+only durable state, backups included — a deliberate trade, not a default.
+
+Each database is resolved on its own, so all four combinations render:
+
+```bash
+# Neither — the default. Both URIs come from db.secretName.
+helm template server-inventory deploy/helm/server-inventory
+
+# Both, plus the UI: a self-contained deployment.
+helm install si deploy/helm/server-inventory \
+  --set mongodb.enabled=true --set mongodb.auth.rootPassword=... \
+  --set 'mongodb.auth.passwords[0]=...' \
+  --set redis.enabled=true --set redis.auth.password=... \
+  --set frontend.enabled=true --set route.host=scan.apps.example.com \
+  --set backend.cursorSecret=...
+
+# Redis only, against an operated MongoDB.
+helm install si deploy/helm/server-inventory \
+  --set redis.enabled=true --set redis.auth.password=...
+```
+
+For whichever database is **not** bundled, the connection string arrives
+via a `Secret` (`db.secretName`, default `server-inventory-db`, keys
 `mongo-uri` / `redis-uri`) that this chart consumes but does not create —
 provisioning it is a platform/GitOps concern, consistent with the "no
-credentials in source, credentials via secret refs" requirement.
+credentials in source, credentials via secret refs" requirement. A
+bundled one is rendered into the chart's own `<release>-bundled-db` Secret
+instead, and the two names are deliberately different so bundling one
+database never collides with a `server-inventory-db` an operator owns.
+
+**Set the bundled passwords explicitly.** Left blank, the Bitnami subchart
+generates one — and `helm template`, which is how Argo CD renders this
+chart, has no `lookup`, so a generated password is re-minted on every sync
+while the database keeps the first one.
+
+Air-gapped installs need the subcharts vendored: `helm dependency update
+deploy/helm/server-inventory` on a connected machine, then commit the
+resulting `charts/*.tgz`. Note that Bitnami's charts default their image
+to `:latest`; `values.yaml` says how to pin one.
+
+## The frontend
+
+`frontend.enabled` deploys the SPA image CI already publishes. The SPA
+calls the API same-origin — `frontend/src/api/client.ts` sets no base URL
+and its nginx proxies nothing — so the two Services share one host and are
+split by path: the frontend takes `/`, and the API gets one Route per
+entry in `route.apiPaths` (`/api`, `/health`, `/metrics`, `/docs`,
+`/openapi.json`). OpenShift routes by longest prefix, so nothing has to
+know about anything else.
+
+That makes `route.host` **mandatory** once the frontend is on: an
+OpenShift-generated host is derived per Route, so two Services would land
+on two hostnames and every API call from the SPA would 404. The chart
+fails to render rather than deploying that.
 
 ## Container security
 
@@ -119,10 +184,9 @@ Key ID and `password` the secret key.
 
 ## Current state
 
-The backend API has full manifests (Deployment, Service, Route,
-ConfigMap). **The frontend does not yet have equivalent Kubernetes
-manifests** — its `Containerfile` (UBI9 + nginx, static Vite build) has
-existed since slice 1, but nothing here deploys it; a real, open gap.
+The backend API and the frontend both have full manifests
+(Deployment/Service/Route, plus the API's ConfigMap). The frontend gap
+this section used to record is closed as of chart 0.2.0.
 
 CI does now build and publish both images to GHCR on every push to main
 (`docs/adr/0010-image-publishing-and-versioning.md`), but nothing

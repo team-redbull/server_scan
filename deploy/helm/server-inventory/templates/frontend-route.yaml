@@ -1,0 +1,22 @@
+{{- /* The SPA at `/` on the shared host; the API's own paths are carved
+       out of it by backend-route.yaml. */ -}}
+{{- if and .Values.frontend.enabled .Values.route.enabled }}
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: {{ .Release.Name }}-frontend
+  labels:
+    app.kubernetes.io/name: {{ .Release.Name }}-frontend
+    app.kubernetes.io/component: frontend
+    app.kubernetes.io/part-of: server-inventory
+spec:
+  host: {{ required "route.host must be set when frontend.enabled — see backend-route.yaml." .Values.route.host }}
+  to:
+    kind: Service
+    name: {{ .Release.Name }}-frontend
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+{{- end }}

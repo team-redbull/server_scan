@@ -28,11 +28,129 @@ backend:
   cursorSecret: ""
   existingCursorSecret: ""
 
-# Name of a pre-existing Secret with keys `mongo-uri` and `redis-uri`.
-# This chart does not create it — see deploy/README.md for why MongoDB
-# and Redis are treated as externally provisioned platform services.
+# The React admin UI (the `server_scan-frontend` image CI publishes
+# alongside the API). Off by default so an existing install is unchanged;
+# turning it on requires `route.host`, because the SPA and the API then
+# share one host and are split by path — see route.apiPaths below.
+frontend:
+  enabled: false
+  image:
+    repository: ghcr.io/team-redbull/server_scan-frontend
+    tag: latest
+    pullPolicy: IfNotPresent
+  replicaCount: 2
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      memory: 128Mi
+
+# Where the connection strings come from when a database is NOT bundled
+# below: a pre-existing Secret with keys `mongo-uri` and `redis-uri`, which
+# this chart consumes but does not create. See deploy/README.md for why
+# externally provisioned is the default.
+#
+# Each database is resolved independently, so bundling one and pointing at
+# an operated instance for the other is a supported combination — only the
+# key for the non-bundled half is read from here.
 db:
   secretName: server-inventory-db
+
+# --- Bundled databases (both OFF by default) -------------------------------
+#
+# For an estate with no operated MongoDB/Redis of its own. Each is a Bitnami
+# subchart gated by its own `enabled`, so all four combinations render:
+# neither, MongoDB only, Redis only, both. Everything under `mongodb:` and
+# `redis:` other than `enabled` is that subchart's own values — see its docs
+# for anything not set here.
+#
+# Air-gapped installs need the dependencies vendored: run
+# `helm dependency update deploy/helm/server-inventory` on a connected
+# machine and commit the resulting charts/*.tgz.
+mongodb:
+  # MongoDB is the system of record. Bundling it means this chart owns the
+  # lifecycle of the platform's only durable state — backup, replication and
+  # upgrades included. Fine for a demo, a lab or a small site; a production
+  # estate should still point `db.secretName` at an operated service.
+  enabled: false
+
+  # Bitnami's chart defaults its image to `bitnami/mongodb:latest`, which is
+  # not a version and, since Bitnami's August 2025 catalog change, is a
+  # development build. Version tags for the free catalog live under
+  # `bitnamilegacy/*`, frozen at August 2025. Pin one explicitly for
+  # anything that has to be reproducible or mirrored into an air-gapped
+  # registry — the chart version above pins the templates, not the image.
+  # image:
+  #   repository: bitnamilegacy/mongodb
+  #   tag: 8.0.12-debian-12-r0
+
+  # Fixed, because the connection string is built from it
+  # (templates/bundled-db-secret.yaml).
+  fullnameOverride: server-inventory-mongodb
+  architecture: standalone
+
+  # Strips runAsUser/fsGroup so the pod runs under the UID OpenShift's
+  # restricted-v2 SCC assigns it.
+  global:
+    compatibility:
+      openshift:
+        adaptSecurityContext: auto
+
+  auth:
+    enabled: true
+    rootUser: root
+    # SET THESE. A blank password makes the subchart generate one, and
+    # `helm template` — how Argo CD renders this chart — has no `lookup`, so
+    # a generated password is re-minted on every sync and every pod ends up
+    # holding a credential the database no longer has. Keep them
+    # alphanumeric: they go into a URI unescaped.
+    rootPassword: ""
+    usernames: ["server_inventory"]
+    passwords: [""]
+    # Must match INVENTORY_MONGO_DB, whose default is `server_inventory`.
+    databases: ["server_inventory"]
+
+  persistence:
+    enabled: true
+    size: 20Gi
+    # Empty uses the cluster's default StorageClass.
+    storageClass: ""
+
+  resources:
+    requests: { cpu: 250m, memory: 512Mi }
+    limits: { memory: 2Gi }
+
+redis:
+  # Cache-aside only — every read path degrades to MongoDB on a miss or an
+  # outage (`app.infrastructure.redis`), so this is a latency choice, never a
+  # correctness one, and persistence is off for the same reason.
+  enabled: false
+
+  # Same `:latest` trap as MongoDB above — see there.
+  # image:
+  #   repository: bitnamilegacy/redis
+  #   tag: 8.0.3-debian-12-r0
+
+  fullnameOverride: server-inventory-redis
+  architecture: standalone
+
+  global:
+    compatibility:
+      openshift:
+        adaptSecurityContext: auto
+
+  auth:
+    enabled: true
+    # SET THIS, for the same generated-password reason as MongoDB above.
+    password: ""
+
+  master:
+    persistence:
+      enabled: false
+    resources:
+      requests: { cpu: 50m, memory: 128Mi }
+      limits: { memory: 512Mi }
 
 config:
   # The sites this deployment has, as `code:Display Name` pairs. The code
@@ -86,7 +204,23 @@ config:
 
 route:
   enabled: true
-  host: "" # empty lets OpenShift generate one from the Service name
+  # Empty lets OpenShift generate one from the Service name. REQUIRED once
+  # `frontend.enabled` is set: the SPA calls the API same-origin, so the two
+  # Services must share a host, and a generated host differs per Route.
+  host: ""
+
+  # Only read when `frontend.enabled`. The top-level paths the API owns; the
+  # SPA takes everything else at `/`. OpenShift routes by longest prefix, so
+  # order here is irrelevant. `/api`, `/health` and `/metrics` are what the
+  # UI itself calls (frontend/vite.config.ts proxies exactly these in dev);
+  # `/docs` and `/openapi.json` are the OpenAPI page, and dropping them from
+  # this list is a supported way to keep it off the Route.
+  apiPaths:
+    - /api
+    - /health
+    - /metrics
+    - /docs
+    - /openapi.json
 
 # Real vendor collectors, run as CronJobs against the same image as the
 # API (tools/run_collector.py --manager-type <type>).

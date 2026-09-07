@@ -1,0 +1,17 @@
+{{- if .Values.frontend.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-frontend
+  labels:
+    app.kubernetes.io/name: {{ .Release.Name }}-frontend
+    app.kubernetes.io/component: frontend
+    app.kubernetes.io/part-of: server-inventory
+spec:
+  selector:
+    app.kubernetes.io/name: {{ .Release.Name }}-frontend
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+{{- end }}

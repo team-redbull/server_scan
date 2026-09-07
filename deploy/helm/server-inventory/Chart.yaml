@@ -2,5 +2,24 @@ apiVersion: v2
 name: server-inventory
 description: Air-gapped bare-metal server inventory platform
 type: application
-version: 0.1.0
+version: 0.2.0
 appVersion: "0.1.0"
+
+# MongoDB and Redis are OPTIONAL and off by default: the platform's own
+# stance is that both are externally provisioned (deploy/README.md's
+# "Scope"). Turn either on for an estate with no operated MongoDB/Redis
+# of its own — `condition` is what makes each independently selectable,
+# so all four combinations render.
+#
+# Air-gapped: run `helm dependency update` on a connected machine and
+# commit the resulting charts/*.tgz, the same way gitops/charts/temporal
+# vendors its postgresql tarball.
+dependencies:
+  - name: mongodb
+    version: 19.1.16
+    repository: oci://registry-1.docker.io/bitnamicharts
+    condition: mongodb.enabled
+  - name: redis
+    version: 28.0.15
+    repository: oci://registry-1.docker.io/bitnamicharts
+    condition: redis.enabled

@@ -1,22 +1,44 @@
+{{- /*
+The API's Route(s).
+
+With no frontend deployed this is one Route at `/`, as it always was.
+With `frontend.enabled` the SPA takes `/` on the same host — it calls the
+API same-origin (`frontend/src/api/client.ts` sets no base URL) — so the
+API instead gets one Route per top-level path it owns. OpenShift routes
+by longest path prefix, so `/api` wins over the frontend's `/` without
+either knowing about the other.
+
+An OpenShift-generated host is per Route, so splitting one host across two
+Services requires naming it; `route.host` is mandatory in that case.
+*/ -}}
 {{- if .Values.route.enabled }}
+{{- $paths := .Values.frontend.enabled | ternary .Values.route.apiPaths (list "") }}
+{{- range $path := $paths }}
+---
 apiVersion: route.openshift.io/v1
 kind: Route
 metadata:
-  name: {{ .Release.Name }}-api
+  name: {{ printf "%s-api%s" $.Release.Name (empty $path | ternary "" (printf "-%s" (trimPrefix "/" $path | replace "/" "-" | replace "." "-"))) }}
   labels:
-    app.kubernetes.io/name: {{ .Release.Name }}-api
+    app.kubernetes.io/name: {{ $.Release.Name }}-api
     app.kubernetes.io/component: backend
     app.kubernetes.io/part-of: server-inventory
 spec:
-  {{- if .Values.route.host }}
-  host: {{ .Values.route.host }}
+  {{- if $.Values.route.host }}
+  host: {{ $.Values.route.host }}
+  {{- else if $.Values.frontend.enabled }}
+  {{- required "route.host must be set when frontend.enabled: the SPA and the API share one host, and an OpenShift-generated host differs per Route." "" }}
+  {{- end }}
+  {{- if $path }}
+  path: {{ $path }}
   {{- end }}
   to:
     kind: Service
-    name: {{ .Release.Name }}-api
+    name: {{ $.Release.Name }}-api
   port:
     targetPort: http
   tls:
     termination: edge
     insecureEdgeTerminationPolicy: Redirect
+{{- end }}
 {{- end }}
