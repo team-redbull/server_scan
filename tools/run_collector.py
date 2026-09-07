@@ -938,6 +938,7 @@ async def _dry_run_one_manager(
                         # See docs/cisco-collectors.md, "PHYSICAL versus VNIC".
                         print(
                             f"        [{a.interface_kind:8}] fabric {a.fabric}"
+                            f"  ({a.fabric_name or '—'})"
                             f"  if={a.server_interface}"
                             f"  admin={a.admin_state} oper={a.oper_state}"
                             f"  peer={a.fabric_port or '—'}"
@@ -974,6 +975,7 @@ async def _dry_run_one_manager(
                         f"        disk {drive.get('id')}  {drive.get('model') or '—'}"
                         f"  serial={drive.get('serial') or '—'}"
                         f"  {drive.get('media_type')}  {size}  health={drive.get('health')}"
+                        f" ({drive.get('health_detail') or '—'})"
                     )
                 for gpu in ps.gpus or ():
                     gpu = gpus_catalog.enrich(gpu)
@@ -994,7 +996,7 @@ async def _dry_run_one_manager(
                         f"{gpu.get('uncorrectable_error_count')}u"
                         f"  temp={f'{temp:.0f}°C' if isinstance(temp, (int, float)) else '—'}"
                         f"  power={f'{power:.0f}W' if isinstance(power, (int, float)) else '—'}"
-                        f"  health={gpu.get('health')}"
+                        f"  health={gpu.get('health')} ({gpu.get('health_detail') or '—'})"
                     )
                 for psu in ps.psus or ():
                     capacity = psu.get("capacity_watts")
@@ -1010,7 +1012,7 @@ async def _dry_run_one_manager(
                         f"        psu {psu.get('id')}  {psu.get('model') or '—'}"
                         f"  serial={psu.get('serial') or '—'}"
                         f"  {f'{capacity}W' if isinstance(capacity, int) else 'wattage unknown'}"
-                        f"  health={psu.get('health')}"
+                        f"  health={psu.get('health')} ({psu.get('health_detail') or '—'})"
                         # UCS Manager only: the equipmentPsu MO's separate `power`
                         # field, collected alongside oper_state so a live run can
                         # show which one tracks a real PSU failure more reliably

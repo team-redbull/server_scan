@@ -517,6 +517,7 @@ class TestDryRun:
                             "temperature_celsius": 58.0,
                             "power_watts": 350.0,
                             "health": "HEALTHY",
+                            "health_detail": "OK",
                             "pci_address": None,
                             "firmware_version": "96.00.5E.00.02",
                         },
@@ -538,6 +539,46 @@ class TestDryRun:
         assert "errors=2c/0u" in out
         assert "temp=58°C" in out
         assert "power=350W" in out
+        assert "health=HEALTHY (OK)" in out
+
+    async def test_dry_run_shows_drive_health_detail(self, capsys: Any) -> None:
+        """`health_detail` — the raw vendor state `health` was reduced
+        from — added 2026-09-07, alongside the same field for PSUs/GPUs.
+        """
+
+        class FakeProvider(ServerInventoryProvider):
+            provider_type = "UCS_CENTRAL"
+
+            async def health_check(self) -> None:
+                return None
+
+            async def _list_servers(self) -> Any:
+                yield ProviderServer(
+                    external_id="sys/rack-unit-3",
+                    vendor="cisco",
+                    name="rack-3",
+                    storage_drives=(
+                        {
+                            "id": "sys/rack-unit-3/board/storage-SAS-1/disk-1",
+                            "model": "UCS-HD12TB10K12G",
+                            "serial": "S3X0ABCD",
+                            "media_type": "HDD",
+                            "capacity_bytes": 12_000_000_000_000,
+                            "health": "CRITICAL",
+                            "health_detail": "self-test-failed",
+                        },
+                    ),
+                )
+
+        await _dry_run_one_manager(
+            _manager(),
+            credential_resolver=FakeCredentialResolver(),
+            timeout_seconds=5.0,
+            limit=None,
+            provider_factory=_factory(FakeProvider()),
+        )
+        out = capsys.readouterr().out
+        assert "health=CRITICAL (self-test-failed)" in out
 
     async def test_dry_run_shows_psu_detail(self, capsys: Any) -> None:
         """Added 2026-09-01 at the user's request — the domain model and
@@ -563,6 +604,7 @@ class TestDryRun:
                             "model": "PSU-750W",
                             "serial": "PSU-1",
                             "health": "UP",
+                            "health_detail": "operable",
                             "capacity_watts": 750,
                         },
                         {
@@ -584,8 +626,12 @@ class TestDryRun:
         )
         out = capsys.readouterr().out
         assert "psus        : 2" in out
-        assert "psu 1  PSU-750W  serial=PSU-1  750W  health=UP  power=—" in out
-        assert "psu 2  PSU-750W  serial=PSU-2  750W  health=DOWN  power=—" in out
+        # health_detail — the raw vendor state health was reduced from,
+        # added 2026-09-07 — prints in parens right after health=; a PSU
+        # without one dashes the same way every other unread field here
+        # does rather than disappearing silently.
+        assert "psu 1  PSU-750W  serial=PSU-1  750W  health=UP (operable)  power=—" in out
+        assert "psu 2  PSU-750W  serial=PSU-2  750W  health=DOWN (—)  power=—" in out
 
     async def test_dry_run_shows_the_raw_ucs_power_field_alongside_oper_state(
         self, capsys: Any
@@ -628,7 +674,7 @@ class TestDryRun:
             provider_factory=_factory(FakeProvider()),
         )
         out = capsys.readouterr().out
-        assert "health=UP  power=ok" in out
+        assert "health=UP (—)  power=ok" in out
 
     async def test_dry_run_hides_fi_identity_on_a_vnic_attachment(self, capsys: Any) -> None:
         """A vNIC structurally never carries a fabric relationship at all
@@ -684,6 +730,56 @@ class TestDryRun:
         assert "admin=UP oper=UP" in out
         assert "fabric" not in out
         assert "FI model/serial" not in out
+
+    async def test_dry_run_shows_the_fabric_cluster_name_on_a_physical_attachment(
+        self, capsys: Any
+    ) -> None:
+        """`fabric_name` — UCS Manager's `topSystem.name`, added
+        2026-09-07 — prints in parens right after `fabric {A|B}`. `A`/`B`
+        already tells the two sides of one domain apart; the name tells
+        one domain apart from another in a multi-domain fleet.
+        """
+
+        class FakeProvider(ServerInventoryProvider):
+            provider_type = "UCS_CENTRAL"
+
+            async def health_check(self) -> None:
+                return None
+
+            async def _list_servers(self) -> Any:
+                yield ProviderServer(
+                    external_id="sys/rack-unit-3",
+                    vendor="cisco",
+                    name="rack-3",
+                    attachments=(
+                        ProviderAttachment(
+                            type="FABRIC_INTERCONNECT",
+                            provider="UCS_CENTRAL",
+                            fabric="A",
+                            fabric_name="myc-03",
+                            fabric_id=None,
+                            fabric_model="UCS-FI-6454",
+                            fabric_serial="FCH2222A",
+                            server_interface="eth0",
+                            server_port=None,
+                            fabric_port=None,
+                            admin_state="ENABLED",
+                            oper_state="UP",
+                            speed_mbps=None,
+                            interface_kind="PHYSICAL",
+                        ),
+                    ),
+                )
+
+        await _dry_run_one_manager(
+            _manager(),
+            credential_resolver=FakeCredentialResolver(),
+            timeout_seconds=5.0,
+            limit=None,
+            provider_factory=_factory(FakeProvider()),
+        )
+        out = capsys.readouterr().out
+        assert "fabric A  (myc-03)" in out
 
     async def test_dry_run_shows_nic_speed_in_gbps_and_dashes_when_unread(
         self, capsys: Any
