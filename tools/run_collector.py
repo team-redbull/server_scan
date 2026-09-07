@@ -98,6 +98,7 @@ def _openmanage_provider(
     credentials: ManagerConnection,
     timeout_seconds: float,
     settings: Settings,
+    name_pattern: str,
 ) -> ServerInventoryProvider:
     """
     Build the Dell collector: OME says who exists, each iDRAC says what it is.
@@ -110,6 +111,8 @@ def _openmanage_provider(
         timeout_seconds (float): Per-call timeout passed to the provider.
         settings (Settings): Process-wide settings, for the BMC login and
             Redfish tuning knobs.
+        name_pattern (str): The resolved name filter for this collector,
+            from `resolve_name_pattern`.
 
     Returns:
         ServerInventoryProvider: The Dell collector.
@@ -177,7 +180,7 @@ def _openmanage_provider(
         # Applied before any BMC is contacted: the expensive pass here is
         # per-server, not per-appliance. The authoritative name filter is
         # still `_NameFilteredProvider`.
-        name_pattern=settings.collector_name_pattern,
+        name_pattern=name_pattern,
         bmc_port=settings.ome_bmc_port,
         bmc_verify_tls=settings.ome_bmc_verify_tls,
         bmc_verify_tls_reason=(
@@ -197,6 +200,7 @@ def _ucs_central_provider(
     credentials: ManagerConnection,
     timeout_seconds: float,
     settings: Settings,
+    name_pattern: str,
 ) -> ServerInventoryProvider:
     """
     Build the Cisco collector: Central names the domains, each domain's own UCS Manager for servers.
@@ -209,6 +213,8 @@ def _ucs_central_provider(
         timeout_seconds (float): Per-call timeout passed to the provider.
         settings (Settings): Process-wide settings, for the per-domain
             UCS Manager login and concurrency.
+        name_pattern (str): The resolved name filter for this collector,
+            from `resolve_name_pattern`.
 
     Returns:
         ServerInventoryProvider: The UCS Central collector.
@@ -230,7 +236,7 @@ def _ucs_central_provider(
         # The same pattern `_NameFilteredProvider` applies, reused only to
         # skip domains that certainly hold nothing of ours. It never
         # decides which *servers* are ingested — see `domains_to_collect`.
-        name_pattern=settings.collector_name_pattern,
+        name_pattern=name_pattern,
         concurrency=settings.ucs_central_domain_concurrency,
     )
 
@@ -271,8 +277,14 @@ def _redfish_provider(
     credentials: ManagerConnection,
     timeout_seconds: float,
     settings: Settings,
+    name_pattern: str,
 ) -> ServerInventoryProvider:
     """The standalone Redfish collector — one BMC at a time, from a file.
+
+    `name_pattern` is deliberately unused: this collector has no cheap
+    pre-filter to spend it on — every host in the inventory file is
+    contacted before its name is known. `_NameFilteredProvider` still
+    applies whatever `resolve_name_pattern` returned.
 
     `timeout_seconds` is deliberately unused. This collector splits
     connect from read (`INVENTORY_REDFISH_CONNECT_TIMEOUT_SECONDS` /
@@ -309,8 +321,14 @@ def _intersight_provider(
     credentials: ManagerConnection,
     timeout_seconds: float,
     settings: Settings,
+    name_pattern: str,
 ) -> ServerInventoryProvider:
     """The Intersight collector — one endpoint, fleet-wide list queries.
+
+    `name_pattern` is deliberately unused: every sub-resource is listed
+    once for the whole estate and joined in memory, so there is no
+    per-server cost a name filter could avoid paying.
+    `_NameFilteredProvider` still applies it.
 
     `timeout_seconds` is the connect timeout only. Reading one page of a
     fleet-wide query is a different question from reaching the endpoint
@@ -344,6 +362,7 @@ def _oneview_provider(
     credentials: ManagerConnection,
     timeout_seconds: float,
     settings: Settings,
+    name_pattern: str,
 ) -> ServerInventoryProvider:
     """The HPE collector — OneView for every server, whatever its iLO.
 
@@ -361,7 +380,7 @@ def _oneview_provider(
         # efficiency gate; `_NameFilteredProvider` remains authoritative
         # — but it does decide which servers cost a `/powerSupplies` or
         # `/processors` call, the two per-server costs this collector has.
-        name_pattern=settings.collector_name_pattern,
+        name_pattern=name_pattern,
         page_size=settings.oneview_page_size,
         collect_psus=settings.oneview_collect_psus,
         psu_concurrency=settings.oneview_psu_concurrency,
@@ -393,12 +412,51 @@ def _optional_login(settings: Settings, manager_type: ManagerType) -> tuple[str,
 # that deliberately does not exist.
 _ENDPOINTLESS_TYPES = frozenset({ManagerType.REDFISH_STANDALONE})
 
-# `INVENTORY_COLLECTOR_NAME_PATTERN` is not applied to these. The pattern
-# exists because a vendor manager holds the whole datacenter and the name
-# is the only discriminator; a standalone collector's inventory file is
-# already that filter, and a far more precise one. Applying `^ocp` over a
-# name a BMC does not know would discard every host the operator listed.
+# The *global* `INVENTORY_COLLECTOR_NAME_PATTERN` is not applied to these
+# (a per-type override still is). The pattern exists because a vendor
+# manager holds the whole datacenter and the name is the only
+# discriminator; a standalone collector's inventory file is already that
+# filter, and a far more precise one. Applying `^ocp` over a name a BMC
+# does not know would discard every host the operator listed.
 _UNFILTERED_TYPES = frozenset({ManagerType.REDFISH_STANDALONE})
+
+# manager type -> the `Settings` field overriding `collector_name_pattern`
+# for that collector alone, reusing each type's own env prefix
+# (`INVENTORY_ONEVIEW_NAME_PATTERN`, …). Explicit rather than derived from
+# the member name, for the reason `..credentials.env`'s maps are.
+_NAME_PATTERN_FIELD: dict[ManagerType, str] = {
+    ManagerType.UCS_CENTRAL: "ucs_central_name_pattern",
+    ManagerType.INTERSIGHT: "intersight_name_pattern",
+    ManagerType.OPENMANAGE: "ome_name_pattern",
+    ManagerType.ONEVIEW: "oneview_name_pattern",
+    ManagerType.REDFISH_STANDALONE: "redfish_name_pattern",
+}
+
+
+def resolve_name_pattern(manager_type: ManagerType, settings: Settings) -> str:
+    """
+    The name filter one collector actually runs with.
+
+    The single place the global, the per-type override and
+    `_UNFILTERED_TYPES` are reconciled — every reader goes through it, so
+    the authoritative `_NameFilteredProvider` and the collectors' own
+    pruning gates cannot end up filtering on different patterns and
+    silently collecting the intersection.
+
+    Args:
+        manager_type (ManagerType): Which collector is being run.
+        settings (Settings): The settings to resolve from.
+
+    Returns:
+        str: The regex to filter server names with; empty means no filter.
+    """
+    field = _NAME_PATTERN_FIELD.get(manager_type)
+    override = getattr(settings, field) if field is not None else None
+    if override is not None:
+        return override
+    if manager_type in _UNFILTERED_TYPES:
+        return ""
+    return settings.collector_name_pattern
 
 
 # The single source of truth for "which collectors exist". Public, and
@@ -516,7 +574,8 @@ class _NameFilteredProvider(ServerInventoryProvider):
     """
     Drop every server whose name doesn't match `pattern` before it reaches the pipeline.
 
-    Implements `INVENTORY_COLLECTOR_NAME_PATTERN`.
+    Implements `INVENTORY_COLLECTOR_NAME_PATTERN` and its per-collector
+    overrides, as reconciled by `resolve_name_pattern`.
 
     A wrapper here rather than a guard inside `IngestService` because
     *which servers to collect* is a collection concern: it belongs to the
@@ -663,11 +722,16 @@ def _build_provider(
         if manager.type in _ENDPOINTLESS_TYPES
         else credential_resolver.resolve(manager.type)
     )
+    resolved = settings if settings is not None else get_settings()
     return factory(
         manager=manager,
         credentials=connection,
         timeout_seconds=timeout_seconds,
-        settings=settings if settings is not None else get_settings(),
+        settings=resolved,
+        # Threaded in rather than each factory reading `Settings` again:
+        # a collector's own pruning gate and `_NameFilteredProvider` must
+        # be the same pattern, or a run collects their intersection.
+        name_pattern=resolve_name_pattern(manager.type, resolved),
     )
 
 
@@ -1185,9 +1249,7 @@ async def _run(
             print(f"{exc}")
             return 2
         manager = manager_for(manager_type, connection)
-        # Computed once, so the reason lives in one place rather than
-        # being duplicated at both call sites below.
-        name_pattern = "" if manager_type in _UNFILTERED_TYPES else settings.collector_name_pattern
+        name_pattern = resolve_name_pattern(manager_type, settings)
 
         if dry_run:
             # No indexes, no ingest pipeline, no repositories at all.

@@ -680,9 +680,33 @@ non-obvious enough to bite you.
   make dry runs lie. A non-matching server is never fetched: no document,
   no health state, no audit trail. This is **not** the UPI-vs-hosted
   distinction — that's classification rules over what *is* collected.
-  **`REDFISH_STANDALONE` is exempt** (`_UNFILTERED_TYPES`): a BMC does not
-  know the server's `ocp4-...` name, so the pattern would discard every
-  host the operator listed. Its inventory file is the filter instead.
+  **`REDFISH_STANDALONE` is exempt from the *global***
+  (`_UNFILTERED_TYPES`): a BMC does not know the server's `ocp4-...` name,
+  so the pattern would discard every host the operator listed. Its
+  inventory file is the filter instead.
+
+  **Each manager type can override the global**, keyed on `ManagerType`
+  to match how CronJobs, credentials and `PROVIDER_FACTORIES` are already
+  partitioned: `INVENTORY_UCS_CENTRAL_NAME_PATTERN`,
+  `INVENTORY_INTERSIGHT_NAME_PATTERN`, `INVENTORY_OME_NAME_PATTERN`,
+  `INVENTORY_ONEVIEW_NAME_PATTERN`, `INVENTORY_REDFISH_NAME_PATTERN`.
+  Unset inherits the global; **explicitly empty is the only way a
+  collector opts out of a non-empty global**, which is why the settings
+  are `str | None` and why the Helm values render the env var only when
+  the key is present (an empty string there would mean "collect
+  everything", not "inherit"). **An explicit override also beats the
+  `REDFISH_STANDALONE` exemption** — the exemption suppresses the global,
+  not an operator who named that collector.
+
+  All of this is reconciled in exactly one function,
+  `tools.run_collector.resolve_name_pattern`, and every reader goes
+  through it. That matters more than it looks: three collectors prune on
+  the pattern *before* `_NameFilteredProvider` sees anything — OME skips
+  BMCs, UCS Central skips domains, OneView skips its per-server
+  `/powerSupplies` and `/processors` calls — so a factory reading
+  `Settings` for itself would let a run prune on the global and filter on
+  the override, silently collecting the intersection with nothing logged.
+  The resolved value is threaded into the factories instead.
 - **A collector's whole connection config is env** — one endpoint and
   login per `ManagerType`. No `Manager` document is read to decide where
   to connect and there is no credentials directory; see the collector

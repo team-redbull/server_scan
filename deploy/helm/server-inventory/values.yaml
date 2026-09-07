@@ -291,6 +291,12 @@ collectors:
   # Verify with `--dry-run` before letting a CronJob run with it.
   namePattern: "^ocp"
 
+  # Each collector below may override it with its own `namePattern`, for an
+  # estate whose vendors don't share one naming scheme. Leaving the key out
+  # inherits this default; setting it to "" collects everything for that
+  # collector alone — which is the only way to opt one out of a non-empty
+  # default here, so an override is left commented out rather than set to "".
+
   # Fake data, for a cluster with no vendor hardware to reach at all — a
   # demo, a UI environment, or a soak test of the ingest path. Runs
   # tools/seed_inventory.py, which drives the same pipeline a real collector
@@ -349,6 +355,7 @@ collectors:
     # opt-in: also needs ucsManager.username/password above, since every
     # domain is read through a UCS Manager login.
     enabled: false
+    # namePattern: "^ocp"
     ip: ""
     username: ""
     password: ""
@@ -381,9 +388,10 @@ collectors:
   # conformance grounds, not vendor grounds.
   #
   # There is no `ip`. The fleet is the inventory file below, and that file
-  # is also the ONLY collection filter — `namePattern` deliberately does
-  # not apply here, because a BMC does not know the server's `ocp4-...`
-  # name. Treat the inventory as a production-critical, review-gated,
+  # is normally the only collection filter — the shared `namePattern`
+  # deliberately does not reach here, because a BMC does not know the
+  # server's `ocp4-...` name, and only this collector's own override
+  # below applies. Treat the inventory as a production-critical, review-gated,
   # GitOps-owned artifact: write access to it is equivalent to write
   # access to the credential Secret, since it decides where credentials
   # are sent.
@@ -393,6 +401,9 @@ collectors:
   # hardware that degrades when polled. Do not copy ucsCentral's numbers.
   redfishStandalone:
     enabled: false
+    # The global namePattern never reaches this collector; setting this is
+    # the only way to name-filter it, on top of the inventory file.
+    # namePattern: "^ocp"
 
     # Deployed but not scheduled. Un-suspend only after the manual steps
     # in docs/test-redfish-standalone-collector.md have run green against
@@ -503,6 +514,7 @@ collectors:
   # enabling this.
   oneview:
     enabled: false
+    # namePattern: "^ocp"
     ip: ""
     username: ""
     password: ""
@@ -565,6 +577,7 @@ collectors:
   # See docs/adr/0020-dell-identity-from-ome-hardware-from-redfish.md.
   ome:
     enabled: false
+    # namePattern: "^ocp"
     ip: ""
     username: ""
     password: ""
@@ -616,6 +629,7 @@ collectors:
   # pre-existing Secret, and no key file to mount.
   intersight:
     enabled: false
+    # namePattern: "^ocp"
 
     # "intersight.com" for the SaaS tenant, or the appliance FQDN.
     # A bare hostname: no scheme, no port, no path.
