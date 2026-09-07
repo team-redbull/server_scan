@@ -335,28 +335,34 @@ read `docs/adr/0017-intersight-collector.md` before touching it:
    `INVENTORY_INTERSIGHT_MANAGEMENT_MODES` overrides it, for an estate
    whose UCS domains are not registered with Central at all.
 
-**Corrected 2026-09-07 — this used to say it had never been run against a
-live Intersight; it now has, twice, against the user's on-prem Private
-Virtual Appliance.** The DevNet sandbox is still offline (went dark
-2026-08-01, no committed return before ~Q1 2027) and there is still no
-downloadable emulator equivalent to UCSPE, so the mapping was still built
-against the OpenAPI contract rather than a test target — but two live
-field passes on 2026-09-01 and 2026-09-07 (`uv run python -m
-tools.verify_intersight` against a real, if small, 19-20-server tenant)
-have since confirmed and fixed real defects the contract alone couldn't
-have caught: a `ComputeBoard`-only join gap that zeroed out storage and
-`cpu_model` (fixed 2026-09-01), a GPU catalog matcher that couldn't
-recognize Intersight's own product-name spelling (`"NVIDIA T4 PCIe 16GB
-70W"`, fixed 2026-09-07), and PSU/GPU/NIC health silently reading UNKNOWN
-because `equipment.Psu.OperState` reports `"OK"`, a spelling
-`normalize_oper_state` had no entry for (`"ok"` added 2026-09-07 — see
-ADR-0017's "second field pass" section). **`TotalMemory`'s unit is
-SETTLED: MiB**, confirmed against the Intersight UI's own "Memory
-Capacity" figure to the decimal (`786432 ÷ 1024 = 768.0` GiB exactly).
-**Still open:** a full `--manager-type INTERSIGHT --dry-run` ingest has
-not been run on this tenant, and the DOWN/DISABLED counterpart to
-Intersight's `OperState` vocabulary is unconfirmed — nothing on this
-tenant has actually failed yet to check it against.
+**No longer unverified, as of 2026-09-07 — this used to say it had never
+been run against a live Intersight; it now has, several times, against
+the user's on-prem Private Virtual Appliance, including
+`--manager-type INTERSIGHT --dry-run` itself, not just the probe.** The
+DevNet sandbox is still offline (went dark 2026-08-01, no committed
+return before ~Q1 2027) and there is still no downloadable emulator
+equivalent to UCSPE, so the mapping was still *built* against the
+OpenAPI contract rather than a test target — but live field passes
+across 2026-09-01 and 2026-09-07 (`tools.verify_intersight` and
+`--dry-run` against a real, if small, ~20-server tenant) have since
+confirmed and fixed five real defects the contract alone couldn't have
+caught: a `ComputeBoard`-only join gap that zeroed out storage and
+`cpu_model`, a GPU catalog matcher that couldn't recognize Intersight's
+own product-name spelling (`"NVIDIA T4 PCIe 16GB 70W"`), and PSU health,
+GPU health/NIC `oper_state`, and drive health all silently reading
+UNKNOWN because Intersight's `"OK"` string had no entry in either
+`normalize_oper_state` or `_drive_health` — see ADR-0017's "second field
+pass" section for the full write-up. **`TotalMemory`'s unit is SETTLED:
+MiB**, confirmed against the Intersight UI's own "Memory Capacity" figure
+to the decimal (`786432 ÷ 1024 = 768.0` GiB exactly). **What's still
+genuinely open**, none of it blocking: boot-optimized storage
+(`FlexUtil`/`FlexFlash`) is confirmed real on this tenant but **not
+implemented**; the DOWN/CRITICAL counterpart to Intersight's `"OK"`
+vocabulary is unconfirmed on both fields above, since nothing on this
+tenant has actually failed yet to check it against; and a handful of
+smaller ADR-0017 UNVERIFIED-list items (CPU-name field disambiguation,
+BMC address precedence, clock-skew behavior, account region) remain
+exactly that — unverified, not urgent.
 
 An air-gapped site reaches Intersight **only** through an on-prem
 Intersight; `intersight.com` is public internet and a *Connected* Virtual
@@ -873,53 +879,45 @@ quarterly, or before any release you care about:
 
 The most recent user direction was: real vendor collectors first,
 deployment/CD gaps and auth deliberately parked. **Every planned vendor
-collector now exists**, and as of 2026-09-07 both `ONEVIEW` and
-`INTERSIGHT` have had live field passes against real hardware — see
-ADR-0022's "Results, 2026-09-07" and ADR-0017's "second field pass". The
-natural next steps:
+collector now exists, and as of 2026-09-07 every one of them has had a
+live field pass against real hardware** — `UCS_MANAGER`/`UCS_CENTRAL`
+against UCSPE, `ONEVIEW` against a live appliance (ADR-0022's "Results,
+2026-09-07"), and `INTERSIGHT` against the user's on-prem Private Virtual
+Appliance, both `verify_intersight` and `--dry-run` itself (ADR-0017's
+"second field pass" section — auth, name resolution, `TotalMemory`'s MiB
+unit, and five real defects found and fixed: the `ComputeBoard`-only join
+gap, a GPU catalog matcher that couldn't recognize Intersight's own
+product-name spelling, and `"OK"` reading UNKNOWN instead of
+UP/HEALTHY across PSU health, GPU/NIC `oper_state`, and drive health).
+**`OPENMANAGE` is the one collector with no live pass of its own at
+all** — it reuses the Redfish mapping wholesale, so it inherits
+`REDFISH_STANDALONE`'s own validation, but nothing has run
+`--manager-type OPENMANAGE --dry-run` against a real OME appliance plus
+iDRAC. The natural next steps:
 
-1. **Finish settling Intersight.** Two live passes so far (2026-09-01,
-   2026-09-07 — `uv run python -m tools.verify_intersight` against the
-   user's on-prem Private Virtual Appliance, a small 19-20-server tenant)
-   have confirmed auth, name resolution and the `TotalMemory` MiB
-   assumption, and found and fixed three real defects: the
-   `ComputeBoard`-only join gap (storage/`cpu_model`), a GPU catalog
-   matcher that couldn't recognize Intersight's own product-name spelling,
-   and `equipment.Psu.OperState`'s `"ok"` spelling reading UNKNOWN instead
-   of UP. What's still open: **a full `--manager-type INTERSIGHT
-   --dry-run` ingest has never been run**, and the DOWN/DISABLED
-   counterpart to Intersight's `OperState` vocabulary is unconfirmed —
-   nothing on this tenant has failed yet to check it against, so that one
-   needs either a real fault or a different tenant, not just a rerun.
-   `docs/field-test-checklist.md` part 1 is the operator-facing version of
-   this errand; record what a further run settles in ADR-0017 rather than
-   only in a chat reply.
-
-   **OneView's own probe is done** — see ADR-0022's "Results,
-   2026-09-07" and the "Key technical facts" HPE section above. Its
-   remaining open question (GPU field mapping) needs a GPU-equipped HPE
-   server, not a repeat run.
-
-2. ~~Give the Dell collector a seeded shape~~ — **already done, this item
-   is stale.** `_UNSEEDED_COLLECTORS` is empty,
-   `COLLECTOR_TYPES` shapes all five collectors including `OPENMANAGE`,
-   and `provider_type_for` discriminates Dell by `server.vendor` rather
-   than by `external_id` prefix. Verified 2026-09-07 (Phase 11 of
-   `docs/notes/2026-09-refactor-plan.md`) — kept here, struck through
-   rather than deleted, as a reminder that this exact item was stale once
-   before and someone should double-check before trusting it a third
-   time.
-
-3. **UCS's own leftovers, still open** and still only settleable on real
+1. **UCS's own leftovers, still open** and still only settleable on real
    hardware: the `total_memory` MB assumption (UCSPE reports one
    synthetic value for every model and contradicts itself elsewhere), a
    fully *associated* service profile (the emulator's stopped at
    `config-failure` for want of a boot policy, vNICs and a UUID pool),
    and ADR-0009's original scope cuts — CPU model string, per-drive
-   storage detail, fabric interconnect identity. A UCS Central dry run on
-   the same trip as step 1 settles the memory question for UCS and
-   Intersight at once, which is why `docs/field-test-checklist.md`
-   already asks for it.
+   storage detail, fabric interconnect identity. `docs/field-test-checklist.md`
+   already asks for a UCS Central dry run.
+
+2. **The Dell iDRAC GPU VRAM check** (`docs/field-test-checklist.md`
+   part 3) — one `curl`, opportunistic, only if a Dell server with a GPU
+   fitted is ever to hand. Settles whether the built-in GPU catalog needs
+   to carry Dell's own spellings or Redfish's `MemorySummary` already
+   covers it.
+
+3. **Intersight's own remaining narrow items**, none blocking: the
+   DOWN/CRITICAL counterpart to Intersight's `"OK"` vocabulary
+   (`normalize_oper_state` and `_drive_health` both), unconfirmed because
+   nothing on the tested tenant has actually failed; boot-optimized
+   storage (`FlexUtil`/`FlexFlash`), confirmed real but not implemented;
+   and the smaller ADR-0017 UNVERIFIED-list items (CPU-name field, BMC
+   address precedence, clock skew, account region). Worth another
+   `verify_intersight` pass opportunistically, not a scheduled action.
 
 4. **Then the deployment/CD and auth gaps above**, which are the rest of
    what "production and really run" means for this platform — staleness
@@ -928,3 +926,12 @@ natural next steps:
    before assuming this is the next phase; the ordering above is the
    direction they have been steering toward, not a plan they have signed
    off on.
+
+~~Give the Dell collector a seeded shape~~ — **already done, kept here as
+a standing caution rather than deleted.** `_UNSEEDED_COLLECTORS` is
+empty, `COLLECTOR_TYPES` shapes all five collectors including
+`OPENMANAGE`, and `provider_type_for` discriminates Dell by
+`server.vendor` rather than by `external_id` prefix. Verified 2026-09-07
+(Phase 11 of `docs/notes/2026-09-refactor-plan.md`) — this exact item was
+stale once before a session caught it, so double-check before trusting it
+a third time.
