@@ -54,13 +54,13 @@ Each database is resolved on its own, so all four combinations render:
 # Neither — the default. Both URIs come from db.secretName.
 helm template server-inventory deploy/helm/server-inventory
 
-# Both, plus the UI: a self-contained deployment.
+# Both, plus the UI and the fake-data collector: a self-contained demo.
 helm install si deploy/helm/server-inventory \
   --set mongodb.enabled=true --set mongodb.auth.rootPassword=... \
   --set 'mongodb.auth.passwords[0]=...' \
   --set redis.enabled=true --set redis.auth.password=... \
   --set frontend.enabled=true --set route.host=scan.apps.example.com \
-  --set backend.cursorSecret=...
+  --set collectors.fake.enabled=true --set backend.cursorSecret=...
 
 # Redis only, against an operated MongoDB.
 helm install si deploy/helm/server-inventory \
@@ -167,6 +167,21 @@ shape; `templates/collector-credentials-secret.yaml` is the full list.
 Central, read through that domain's own UCS Manager. `OPENMANAGE`,
 `INTERSIGHT`, `ONEVIEW` and `REDFISH_STANDALONE` each have a CronJob of
 their own, all shipped disabled.
+
+`collectors.fake` is the sixth CronJob and the one that reaches no vendor
+at all: it runs `tools/seed_inventory.py`, for a cluster with no UCS,
+OneView, OME, Intersight or BMC to talk to — a demo, a UI environment, or
+a soak test of the ingest path itself. It is not a shortcut around the
+pipeline; the seeder drives the same `ProviderServer` -> classify ->
+health-evaluate -> audit -> upsert path a real collector does.
+
+`count` and `seed` together decide the generated fleet field for field, so
+repeated runs at the same pair upsert the same servers, which is what
+makes it safe to schedule. **Changing either against a populated database
+reports errors rather than replacing the fleet** — servers correlate on
+`(vendor, serial)`, so a new seed is a second fleet. Wipe the database
+first. And never enable it alongside a real collector: one estate, two
+sources of truth.
 
 `ONEVIEW` is one appliance like the rest. Power supplies and CPU thread
 counts are its two potentially-per-server costs — each tried the cheap

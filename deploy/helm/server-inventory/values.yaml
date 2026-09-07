@@ -252,6 +252,35 @@ collectors:
   # Verify with `--dry-run` before letting a CronJob run with it.
   namePattern: "^ocp"
 
+  # Fake data, for a cluster with no vendor hardware to reach at all — a
+  # demo, a UI environment, or a soak test of the ingest path. Runs
+  # tools/seed_inventory.py, which drives the same pipeline a real collector
+  # does, so what lands in MongoDB exercises production code.
+  #
+  # NEVER enable this alongside a real collector: one estate, two sources.
+  fake:
+    enabled: false
+
+    # These two decide the fleet field for field, so repeat runs at the same
+    # pair upsert the same servers — which is what makes it schedulable.
+    # Changing either against a populated database reports errors rather than
+    # replacing the fleet (servers correlate on (vendor, serial), so a new
+    # seed is a second fleet); wipe the database first.
+    count: 1000
+    seed: 42
+
+    # Every 6 hours. Nothing about the data changes between runs — the point
+    # is a fresh `last_seen_at` and a live audit trail, not new servers.
+    schedule: "0 */6 * * *"
+    backoffLimit: 1
+    activeDeadlineSeconds: 1800
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        memory: 1Gi
+
   # Cisco UCS Manager — a login, and deliberately no endpoint.
   #
   # There is no UCS Manager CronJob. The ucsCentral collector below is
