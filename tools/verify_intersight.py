@@ -276,6 +276,7 @@ async def _inspect(client: IntersightClient, *, show_names: int, sample: int) ->
     await _check_boot_optimized_storage(client, collected, controller_owner)
     await _check_disk_capacity(client, collected, controller_owner)
     await _check_operstate_vocabulary(client)
+    await _check_disk_health(client)
 
     _header("VERDICT")
     if not matching:
@@ -698,6 +699,99 @@ async def _check_disk_capacity(
         _p("a difference there (e.g. an NVMe drive alongside sized SAS/SATA ones) points")
         _p("at a protocol-specific field this collector does not read yet. Report the raw")
         _p("values above; ADR-0017's storage section is where the fix would land.")
+
+
+def _mapped_drive_health(
+    health: str | None, drive_state: str | None, failure_predicted: str
+) -> str:
+    """
+    A local mirror of `mapping._drive_health`'s logic, for reporting only.
+
+    A local copy rather than importing the mapping module's private
+    helper, matching this file's own convention (see
+    `_drive_capacity_bytes`'s docstring): this tool is a probe an
+    operator runs, not a caller entitled to the collector's internals.
+
+    Args:
+        health (str | None): The raw `Health` field.
+        drive_state (str | None): The raw `DriveState` field.
+        failure_predicted (str): The raw `FailurePredicted` field,
+            stringified (Intersight returns a real bool, but this probe
+            only ever compares it as text, same as the mapping does).
+
+    Returns:
+        str: HEALTHY, WARNING, CRITICAL or UNKNOWN.
+    """
+    raw = (health or drive_state or "").lower()
+    if raw in {"good", "healthy", "online", "optimal", "jbod", "unconfigured good"}:
+        return "HEALTHY"
+    if raw in {"warning", "degraded", "predictive-failure", "predicted-failure", "rebuilding"}:
+        return "WARNING"
+    if raw in {"critical", "bad", "failed", "offline", "unconfigured bad", "foreign"}:
+        return "CRITICAL"
+    if failure_predicted.lower() == "true":
+        return "WARNING"
+    return "UNKNOWN"
+
+
+async def _check_disk_health(client: IntersightClient) -> None:
+    """
+    Cross-check every raw Health/DriveState/FailurePredicted combination this tenant reports.
+
+    Prompted by a live report: many drives read `health=UNKNOWN` in a
+    `--dry-run`. `_drive_health` (`intersight/mapping.py`) reads `Health`
+    first, falling back to `DriveState`, and both are free-form strings
+    Cisco does not enumerate — the same shape of gap section 7 found for
+    `OperState`, on a different field. This groups every distinct
+    combination this tenant's drives actually report, rather than
+    printing one line per drive, so a handful of raw spellings explain
+    however many drives are affected.
+
+    Args:
+        client (IntersightClient): A connected client.
+    """
+    _header("8. DISK HEALTH VOCABULARY — why so many drives read health=UNKNOWN")
+
+    select = "Moid,Health,DriveState,FailurePredicted"
+    counts: Counter[tuple[str, str, str]] = Counter()
+    total = 0
+    try:
+        async for disk in client.list_all("storage/PhysicalDisks", select=select):
+            total += 1
+            key = (
+                str(disk.get("Health")),
+                str(disk.get("DriveState")),
+                str(disk.get("FailurePredicted")),
+            )
+            counts[key] += 1
+    except IntersightError as exc:
+        _p(f"could not read storage/PhysicalDisks: {exc}")
+        return
+
+    if total == 0:
+        _p("no drives sampled — see section 5/6 above.")
+        return
+
+    unknown_total = 0
+    _p(f"{'Health':<14}{'DriveState':<20}{'FailurePredicted':<18}{'count':>7}  mapped")
+    for (health, state, predicted), n in counts.most_common():
+        mapped = _mapped_drive_health(
+            None if health == "None" else health,
+            None if state == "None" else state,
+            predicted,
+        )
+        flag = "  <- not recognized" if mapped == "UNKNOWN" else ""
+        _p(f"{health!r:<14}{state!r:<20}{predicted!r:<18}{n:>7}  -> {mapped}{flag}")
+        if mapped == "UNKNOWN":
+            unknown_total += n
+
+    _p(f"\n{unknown_total} of {total} sampled drive(s) read health=UNKNOWN.")
+    if unknown_total:
+        _p("If `Health`/`DriveState` above show a real value rather than `None`, it is a")
+        _p("spelling `_drive_health` does not recognize — add it to the recognized sets in")
+        _p("`intersight/mapping.py`. If both are `None`, this tenant's controller genuinely")
+        _p("does not report either field for that drive, which is a capability gap, not a")
+        _p("mapping bug — the same distinction section 7 draws for an empty OperState.")
 
 
 async def _operstate_values(client: IntersightClient, resource: str) -> Counter[str]:

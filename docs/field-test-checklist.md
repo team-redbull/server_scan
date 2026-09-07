@@ -53,6 +53,17 @@ API uses are unconfirmed — the map's UCS-XML failure strings
 verified fact. A rerun is only worth another look if this estate ever has
 a genuinely failed PSU/GPU/NIC to check section 7 against.
 
+**Output section 8, "DISK HEALTH VOCABULARY", added 2026-09-07 — open,
+not yet run against this tenant.** Same shape of question as section 7,
+one field over: a live `--dry-run` showed many drives reading
+`health=UNKNOWN`, and `storage.PhysicalDisk.Health`/`DriveState` are
+free-form strings Cisco doesn't enumerate either, so this groups every
+raw `Health`/`DriveState`/`FailurePredicted` combination the tenant's
+drives report against what `_drive_health` currently does with it. A raw
+value that isn't `None` and still maps to UNKNOWN is a spelling to add;
+`None`/`None` on both fields means this controller genuinely doesn't
+report drive health at all, which is a capability gap, not a bug.
+
 If the probe passes and you want to see the actual server records it
 would ingest — still writing nothing — add:
 
