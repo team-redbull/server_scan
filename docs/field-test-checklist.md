@@ -213,23 +213,25 @@ and two non-gaps (`NA`/`unknown`/`indeterminate` genuinely mean "doesn't
 apply"/"no verdict"/"can't tell" in Cisco's own terms, and a vNIC's
 `oper_state` turned out to be a different, equipment-health field, not a
 link-state one — reading `"unknown"` on almost every vNIC is expected).
-See ADR-0009's second "Update (2026-09-07)" section for the full
-reasoning behind each one.
+See ADR-0009's "Update (2026-09-07): the health/oper vocabulary gaps,
+settled by sections 4 and 5" for the full reasoning behind each one.
 
-What's still worth running if UCS Central is reachable — the **fabric
-interconnect name preview (section 6)** is the one open question left:
+**The fabric interconnect name is also DONE, same day** — section 6
+previewed `topSystem.name` without wiring anything in; the user then
+independently confirmed it live against a real air-gapped domain with a
+short `ucsmsdk` script of their own, which settled it. Every
+`[PHYSICAL]` fabric attachment line now carries the domain's cluster
+name alongside `fabric A`/`fabric B`. See ADR-0009's "Update
+(2026-09-07): `fabric_name` built and confirmed live".
+
+Nothing on this list is open any more, but the commands below still work
+as a general health check if you want to run them again:
 
 ```bash
 uv run python -m tools.verify_ucs_central --show-names 15 | tee ucs-central-verify.txt
 uv run python -m tools.run_collector --manager-type UCS_CENTRAL \
   --dry-run --limit 3 | tee ucs-dryrun.txt
 ```
-
-Section 6 shows what `topSystem.name` (the domain's shared cluster name —
-UCS Manager has no per-FI hostname) actually looks like on this fleet,
-next to what Central already calls the same domain. Nothing is wired
-into the real collector yet; this is purely to judge whether the value
-is worth showing on every fabric attachment line before building it.
 
 ---
 

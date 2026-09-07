@@ -202,6 +202,7 @@ def _attachments(
     provider_type: str,
     interface_kind: str,
     switches_by_id: dict[str, Any],
+    cluster_name: str | None = None,
 ) -> tuple[ProviderAttachment, ...]:
     """
     Build fabric-interconnect attachments from adapter interfaces.
@@ -219,11 +220,19 @@ def _attachments(
             `id` (`"A"`/`"B"`), from `ucs_manager.provider`'s domain-wide
             query. Supplies each attachment's `fabric_model`/
             `fabric_serial` — the two identifying facts UCS Manager
-            actually exposes per Fabric Interconnect; there is no
-            separate configured hostname distinct from the domain's own
-            shared cluster name in `topSystem.name`. See
+            actually exposes per Fabric Interconnect. See
             docs/cisco-collectors.md, "Adapter interfaces, MACs and
             fabric attachments".
+        cluster_name (str | None): `topSystem.name`, the domain's own
+            cluster name — shared by both FI-A and FI-B of one domain,
+            since UCS Manager exposes no per-FI hostname distinct from
+            it. Confirmed live 2026-09-07 against a real air-gapped
+            domain (ADR-0009's "Update (2026-09-07)"), previewed first
+            in `tools.verify_ucs_central`'s section 6 before being wired
+            in here. `fabric` (`"A"`/`"B"`) already disambiguates which
+            side within one domain; this names the domain itself, which
+            nothing else on an attachment did before — useful the moment
+            more than one domain is in the same fleet.
 
     Returns:
         tuple[ProviderAttachment, ...]: One attachment per interface with a
@@ -243,7 +252,7 @@ def _attachments(
                 type="FABRIC_INTERCONNECT",
                 provider=provider_type,
                 fabric=switch_id,
-                fabric_name=None,
+                fabric_name=cluster_name,
                 fabric_id=None,
                 fabric_model=getattr(switch, "model", None) if switch is not None else None,
                 fabric_serial=getattr(switch, "serial", None) if switch is not None else None,
@@ -626,6 +635,7 @@ def compute_unit_to_provider_server(
     psu_units: Iterable[Any] = (),
     card_units: Iterable[Any] = (),
     provider_type: str = "UCS_MANAGER",
+    cluster_name: str | None = None,
 ) -> ProviderServer:
     """
     Convert one compute unit and its descendants into a `ProviderServer`.
@@ -660,6 +670,9 @@ def compute_unit_to_provider_server(
         card_units (Iterable[Any]): Its `graphicsCard` MOs (GPUs).
             Defaults to `()` for the same reason `psu_units` does.
         provider_type (str): Which collector observed this server.
+        cluster_name (str | None): The domain's `topSystem.name`, passed
+            through to `_attachments`'s `fabric_name`. Defaults to `None`
+            for the same backward-compatibility reason `psu_units` does.
 
     Returns:
         ProviderServer: The vendor-neutral DTO the ingest pipeline consumes.
@@ -706,12 +719,14 @@ def compute_unit_to_provider_server(
                 provider_type=provider_type,
                 interface_kind="PHYSICAL",
                 switches_by_id=switches_by_id,
+                cluster_name=cluster_name,
             )
             + _attachments(
                 host_eth_ifs,
                 provider_type=provider_type,
                 interface_kind="VNIC",
                 switches_by_id=switches_by_id,
+                cluster_name=cluster_name,
             )
         ),
         tags=(),

@@ -248,6 +248,7 @@ def _domain(**overrides: list[Any]) -> dict[str, list[Any]]:
                 size="1144641",
             )
         ],
+        "topSystem": [SimpleNamespace(name="myc-03")],
     }
     domain.update(overrides)
     return domain
@@ -272,6 +273,10 @@ class TestListServers:
         assert server.bmc_mac == "00:11:22:33:44:55"
         assert server.nic_macs == ("00:aa:bb:cc:dd:ee",)
         assert [a.fabric for a in server.attachments] == ["A"]
+        # Added 2026-09-07: `fabric_name` — `topSystem.name`, the domain's
+        # own cluster name — confirmed live against a real air-gapped
+        # domain. See ADR-0009's "Update (2026-09-07)".
+        assert [a.fabric_name for a in server.attachments] == ["myc-03"]
 
     async def test_a_rack_units_own_psu_joins_directly(self) -> None:
         """`equipmentPsu` is a direct child of `computeRackUnit`'s own DN
@@ -516,7 +521,20 @@ class TestListServers:
         servers = await _collect(_provider(client))
 
         assert len(servers) == 50
-        assert len([c for c in client.calls if c.startswith("query_classid:")]) == 13
+        # 14, not 13: bumped 2026-09-07 for the one new domain-wide
+        # `topSystem` query (a domain singleton, so still O(1) per
+        # domain, not per server — the property this test guards).
+        assert len([c for c in client.calls if c.startswith("query_classid:")]) == 14
+
+    async def test_no_topsystem_returned_leaves_fabric_name_none(self) -> None:
+        """A domain that answers `topSystem` with nothing — rather than a
+        real row with no `name` — must not crash or invent a name.
+        """
+        domain = _domain(topSystem=[])
+        client = FakeUcsClient(responses=domain)
+        [server] = await _collect(_provider(client))
+
+        assert [a.fabric_name for a in server.attachments] == [None]
 
     async def test_skips_non_equipped_servers(self) -> None:
         domain = _domain()

@@ -481,18 +481,14 @@ server and an SSH `free` on its OpenShift node.
   a `networkElement` query) — undocumented here until now; the original
   "Scope cuts" section above (`fabric_name`/`fabric_id`/`fabric_model`/
   `fabric_serial`/... stay `None`) is stale on two of those four fields.
-  **`fabric_name`/`fabric_id` genuinely do stay `None`, and this is not
-  a missing print statement** — `_attachments`'s own docstring explains
-  why: UCS Manager exposes no per-FI hostname distinct from the domain's
-  shared cluster name in `topSystem.name` (confirmed again this session
-  against the installed `ucscsdk`'s `TopSystem` model, which does carry
-  `.name`/`.address`/`.mode`). A real per-FI name is a genuine capability
-  UCS Manager doesn't have; the domain's own cluster name is available
-  but shared between both FIs of a pair, so plumbing it into
-  `fabric_name` would be a real, doable, correctly-scoped enhancement —
-  not yet built, since it needs a new domain-local query and touches
-  `ucs_manager/provider.py` and `mapping.py` together, not a comment-only
-  fix. Track it against this ADR if built.
+  ~~`fabric_name`/`fabric_id` genuinely do stay `None`~~ — **`fabric_name`
+  is now built, see "Update (2026-09-07): `fabric_name` built and
+  confirmed live" below.** `_attachments`'s
+  own docstring first explained why UCS Manager exposes no per-FI
+  hostname distinct from the domain's shared cluster name in
+  `topSystem.name` — a real capability limit, still true — before the
+  user independently confirmed live that the cluster name itself was
+  worth surfacing. `fabric_id` still has no source and stays `None`.
 - ~~Some drives read `health=UNKNOWN` and some vNICs read
   `oper=UNKNOWN`~~ — **SETTLED 2026-09-07**, see the section below. Two
   real gaps fixed, and two more findings that turned out not to be bugs
@@ -574,3 +570,40 @@ correctly. `_attachments` reading the same `oper_state` field off both
 MO kinds is therefore not a design defect either — it is simply that one
 of the two fields it reads carries far less signal than the other, for
 reasons outside this collector's control.
+
+## Update (2026-09-07): `fabric_name` built and confirmed live
+
+`tools/verify_ucs_central.py`'s section 6, added earlier the same day,
+previewed `topSystem.name` without wiring anything in, deliberately, so
+the value could be judged before committing to the code. The user then
+independently ran a short `ucsmsdk` script directly against a real
+air-gapped domain —
+
+```python
+fi_mos = [mo for mo in handle.query_classid("networkElement") if mo.serial == "..."]
+top = handle.query_classid("topSystem")[0]
+name = f"{top.name} FI-{fi.id}"
+```
+
+— confirming both the mechanism (`networkElement.id`/`.serial` per side,
+`topSystem.name` shared) and that the resulting name is real and
+meaningful, not blank or generic. That settled it.
+
+**Built:** `ucs_manager/provider.py` queries `topSystem` once per domain
+— a domain singleton, so this is one more query on the same already-open
+session, not one per server or per attachment; still O(1) per domain,
+the exact property `test_scales_query_count_independently_of_fleet_size`
+guards (bumped 13 -> 14). The resolved name is threaded through
+`compute_unit_to_provider_server`'s new `cluster_name` parameter into
+`_attachments`, which now sets `fabric_name=cluster_name` instead of a
+hardcoded `None`. `fabric` (`"A"`/`"B"`) already disambiguates which side
+within one domain; `fabric_name` now names the domain itself — useful
+the moment a fleet has more than one, which a bare `"A"`/`"B"` cannot
+tell apart on its own. A domain that answers `topSystem` with nothing
+leaves `fabric_name` at `None` rather than guessing.
+
+Not extended to UCS Central's own per-domain logging or to Intersight —
+Intersight has no comparable per-domain cluster concept at all
+(`ManagementMode: IntersightStandalone`/`Intersight` servers are not
+grouped under anything analogous to a UCS domain), so there is nothing
+there to name.

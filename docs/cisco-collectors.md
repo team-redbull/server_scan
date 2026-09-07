@@ -313,6 +313,22 @@ rows describe the OS-facing logical carve-out pinned to one fabric side,
 which matters for troubleshooting guest networking but not for verifying
 the wire.
 
+### `fabric_name` is the domain, not the switch
+
+UCS Manager exposes no per-FI hostname — the only name-like thing a
+domain has is `topSystem.name`, its own cluster name, identical for both
+FI-A and FI-B of one domain. `fabric` (`"A"`/`"B"`) already tells the two
+sides apart within one domain; `fabric_name` names the domain itself,
+which matters the moment a fleet has more than one — otherwise every
+domain's `fabric A` reads identically on the attachment line, and only
+`fabric_serial` (a real but opaque FI serial number) disambiguates them.
+Confirmed live 2026-09-07 against a real air-gapped domain, both via
+`tools.verify_ucs_central`'s section 6 preview and independently by the
+user running `ucsmsdk` directly. `topSystem` is a domain singleton —
+`ucs_manager/provider.py` queries it once per domain, the same session
+already open for everything else, not once per server. See ADR-0009's
+"Update (2026-09-07): `fabric_name` built and confirmed live".
+
 ### Which MAC the OS actually sees
 
 The two classes are *not* interchangeable for this, and the ADRs do not

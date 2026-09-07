@@ -916,14 +916,17 @@ iDRAC. The natural next steps:
    bug at all: `AdaptorHostEthIf.oper_state` (vNICs) turned out to be a
    generic equipment-operability enum, not a link-state one, so reading
    `"unknown"` on 99.75% of vNICs is expected given what the field
-   actually measures — no fix exists to make there. **Still open:** a
-   fully *associated* service profile (nothing tested has gone past
-   `config-failure` for want of a boot policy, vNICs and a UUID pool);
-   and `fabric_name`/`fabric_id` genuinely stay `None` — UCS Manager has
-   no per-FI hostname, only a domain-shared cluster name
-   (`topSystem.name`), previewed but not yet wired in by
-   `verify_ucs_central`'s section 6, awaiting the user's call on whether
-   it's worth building.
+   actually measures — no fix exists to make there. **`fabric_name` is
+   now built and confirmed live** — `topSystem.name` (the domain's shared
+   cluster name; UCS Manager has no per-FI hostname), previewed first in
+   `verify_ucs_central`'s section 6, then independently confirmed by the
+   user running a short `ucsmsdk` script directly against a real
+   air-gapped domain before it was wired in. One more domain-singleton
+   query per domain (`ucs_manager/provider.py`), threaded through
+   `_attachments`'s new `cluster_name` param. See ADR-0009's second
+   "Update (2026-09-07)". **Still open:** `fabric_id` (no source exists)
+   and a fully *associated* service profile (nothing tested has gone past
+   `config-failure` for want of a boot policy, vNICs and a UUID pool).
 
 2. **The Dell iDRAC GPU VRAM check** (`docs/field-test-checklist.md`
    part 3) — one `curl`, opportunistic, only if a Dell server with a GPU
