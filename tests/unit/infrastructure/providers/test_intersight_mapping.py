@@ -140,6 +140,7 @@ def test_a_drive_with_no_reported_size_is_none() -> None:
     ("disk", "expected"),
     [
         ({"Health": "Good"}, "HEALTHY"),
+        ({"Health": "OK"}, "HEALTHY"),
         ({"Health": "Warning"}, "WARNING"),
         ({"Health": "Critical"}, "CRITICAL"),
         ({"DriveState": "Online"}, "HEALTHY"),
@@ -155,6 +156,20 @@ def test_drive_health_uses_the_platform_vocabulary(disk: dict[str, Any], expecte
     emits makes that policy permanently silent.
     """
     assert mapping.drive(disk)["health"] == expected
+
+
+def test_drive_health_recognizes_the_live_intersight_ok_spelling() -> None:
+    """Confirmed live 2026-09-07 (`tools.verify_intersight`'s disk health
+    vocabulary check, section 8): 216 of 226 sampled drives on this
+    tenant report `Health: "OK"` — the same generic healthy string
+    `equipment.Psu.OperState` uses on a different field — and none of the
+    original healthy spellings (`good`, `healthy`, `online`, ...)
+    included it, so every one of those 216 read health=UNKNOWN instead
+    of HEALTHY. `DriveState` never got a chance to save them either:
+    `Health` is checked first and was truthy on all 216. See ADR-0017.
+    """
+    unit = mapping.drive({"DiskId": "1", "Health": "OK"})
+    assert unit["health"] == "HEALTHY"
 
 
 # --- attachments ------------------------------------------------------

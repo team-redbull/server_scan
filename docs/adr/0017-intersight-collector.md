@@ -864,6 +864,43 @@ Two things this settles, and one it does not:
   `verify_intersight` run if this estate ever has a failed PSU/GPU/NIC to
   compare against.
 
+### The same "OK" gap, one field over: `storage.PhysicalDisk.Health` (2026-09-07)
+
+The `--dry-run` this field pass was validating against showed most drives
+reading `health=UNKNOWN`. New `verify_intersight` **section 8, "DISK
+HEALTH VOCABULARY"** (added the same day as section 7, same shape of
+check) grouped every raw `Health`/`DriveState`/`FailurePredicted`
+combination this tenant's drives report:
+
+```
+Health       DriveState       FailurePredicted     count     mapped
+'OK'         'ENABLED'        'False'              180       -> UNKNOWN  <- not recognized
+'OK'         'Online'         'False'               36       -> UNKNOWN  <- not recognized
+''           'JBOD'           'False'                8       -> HEALTHY
+''           'Online'         'False'                2       -> HEALTHY
+
+216 of 226 sampled drive(s) read health=UNKNOWN.
+```
+
+Same root cause as the PSU finding above, on a sibling field:
+`equipment.Psu.OperState` and `storage.PhysicalDisk.Health` both use
+`"OK"` as Intersight's generic healthy-status string, and `_drive_health`
+(`intersight/mapping.py`) had no `"ok"` entry in its healthy set (`good`,
+`healthy`, `online`, `optimal`, `jbod`, `unconfigured good`) — 216 of 226
+drives, silently. `Health` is read before `DriveState`, and was truthy
+for all 216, so `DriveState` — which *did* already recognize
+`"Online"`/`"JBOD"` on the 10 drives it was actually consulted for
+(rows 3 and 4 above, where `Health` was blank) — never got a chance to
+save them.
+
+Fixed: `"ok"` added to `_drive_health`'s healthy set. See
+`test_drive_health_recognizes_the_live_intersight_ok_spelling`, confirmed
+failing pre-fix. The DOWN/CRITICAL counterpart is exactly as unconfirmed
+here as it is for `OperState` above — no drive on this tenant reported
+`Health`/`DriveState` as anything but `"OK"`/healthy, so `_drive_health`'s
+existing `warning`/`critical` sets are untested against Intersight's own
+spellings, only inherited from whatever informed them originally.
+
 ---
 
 ## Corrections made during implementation

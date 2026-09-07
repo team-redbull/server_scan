@@ -270,6 +270,15 @@ def _drive_health(disk: Mapping[str, Any]) -> str:
     is the controller's view and is consulted only when `Health` is
     absent, since a predicted failure there is still worth a warning.
 
+    Confirmed live 2026-09-07 (`tools.verify_intersight`'s disk health
+    vocabulary check, section 8): `Health` reports `"OK"` on 216 of 226
+    sampled drives — the same generic healthy-status string
+    `equipment.Psu.OperState` uses (`_OPER_STATE_MAP`'s `"ok"` entry,
+    added the same day), just on a different field with its own separate
+    vocabulary. `Health` is checked first and was truthy for all 216, so
+    `DriveState` — which already recognized `"Online"`/`"JBOD"` on the 10
+    drives it *was* consulted for — never got a chance to save them.
+
     Args:
         disk (Mapping[str, Any]): A `storage.PhysicalDisk`.
 
@@ -277,7 +286,7 @@ def _drive_health(disk: Mapping[str, Any]) -> str:
         str: HEALTHY, WARNING, CRITICAL or UNKNOWN.
     """
     raw = (_text(disk.get("Health")) or _text(disk.get("DriveState")) or "").lower()
-    if raw in {"good", "healthy", "online", "optimal", "jbod", "unconfigured good"}:
+    if raw in {"ok", "good", "healthy", "online", "optimal", "jbod", "unconfigured good"}:
         return "HEALTHY"
     if raw in {"warning", "degraded", "predictive-failure", "predicted-failure", "rebuilding"}:
         return "WARNING"
