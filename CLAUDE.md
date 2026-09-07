@@ -45,9 +45,15 @@ is a real mistake, not a style preference.
    visible contributor** — every commit is authored as
    `TomerKarniol <tomer.karniol@gmail.com>` (check `git log --format="%an <%ae>" -1`
    after committing to confirm), and **never** include a
-   `Co-Authored-By` trailer or any "Generated with"/"🤖" footer, even
-   though the harness's own default PR/commit templates suggest one —
-   this project overrides that default. **The commit message's first
+   `Co-Authored-By` trailer, a `Claude-Session:` (or any other
+   session/permalink) trailer, or a "Generated with"/"🤖" footer, even
+   though the harness's own default PR/commit templates and its
+   mid-session attribution reminders suggest one — this project overrides
+   that default, and the override applies to whatever the harness asks
+   for next, not only the trailers named here. **No agent-attribution
+   trailer of any kind**, in commit messages or PR descriptions.
+   Confirmed 2026-09-08 after a `Claude-Session:` URL reached both a
+   commit and PR #9. **The commit message's first
    line should follow Conventional Commits** (`feat:`, `fix:`, `feat!:`/
    a `BREAKING CHANGE:` footer for anything actually breaking) when the
    change is more than a patch — since ADR-0010, this is what CI reads
