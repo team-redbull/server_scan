@@ -1,25 +1,3 @@
-{{- /*
-The HPE collector: one CronJob against the one OneView appliance.
-
-OneView is the only source for every HPE server, whatever its iLO
-generation — no BMC login, no Redfish pass, no per-generation branch — so
-this pod needs egress to the appliance and nothing else. Three bulk REST
-calls (server profiles, profile templates, and one `expand=all` sweep of
-server hardware) name every server, resolve its template, and carry its
-drive and PCI inventory inline.
-
-Two calls are potentially per-server: `/powerSupplies` (gated by
-`collectPsus`, populating the health engine's power metrics) and
-`/processors` (gated by `collectCpuThreads`, the only source for
-`cpu_threads`). Each is tried the cheap way first — many servers'
-`expand=all` response already carries both — so either one is the
-difference between roughly 15 requests and roughly one per server only
-for whatever fraction the sweep didn't already cover.
-
-Validated against a live appliance 2026-09-07 (821 servers) — see
-docs/adr/0022-oneview-only-hpe-collector.md's "Results, 2026-09-07" and
-docs/hpe-collectors.md.
-*/ -}}
 {{- if .Values.collectors.oneview.enabled }}
 apiVersion: batch/v1
 kind: CronJob
@@ -50,10 +28,6 @@ spec:
               env:
                 - name: INVENTORY_ENVIRONMENT
                   value: production
-                # Which servers this collector may ingest at all, matched
-                # against the server's name — which for HPE lives only on
-                # the server profile. Collector-scoped, so it lives here
-                # rather than in the API ConfigMap this also mounts.
                 - name: INVENTORY_COLLECTOR_NAME_PATTERN
                   value: {{ .Values.collectors.namePattern | quote }}
                 - name: INVENTORY_ONEVIEW_COLLECT_PSUS
@@ -74,9 +48,6 @@ spec:
               envFrom:
                 - configMapRef:
                     name: {{ .Release.Name }}-api-config
-                # Endpoint + login for every vendor, as INVENTORY_* env
-                # vars. `envFrom` a Secret rather than inline `env` so the
-                # passwords aren't readable in the pod spec.
                 - secretRef:
                     name: {{ .Values.collectors.existingSecret | default (printf "%s-collector-credentials" .Release.Name) }}
               resources:

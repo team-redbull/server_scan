@@ -1,17 +1,5 @@
-{{- /*
-The API's Route(s).
-
-With no frontend deployed this is one Route at `/`, as it always was.
-With `frontend.enabled` the SPA takes `/` on the same host — it calls the
-API same-origin (`frontend/src/api/client.ts` sets no base URL) — so the
-API instead gets one Route per top-level path it owns. OpenShift routes
-by longest path prefix, so `/api` wins over the frontend's `/` without
-either knowing about the other.
-
-An OpenShift-generated host is per Route, so splitting one host across two
-Services requires naming it; `route.host` is mandatory in that case.
-*/ -}}
 {{- if .Values.route.enabled }}
+{{- /* With a frontend, the SPA takes / and the API gets one Route per path. See deploy/README.md. */ -}}
 {{- $paths := .Values.frontend.enabled | ternary .Values.route.apiPaths (list "") }}
 {{- range $path := $paths }}
 ---

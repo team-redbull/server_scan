@@ -108,7 +108,7 @@ to `:latest`; `values.yaml` says how to pin one.
 ## Image tags
 
 Both images default to the chart's `appVersion` — a real release like
-`11.0.1`, published by CI as `X.Y.Z` with no leading `v`
+`11.0.2`, published by CI as `X.Y.Z` with no leading `v`
 (docker/metadata-action's `{{version}}` strips it, so the git tag `v11.0.0`
 becomes the image tag `11.0.0`). Upgrading is a bump of `appVersion`, or of
 `backend.image.tag` / `frontend.image.tag` to override one image.
@@ -144,6 +144,53 @@ sane local default, but nothing here pins `runAsUser` — OpenShift's
 admission time, and the image writes nothing to disk at runtime (all
 logging is to stdout), so it runs correctly under whatever UID the SCC
 assigns without an `anyuid` grant.
+
+### The arbitrary UID trap, which cost a release to find
+
+**An image that runs perfectly under `podman run` can still fail under
+OpenShift**, and the error will not mention permissions. Both images hit a
+version of this on their first ever deployment; both fixes are one line in
+their Containerfile, and neither is obvious from a local run.
+
+**The API image: `useradd -d /app` makes `/app` mode `0700`.** `WORKDIR`
+then reuses that directory and `COPY` puts root-owned files inside an
+unreadable parent. As UID 1001 — which every local `podman run` uses,
+because the image says `USER 1001` — that is invisible. OpenShift assigns
+an arbitrary UID with **GID 0**, `0700` denies it the working directory,
+Python's cwd entry resolves to a directory it cannot read, and
+`uvicorn app.main:app` dies with:
+
+```
+ModuleNotFoundError: No module named 'app'
+```
+
+An import error that says nothing about permissions and sends you looking
+at `PYTHONPATH`. The fix is Red Hat's own convention, applied after every
+`COPY`:
+
+```dockerfile
+RUN chgrp -R 0 /app && chmod -R g=u /app
+```
+
+Group 0 with group permissions mirroring owner is what makes an image work
+under *any* assigned UID. To reproduce locally, run as a UID that is not
+the owner and put it in group 0 — `podman run --user 12345:0 <image>` — not
+the plain `podman run` that passes.
+
+**The frontend image: `ubi9/nginx-124` is an S2I *builder* image.** Its own
+CMD runs `$STI_SCRIPTS_PATH/usage`, which prints "This is a S2I rhel base
+image", exits 0, and never starts nginx. A Containerfile that sets no CMD
+inherits that, so the container CrashLoopBackOffs with a help message and
+no error at all. It needs an explicit `CMD ["nginx", "-g", "daemon off;"]`.
+
+### Image tags, and why not `latest`
+
+Both images default to the chart's `appVersion` — a real release. `latest`
+reads as "always current" and with `pullPolicy: IfNotPresent` is the
+opposite: a node that already holds a `latest` layer never pulls it again,
+not on a pod delete, not on a rollout, not after a new release. A cluster
+here kept a v10-era API for hours after 11.0.0 published a working one, and
+deleting the pods would not have changed it. See "Image tags" above.
 
 ## Collectors (CronJobs)
 

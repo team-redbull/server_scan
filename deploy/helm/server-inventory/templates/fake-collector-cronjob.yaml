@@ -1,22 +1,3 @@
-{{- /*
-The fake-data collector: `tools/seed_inventory.py`, not a vendor.
-
-For a cluster with no UCS/OneView/OME/Intersight/BMC to reach — a demo,
-a UI environment, or a soak test of the ingest path itself. It drives the
-exact same pipeline a real collector does (ProviderServer -> classify ->
-health-evaluate -> audit -> upsert), so what lands in MongoDB exercises
-production code rather than a fixture written straight to the collection.
-
-`count` and `seed` together decide the fleet field for field, so repeat
-runs at the same pair are upserts of the same servers, which is what
-makes this safe to schedule. CHANGING EITHER against a populated database
-reports errors instead of replacing the fleet: servers correlate on
-(vendor, serial), so a new seed is a second fleet, not a replacement. Wipe
-the database first.
-
-Never enable this alongside a real collector — one estate, two sources of
-truth.
-*/ -}}
 {{- if .Values.collectors.fake.enabled }}
 apiVersion: batch/v1
 kind: CronJob
@@ -54,10 +35,6 @@ spec:
               env:
                 - name: INVENTORY_ENVIRONMENT
                   value: production
-                {{- /* No INVENTORY_COLLECTOR_NAME_PATTERN: the seeder is
-                       not driven by run_collector and never sees the
-                       filter, by design — the generated names are already
-                       this platform's own. */}}
                 {{- include "serverInventory.dbEnv" . | nindent 16 }}
               envFrom:
                 - configMapRef:

@@ -1,25 +1,6 @@
-# Frontend container image: a static build served by nginx, no Node
-# runtime in production. UBI9's nginx image (not nginx:alpine or
-# nginxinc/nginx-unprivileged) for the same reason as the backend's base —
-# Red Hat-supported inside an air-gapped OpenShift estate — and it already
-# runs unprivileged on port 8080 by default, matching this platform's
-# non-root requirement with no extra configuration.
-#
-# Both stages pinned to the 9.8 minor stream, not a frozen build id and
-# not a floating `latest` — matching the backend Containerfile's own
-# `ubi-minimal:9.8` pin, for the same reason: the stream keeps receiving
-# Red Hat's CVE fixes within 9.8 with no commit here, while an
-# air-gapped rebuild stays reproducible to a known OS minor. `latest`
-# gave every rebuild a different, unrecorded base with no way to tell
-# what changed. Bumping to the next minor is a manual step — check for a
-# newer 9.x periodically, same as the backend's.
-
 FROM registry.access.redhat.com/ubi9/nodejs-22:9.8 AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
-# npm ci --omit=dev would skip the devDependencies the build itself needs
-# (vite, typescript, tailwind) — this is a build stage, not the final
-# image, so the full dependency set is intentional here.
 RUN npm ci
 COPY . .
 RUN npm run build
@@ -30,11 +11,5 @@ COPY nginx.conf /etc/nginx/nginx.conf
 
 EXPOSE 8080
 
-# REQUIRED, not a default worth inheriting: ubi9/nginx-124 is an S2I
-# *builder* image, and its own CMD runs `$STI_SCRIPTS_PATH/usage`, which
-# prints "This is a S2I rhel base image", exits 0 and never starts nginx.
-# Without this line the container CrashLoopBackOffs with a help message and
-# no error — which is exactly how it failed the first time it was ever
-# deployed. `daemon off` keeps nginx in the foreground so it stays PID 1's
-# child and a crash actually restarts the pod.
+# Required: the S2I base's own CMD prints a usage message instead. See deploy/README.md.
 CMD ["nginx", "-g", "daemon off;"]

@@ -1,29 +1,3 @@
-{{- /*
-The Cisco Intersight collector: one CronJob covering a whole tenant or
-on-prem appliance.
-
-Unlike every other collector here, its cost does not scale with the
-fleet. Each sub-resource is listed once for the entire estate and joined
-in memory against `compute.PhysicalSummary`, so a run is on the order of
-a hundred requests whether the tenant holds fifty servers or ten
-thousand. That is why this can be scheduled hourly where the per-BMC
-Redfish sweep cannot. See docs/adr/0017-intersight-collector.md.
-
-Servers reporting `ManagementMode == UCSM` are NOT collected by default:
-they are exactly the set the ucsCentral collector already owns, and
-collecting both would make one document's fields flip on whichever job
-ran last.
-
-There is no key file to mount. Intersight signs each request with an API
-key whose PEM private half rides in the shared collector Secret like any
-other credential, because the signing library accepts the key as a
-string.
-
-This collector never verifies the endpoint's TLS certificate — no CA
-bundle to mount, no verify flag to set. Unconditional, by explicit user
-decision. See app.infrastructure.providers.intersight.client.
-IntersightClient.
-*/ -}}
 {{- if .Values.collectors.intersight.enabled }}
 apiVersion: batch/v1
 kind: CronJob
@@ -54,13 +28,8 @@ spec:
               env:
                 - name: INVENTORY_ENVIRONMENT
                   value: production
-                # Which servers this collector may ingest at all, matched
-                # against the server's name. Applies here, unlike the
-                # standalone Redfish collector: Intersight knows a
-                # server's real name through its service profile.
                 - name: INVENTORY_COLLECTOR_NAME_PATTERN
                   value: {{ .Values.collectors.namePattern | quote }}
-                # The partition between this collector and ucsCentral.
                 - name: INVENTORY_INTERSIGHT_MANAGEMENT_MODES
                   value: {{ .Values.collectors.intersight.managementModes | quote }}
                 - name: INVENTORY_INTERSIGHT_PAGE_SIZE
@@ -75,9 +44,6 @@ spec:
               envFrom:
                 - configMapRef:
                     name: {{ .Release.Name }}-api-config
-                # Endpoint plus the API Key ID and its PEM, as INVENTORY_*
-                # env vars. `envFrom` a Secret rather than inline `env` so
-                # the private key isn't readable in the pod spec.
                 - secretRef:
                     name: {{ .Values.collectors.existingSecret | default (printf "%s-collector-credentials" .Release.Name) }}
               resources:
