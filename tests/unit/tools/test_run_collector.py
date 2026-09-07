@@ -20,6 +20,7 @@ from tools.run_collector import (
     _dry_run_one_manager,
     _filtered,
     _format_duration,
+    _format_speed,
     _parse_args,
     _run,
     _run_one_manager,
@@ -31,7 +32,12 @@ from app.domain.enums import ManagerType
 from app.domain.models.common import AuditFields
 from app.domain.models.manager import Manager
 from app.domain.ports.credentials import ManagerConnection, ManagerNotConfiguredError
-from app.domain.ports.provider import ProviderAttachment, ProviderServer, ServerInventoryProvider
+from app.domain.ports.provider import (
+    ProviderAttachment,
+    ProviderNic,
+    ProviderServer,
+    ServerInventoryProvider,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -115,6 +121,26 @@ class TestFormatDuration:
     )
     def test_formats_at_and_around_the_minute_boundary(self, seconds: float, expected: str) -> None:
         assert _format_duration(seconds) == expected
+
+
+class TestFormatSpeed:
+    """The 1000 Mbps boundary is the whole logic: below it, plain Mbps;
+    at or above it, Gbps, with `:g` dropping a trailing `.0` but keeping
+    a real fraction."""
+
+    @pytest.mark.parametrize(
+        ("speed_mbps", "expected"),
+        [
+            (100, "100 Mbps"),
+            (999, "999 Mbps"),
+            (1000, "1 Gbps"),
+            (2500, "2.5 Gbps"),
+            (25000, "25 Gbps"),
+            (100000, "100 Gbps"),
+        ],
+    )
+    def test_formats_at_and_around_the_gbps_boundary(self, speed_mbps: int, expected: str) -> None:
+        assert _format_speed(speed_mbps) == expected
 
 
 class TestBuildProvider:
@@ -658,6 +684,55 @@ class TestDryRun:
         assert "admin=UP oper=UP" in out
         assert "fabric" not in out
         assert "FI model/serial" not in out
+
+    async def test_dry_run_shows_nic_speed_in_gbps_and_dashes_when_unread(
+        self, capsys: Any
+    ) -> None:
+        """A 25 Gbps port reads as `25 Gbps`, not `25000mbps`; a NIC the
+        BMC reported no speed for dashes the same way every other unread
+        field here does, rather than silently disappearing.
+        """
+
+        class FakeProvider(ServerInventoryProvider):
+            provider_type = "REDFISH_STANDALONE"
+
+            async def health_check(self) -> None:
+                return None
+
+            async def _list_servers(self) -> Any:
+                yield ProviderServer(
+                    external_id="redfish://bmc-1/redfish/v1/Systems/1",
+                    vendor="dell",
+                    name="standalone-01",
+                    nics=(
+                        ProviderNic(
+                            name="NIC.Integrated.1-1-1",
+                            mac="aa:bb:cc:dd:ee:01",
+                            speed_mbps=25000,
+                            link_state="UP",
+                            location="NIC.Integrated.1-1-1",
+                        ),
+                        ProviderNic(
+                            name="NIC.Integrated.1-2-1",
+                            mac="aa:bb:cc:dd:ee:02",
+                            speed_mbps=None,
+                            link_state="UNKNOWN",
+                            location="NIC.Integrated.1-2-1",
+                        ),
+                    ),
+                )
+
+        await _dry_run_one_manager(
+            _manager(),
+            credential_resolver=FakeCredentialResolver(),
+            timeout_seconds=5.0,
+            limit=None,
+            provider_factory=_factory(FakeProvider()),
+        )
+        out = capsys.readouterr().out
+        assert "25 Gbps" in out
+        assert "25000mbps" not in out
+        assert "UNKNOWN  —" in out
 
     async def test_dry_run_respects_limit(self, capsys: Any) -> None:
         class FakeProvider(ServerInventoryProvider):

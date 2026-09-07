@@ -770,6 +770,24 @@ def _format_disk_size(capacity_bytes: int) -> str:
     return f"{capacity_bytes / 1000**3:.1f} GB"
 
 
+def _format_speed(speed_mbps: int) -> str:
+    """
+    Render a NIC's link speed for the CLI dry-run print.
+
+    Args:
+        speed_mbps (int): The reported speed, in Mbps
+            (`ProviderNic.speed_mbps`).
+
+    Returns:
+        str: e.g. `"100 Mbps"` below 1000 Mbps, `"25 Gbps"` at or above
+            it — `:g` drops a trailing `.0` (`1000` -> `"1 Gbps"`) but
+            keeps a real fraction (`2500` -> `"2.5 Gbps"`).
+    """
+    if speed_mbps >= 1000:
+        return f"{speed_mbps / 1000:g} Gbps"
+    return f"{speed_mbps} Mbps"
+
+
 def _format_duration(seconds: float) -> str:
     """
     Render a run's wall-clock duration for the CLI summary line.
@@ -934,11 +952,16 @@ async def _dry_run_one_manager(
                 # the Dell collector that delegates to it. The flat `nic macs` line
                 # above is all a provider without it has.
                 for nic in ps.nics:
-                    speed = f"  {nic.speed_mbps}mbps" if nic.speed_mbps else ""
+                    # `is not None`, not truthiness: a BMC that reports a
+                    # real `0` (an explicitly-down link some firmware
+                    # reports that way) is a read, not an absence, and
+                    # dashes the same way every other unread field here
+                    # does rather than disappearing silently.
+                    speed = _format_speed(nic.speed_mbps) if nic.speed_mbps is not None else "—"
                     location = f"  [{nic.location}]" if nic.location else ""
                     print(
                         f"        nic {nic.name}{location}  mac={nic.mac or '—'}"
-                        f"  {nic.link_state}{speed}"
+                        f"  {nic.link_state}  {speed}"
                     )
                 for drive in ps.storage_drives or ():
                     capacity_bytes = drive.get("capacity_bytes")
@@ -1007,7 +1030,17 @@ async def _dry_run_one_manager(
             f"\n{manager.name}: {count} server(s) reported. Nothing was written. "
             f"(took {_format_duration(duration)})"
         )
-        logger.info("collector.run_complete", dry_run=True, fetched=count, seconds=duration)
+        # `seconds` stays a raw float — a dashboard graphs it, and a
+        # formatted string would break that. `took` is the same duration
+        # a second time, formatted, for whoever is scanning the log by
+        # eye rather than piping it into a metrics pipeline.
+        logger.info(
+            "collector.run_complete",
+            dry_run=True,
+            fetched=count,
+            seconds=duration,
+            took=_format_duration(duration),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1227,7 +1260,12 @@ async def _run(
                     f"manager={manager.name} FAILED (see logs)"
                     f" took={_format_duration(run_duration)}"
                 )
-                logger.info("collector.run_complete", dry_run=False, seconds=run_duration)
+                logger.info(
+                    "collector.run_complete",
+                    dry_run=False,
+                    seconds=run_duration,
+                    took=_format_duration(run_duration),
+                )
                 return 1
 
             summary = outcome.summary
@@ -1244,6 +1282,7 @@ async def _run(
                 updated=summary.updated,
                 errors=summary.errors,
                 seconds=run_duration,
+                took=_format_duration(run_duration),
             )
             if outcome.collection_errors or summary.errors:
                 # Exit 3, not 0: some servers were written, but this run did
