@@ -212,16 +212,17 @@ class Settings(BaseSettings):
     # collector that silently sees a fraction of the estate.
     oneview_page_size: int = 256
 
-    # Power supplies are the one thing OneView will not hand over in the
-    # bulk `expand=all` sweep, so collecting them costs one call per
-    # server — the difference between a ~15-request run and a ~2500-one.
-    # On by default anyway: no provider has ever populated
-    # `ProviderServer.psus`, while the health engine has carried
-    # `power.psu_count`/`power.failed_psu_count` the whole time, and
-    # OneView reports a PSU's state precisely enough to feed them
-    # (`Failed`/`Degraded`/`ACPowerLost`). Turn it off for an appliance
-    # that struggles with the fan-out; every server's `psus` then reads
-    # as unread and ingest carries the stored value forward.
+    # Power supplies are collected the cheap way first — many servers'
+    # `expand=all` response already carries them (confirmed on a live
+    # appliance 2026-09-07: 688 of 821), and only the rest cost a
+    # per-server call. On by default anyway: no provider had ever
+    # populated `ProviderServer.psus` before OneView shipped, while the
+    # health engine has carried `power.psu_count`/`power.failed_psu_count`
+    # the whole time, and OneView reports a PSU's state precisely enough
+    # to feed them (`Failed`/`Degraded`/`ACPowerLost`). Turn it off for an
+    # appliance that struggles with the fan-out; every server whose
+    # `expand=all` didn't already cover it then reads `psus` as unread and
+    # ingest carries the stored value forward.
     oneview_collect_psus: bool = True
 
     # How many of those per-server calls run at once. HPE documents no
@@ -230,6 +231,14 @@ class Settings(BaseSettings):
     # ADR-0016's "embedded management hardware degrades when polled"
     # warning applies to the appliance too.
     oneview_psu_concurrency: int = 8
+
+    # Same shape as `oneview_collect_psus`, for `/processors` instead of
+    # `/powerSupplies` — the only source `cpu_threads` has, since
+    # `server-hardware`'s own fields carry `processorCount`/
+    # `processorCoreCount` but no thread count. Also tried the cheap way
+    # first via `expand=all` before falling back to a per-server call.
+    oneview_collect_cpu_threads: bool = True
+    oneview_cpu_threads_concurrency: int = 8
 
     ome_ip: str = ""
     ome_username: str = ""

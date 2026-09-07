@@ -93,6 +93,7 @@ def _appliance(
     hardware: list[dict[str, Any]],
     templates: list[dict[str, Any]] | None = None,
     power_supplies: httpx.Response | None = None,
+    processors: httpx.Response | None = None,
     fail: bool = False,
     seen: list[httpx.Request] | None = None,
 ) -> Callable[[httpx.Request], httpx.Response]:
@@ -105,6 +106,8 @@ def _appliance(
         templates (list[dict[str, Any]] | None): Its profile templates.
         power_supplies (httpx.Response | None): What every
             `/powerSupplies` call answers. `None` answers 404.
+        processors (httpx.Response | None): What every `/processors` call
+            answers. `None` answers 404.
         fail (bool): When true, every request is refused at the socket.
         seen (list[httpx.Request] | None): Collects every request made.
 
@@ -126,6 +129,8 @@ def _appliance(
             return httpx.Response(200, json={"sessionID": "token"})
         if path.endswith("/powerSupplies"):
             return power_supplies or httpx.Response(404, json={})
+        if path.endswith("/processors"):
+            return processors or httpx.Response(404, json={})
         members = {
             "/rest/server-profiles": profiles,
             "/rest/server-profile-templates": templates or [],
@@ -177,6 +182,30 @@ def _psu_response(state: str = "Ok") -> httpx.Response:
     )
 
 
+def _processors_response(*totals: int) -> httpx.Response:
+    """
+    A `/processors` subresource envelope, one socket per given total.
+
+    Args:
+        *totals: Each socket's `TotalThreads`.
+
+    Returns:
+        httpx.Response: A 200 carrying one row per socket.
+    """
+    return httpx.Response(
+        200,
+        json={
+            "collectionState": "Collected",
+            "data": {
+                "Members": [
+                    {"Id": str(i), "TotalCores": total // 2, "TotalThreads": total}
+                    for i, total in enumerate(totals)
+                ]
+            },
+        },
+    )
+
+
 def _provider(handler: Callable[[httpx.Request], httpx.Response], **kwargs: Any) -> OneViewProvider:
     """
     A provider whose client is wired to a scripted transport.
@@ -198,6 +227,7 @@ def _provider(handler: Callable[[httpx.Request], httpx.Response], **kwargs: Any)
         # Off unless a test is exercising it, so the cheap path is what
         # every other test measures.
         "collect_psus": False,
+        "collect_cpu_threads": False,
         "client_factory": lambda: OneViewClient(
             endpoint=_ENDPOINT,
             username="collector",
@@ -650,6 +680,200 @@ class TestPowerSupplies:
             await _collect(provider)
 
         source = next(e for e in events if e["event"] == "oneview.power_supply_source")
+        assert source["from_expand"] == 0
+        assert source["per_server_calls"] == 1
+
+
+class TestProcessors:
+    """Same shape as `TestPowerSupplies` — `/processors` is the only
+    source `cpu_threads` has, since `server-hardware`'s own fields carry
+    `processorCount`/`processorCoreCount` but no thread count.
+    """
+
+    async def test_the_per_server_call_populates_cpu_threads(self) -> None:
+        provider = _provider(
+            _appliance(
+                profiles=[_PROFILE_A],
+                hardware=[_hardware(_HARDWARE_A, profile_uri="/rest/server-profiles/a")],
+                processors=_processors_response(52, 52),
+            ),
+            collect_cpu_threads=True,
+        )
+
+        servers = await _collect(provider)
+
+        assert servers[0].cpu_threads == 104
+
+    async def test_switching_it_off_makes_no_per_server_call_at_all(self) -> None:
+        """`INVENTORY_ONEVIEW_COLLECT_CPU_THREADS` is the same trade
+        `INVENTORY_ONEVIEW_COLLECT_PSUS` makes for power supplies.
+        """
+        seen: list[httpx.Request] = []
+        provider = _provider(
+            _appliance(
+                profiles=[_PROFILE_A],
+                hardware=[_hardware(_HARDWARE_A, profile_uri="/rest/server-profiles/a")],
+                processors=_processors_response(52, 52),
+                seen=seen,
+            ),
+            collect_cpu_threads=False,
+        )
+
+        servers = await _collect(provider)
+
+        assert not [r for r in seen if r.url.path.endswith("/processors")]
+        assert servers[0].cpu_threads is None
+
+    async def test_a_processors_fetch_that_raises_does_not_abort_the_appliance(self) -> None:
+        """One malformed `/processors` response must not cost every
+        other server its thread count, or the run itself — same
+        reasoning as `TestPowerSupplies`'s equivalent test.
+        """
+        hardware_ok = _hardware(_HARDWARE_A, profile_uri="/rest/server-profiles/a")
+        hardware_bad = _hardware(_HARDWARE_B, profile_uri="/rest/server-profiles/b")
+        appliance = _appliance(
+            profiles=[_PROFILE_A, _PROFILE_B],
+            hardware=[hardware_ok, hardware_bad],
+            processors=_processors_response(52, 52),
+        )
+
+        def client_factory() -> OneViewClient:
+            client = OneViewClient(
+                endpoint=_ENDPOINT,
+                username="collector",
+                password="secret",
+                timeout_seconds=5.0,
+                transport=httpx.MockTransport(appliance),
+            )
+            real_get_json = client.get_json
+
+            async def flaky_get_json(path: str, **kwargs: Any) -> Any:
+                if path == f"{_HARDWARE_B}/processors":
+                    return None  # violates the real client's own return type
+                return await real_get_json(path, **kwargs)
+
+            client.get_json = flaky_get_json  # ty: ignore[invalid-assignment]
+            return client
+
+        provider = _provider(appliance, collect_cpu_threads=True, client_factory=client_factory)
+
+        with capture_logs() as events:
+            servers = await _collect(provider)
+
+        by_uri = {s.external_id: s for s in servers}
+        assert by_uri[_HARDWARE_A].cpu_threads == 104
+        assert by_uri[_HARDWARE_B].cpu_threads is None
+        unreadable = [e for e in events if e["event"] == "oneview.processors_unreadable"]
+        assert unreadable and unreadable[0]["servers"] == 1
+
+    async def test_only_matched_servers_cost_a_call(self) -> None:
+        """The name filter runs before the per-server pass, so a
+        datacenter of non-`ocp` HPE servers costs nothing.
+        """
+        seen: list[httpx.Request] = []
+        provider = _provider(
+            _appliance(
+                profiles=[_PROFILE_A, {"uri": "/rest/server-profiles/x", "name": "esx-host-9"}],
+                hardware=[
+                    _hardware(_HARDWARE_A, profile_uri="/rest/server-profiles/a"),
+                    _hardware("/rest/server-hardware/x", profile_uri="/rest/server-profiles/x"),
+                ],
+                processors=_processors_response(52, 52),
+                seen=seen,
+            ),
+            collect_cpu_threads=True,
+            name_pattern="^ocp",
+        )
+
+        await _collect(provider)
+
+        assert [r.url.path for r in seen if r.url.path.endswith("/processors")] == [
+            f"{_HARDWARE_A}/processors"
+        ]
+
+    async def test_an_expanded_payload_that_carries_them_costs_nothing(self) -> None:
+        """`/processors` has no `SubResourceName` value either, so
+        whether `expand=all` includes it is undetermined in HPE's docs.
+        If it does, the per-server call must not happen anyway.
+        """
+        seen: list[httpx.Request] = []
+        member = _hardware(_HARDWARE_A, profile_uri="/rest/server-profiles/a")
+        member["subResources"]["Processors"] = {
+            "name": "Processors",
+            "collectionState": "Collected",
+            "data": [
+                {"Id": "0", "TotalCores": 26, "TotalThreads": 52},
+                {"Id": "1", "TotalCores": 26, "TotalThreads": 52},
+            ],
+        }
+        provider = _provider(
+            _appliance(profiles=[_PROFILE_A], hardware=[member], seen=seen),
+            collect_cpu_threads=True,
+        )
+
+        with capture_logs() as events:
+            servers = await _collect(provider)
+
+        assert not [r for r in seen if r.url.path.endswith("/processors")]
+        assert servers[0].cpu_threads == 104
+        source = next(e for e in events if e["event"] == "oneview.processor_source")
+        assert source["from_expand"] == 1
+        assert source["per_server_calls"] == 0
+
+    async def test_a_failed_call_reports_unread_and_never_aborts_the_run(self) -> None:
+        """A processors sub-fetch that 404s must not erase a server's
+        stored thread count, and must not lose the rest of the fleet.
+        """
+        provider = _provider(
+            _appliance(
+                profiles=[_PROFILE_A, _PROFILE_B],
+                hardware=[
+                    _hardware(_HARDWARE_A, profile_uri="/rest/server-profiles/a"),
+                    _hardware(_HARDWARE_B, profile_uri="/rest/server-profiles/b"),
+                ],
+                processors=httpx.Response(404, json={}),
+            ),
+            collect_cpu_threads=True,
+        )
+
+        with capture_logs() as events:
+            servers = await _collect(provider)
+
+        assert len(servers) == 2
+        assert all(s.cpu_threads is None for s in servers)
+        failed = next(e for e in events if e["event"] == "oneview.processors_unreadable")
+        assert failed["servers"] == 2
+
+    async def test_a_non_collected_state_is_unread_not_zero(self) -> None:
+        provider = _provider(
+            _appliance(
+                profiles=[_PROFILE_A],
+                hardware=[_hardware(_HARDWARE_A, profile_uri="/rest/server-profiles/a")],
+                processors=httpx.Response(
+                    200, json={"collectionState": "InsufficientFirmware", "data": None}
+                ),
+            ),
+            collect_cpu_threads=True,
+        )
+
+        servers = await _collect(provider)
+
+        assert servers[0].cpu_threads is None
+
+    async def test_the_chosen_route_is_logged_with_its_cost(self) -> None:
+        provider = _provider(
+            _appliance(
+                profiles=[_PROFILE_A],
+                hardware=[_hardware(_HARDWARE_A, profile_uri="/rest/server-profiles/a")],
+                processors=_processors_response(52, 52),
+            ),
+            collect_cpu_threads=True,
+        )
+
+        with capture_logs() as events:
+            await _collect(provider)
+
+        source = next(e for e in events if e["event"] == "oneview.processor_source")
         assert source["from_expand"] == 0
         assert source["per_server_calls"] == 1
 

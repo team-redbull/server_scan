@@ -13,14 +13,20 @@ docs/adr/0022-oneview-only-hpe-collector.md rather than worked around.
 summary, and `expand=all` folds each server's DIMMs, drives and PCI
 devices into that same response. So three paginated calls — profiles,
 profile templates, expanded hardware — cover everything except power
-supplies.
+supplies and, for some servers, processors.
 
-Power supplies are the one genuinely per-server call, and they are worth
-it: `IngestService` has never had a provider populate `psus`, while the
-health engine has carried `power.psu_count` and `power.failed_psu_count`
-the whole time. That pass is bounded by a semaphore and can be switched
-off (`INVENTORY_ONEVIEW_COLLECT_PSUS`), because it is the difference
-between ~15 requests and ~2500.
+Power supplies and processors are the two potentially-per-server calls,
+each tried the cheap way first (many servers' `expand=all` response
+already carries both — confirmed on a live appliance 2026-09-07). PSUs
+are worth it because `IngestService` had no provider populating `psus`
+before OneView shipped, while the health engine had carried
+`power.psu_count`/`power.failed_psu_count` the whole time. Processors are
+the only source for `cpu_threads` — `server-hardware`'s own fields carry
+`processorCount`/`processorCoreCount` but no thread count. Each fan-out
+is bounded by its own semaphore and can be switched off independently
+(`INVENTORY_ONEVIEW_COLLECT_PSUS`, `INVENTORY_ONEVIEW_COLLECT_CPU_THREADS`),
+because either one is the difference between ~15 requests and ~2500 for
+whatever fraction of the estate its bulk sweep didn't already cover.
 
 One appliance, one endpoint, exactly like every other vendor here — see
 docs/adr/0012. The 2500-server-per-appliance ceiling is documented in
@@ -49,6 +55,7 @@ from app.infrastructure.providers.oneview.client import (
 from app.infrastructure.providers.oneview.mapping import (
     DEVICES,
     POWER_SUPPLIES,
+    PROCESSORS,
     OneViewProfile,
     ilo_generation,
     profile_from,
@@ -85,6 +92,8 @@ class OneViewProvider(ServerInventoryProvider):
         page_size: int = DEFAULT_PAGE_SIZE,
         collect_psus: bool = True,
         psu_concurrency: int = 8,
+        collect_cpu_threads: bool = True,
+        cpu_threads_concurrency: int = 8,
         api_version: int = 0,
         verify_tls: bool = False,
         client_factory: Callable[[], OneViewClient] | None = None,
@@ -113,6 +122,15 @@ class OneViewProvider(ServerInventoryProvider):
                 back into a ~15-request one, at the cost of every
                 server's `psus` being unread.
             psu_concurrency (int): How many of those calls run at once.
+            collect_cpu_threads (bool): Whether to make the per-server
+                `/processors` call for servers the expanded payload did
+                not already cover. This is the only source OneView has
+                for `cpu_threads` — `server-hardware`'s own fields carry
+                no thread count. Off leaves every such server's
+                `cpu_threads` unread, the same trade `collect_psus` makes
+                for `psus`.
+            cpu_threads_concurrency (int): How many of those calls run at
+                once.
             api_version (int): `X-Api-Version` override; `0` discovers
                 and clamps it.
             verify_tls (bool): Whether to verify the appliance's TLS
@@ -135,6 +153,8 @@ class OneViewProvider(ServerInventoryProvider):
         self._page_size = page_size
         self._collect_psus = collect_psus
         self._psu_concurrency = max(1, psu_concurrency)
+        self._collect_cpu_threads = collect_cpu_threads
+        self._cpu_threads_concurrency = max(1, cpu_threads_concurrency)
         self._api_version = api_version
         self._verify_tls = verify_tls
         self._client_factory = client_factory or self._new_client
@@ -195,6 +215,7 @@ class OneViewProvider(ServerInventoryProvider):
             )
             matched = self._matched(profiles=profiles, templates=templates, hardware=hardware)
             power_supplies = await self._power_supplies(client, [member for member, _ in matched])
+            processors = await self._processors(client, [member for member, _ in matched])
             # A truncated profiles/templates/hardware page means real
             # servers were never even listed — the same failure class as
             # an unreachable UCS domain or Redfish host, unlike a
@@ -216,6 +237,7 @@ class OneViewProvider(ServerInventoryProvider):
                 profile=profile,
                 manager_id=self._manager.id,
                 power_supplies=power_supplies.get(str(member.get("uri") or "")),
+                processors=processors.get(str(member.get("uri") or "")),
             )
 
     def _matched(
@@ -400,6 +422,102 @@ class OneViewProvider(ServerInventoryProvider):
             # read reports `psus=None`, which ingest carries forward.
             logger.warning(
                 "oneview.power_supplies_unreadable",
+                endpoint=self._endpoint,
+                servers=failures,
+                of=len(to_fetch),
+            )
+        return collected
+
+    async def _processors(
+        self, client: OneViewClient, hardware: list[dict[str, Any]]
+    ) -> dict[str, list[dict[str, Any]]]:
+        """
+        Collect each matched server's processors, the cheap way first.
+
+        Same shape as `_power_supplies` — `/processors` has no matching
+        `SubResourceName` value either, so whether `expand=all` already
+        included it is undetermined; confirmed present alongside
+        `PowerSupplies` in `subResources` on a live appliance 2026-09-07.
+        Any server whose expanded payload carried it costs nothing; only
+        the rest are fetched, under a semaphore, and only when
+        `INVENTORY_ONEVIEW_COLLECT_CPU_THREADS` is on. This is the only
+        source `cpu_threads` has — `server-hardware`'s own fields carry
+        no thread count.
+
+        Args:
+            client (OneViewClient): The logged-in client.
+            hardware (list[dict[str, Any]]): The matched members.
+
+        Returns:
+            dict[str, list[dict[str, Any]]]: Server-hardware URI -> its
+                `Processors` rows. A URI absent from this map is reported
+                as unread, never as zero threads.
+        """
+        collected: dict[str, list[dict[str, Any]]] = {}
+        to_fetch: list[str] = []
+        for member in hardware:
+            uri = str(member.get("uri") or "")
+            rows = subresource_data(member, PROCESSORS)
+            if rows is None:
+                to_fetch.append(uri)
+            else:
+                collected[uri] = rows
+
+        logger.info(
+            "oneview.processor_source",
+            endpoint=self._endpoint,
+            from_expand=len(collected),
+            per_server_calls=len(to_fetch) if self._collect_cpu_threads else 0,
+            collect_cpu_threads=self._collect_cpu_threads,
+        )
+        if not self._collect_cpu_threads or not to_fetch:
+            return collected
+
+        semaphore = asyncio.Semaphore(self._cpu_threads_concurrency)
+
+        async def fetch(uri: str) -> tuple[str, list[dict[str, Any]] | None]:
+            """
+            Fetch one server's processors, containing its failure.
+
+            Args:
+                uri (str): The server-hardware URI.
+
+            Returns:
+                tuple[str, list[dict[str, Any]] | None]: The URI and its
+                    rows, or `None` if the call failed or reported a
+                    state other than `Collected`.
+            """
+            try:
+                async with semaphore:
+                    body = await client.get_json(f"{uri}/processors")
+                data = body.get("data")
+                rows = data.get("Members") if isinstance(data, dict) else data
+                if body.get("collectionState") != "Collected" or not isinstance(rows, list):
+                    return uri, None
+                return uri, [row for row in rows if isinstance(row, dict)]
+            except Exception:
+                # Same reasoning as `_power_supplies.fetch`: this
+                # function's whole job is to turn one server's failure
+                # into `None`.
+                return uri, None
+
+        failures = 0
+        results = await asyncio.gather(*(fetch(uri) for uri in to_fetch), return_exceptions=True)
+        for result in results:
+            if isinstance(result, BaseException):
+                failures += 1
+                continue
+            uri, rows = result
+            if rows is None:
+                failures += 1
+            else:
+                collected[uri] = rows
+        if failures:
+            # Aggregated, and not fatal: a server whose processors could
+            # not be read reports `cpu_threads=None`, which ingest
+            # carries forward.
+            logger.warning(
+                "oneview.processors_unreadable",
                 endpoint=self._endpoint,
                 servers=failures,
                 of=len(to_fetch),

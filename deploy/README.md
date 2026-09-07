@@ -103,11 +103,15 @@ Central, read through that domain's own UCS Manager. `OPENMANAGE`,
 `INTERSIGHT`, `ONEVIEW` and `REDFISH_STANDALONE` each have a CronJob of
 their own, all shipped disabled.
 
-`ONEVIEW` is one appliance like the rest, and it is the only collector
-whose power-supply collection costs anything: every other one reads PSUs
-out of a response it already fetches, while OneView needs one request per
-server for them. `collectors.oneview.collectPsus: false` turns that off
-and gives up HPE power health; the rest of the sweep is three bulk calls.
+`ONEVIEW` is one appliance like the rest. Power supplies and CPU thread
+counts are its two potentially-per-server costs — each tried the cheap
+way first (most servers' bulk sweep already carries both), falling back
+to one request per server for whatever it doesn't. Every other collector
+reads both out of a response it already fetches for other reasons;
+OneView is the only one where either can cost something extra.
+`collectors.oneview.collectPsus: false` and
+`collectors.oneview.collectCpuThreads: false` turn each off
+independently — the rest of the sweep is three bulk calls either way.
 
 Note that Intersight's three fields mean something different: it signs
 requests with an API key rather than logging in, so `username` is the API

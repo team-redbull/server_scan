@@ -305,13 +305,21 @@ collectors:
     username: ""
     password: ""
 
-    # Power supplies are the only thing OneView will not return in the
-    # bulk sweep, so they cost one request per server — every other
-    # collector reads PSUs out of a response it already fetches. On by
+    # Power supplies are tried the cheap way first — many servers'
+    # bulk-sweep response already carries them (confirmed live 2026-09-07:
+    # 688 of 821) — and only the rest cost a request per server. On by
     # default, because turning it off makes HPE the one vendor the health
-    # engine's power.psu_count / power.failed_psu_count cannot see.
+    # engine's power.psu_count / power.failed_psu_count cannot see for the
+    # servers not already covered by the sweep.
     collectPsus: true
     psuConcurrency: 8
+
+    # Same shape as collectPsus, for /processors instead of
+    # /powerSupplies — the only source cpu_threads has, since
+    # server-hardware's own fields carry processorCount/processorCoreCount
+    # but no thread count.
+    collectCpuThreads: true
+    cpuThreadsConcurrency: 8
 
     # `X-Api-Version`. 0 discovers it per appliance and clamps it to the
     # newest version this collector was written against (8000 / OneView

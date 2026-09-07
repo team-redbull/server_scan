@@ -387,9 +387,15 @@ never zero. Read `docs/adr/0022-oneview-only-hpe-collector.md` and
 The cost is three bulk calls per appliance — `GET /rest/server-hardware`
 returns the *complete* object per member rather than a summary, and
 `expand=all` folds in each server's DIMMs, drives, GPUs and PCI devices.
-The one exception is power supplies, which cost a request per server
-(`INVENTORY_ONEVIEW_COLLECT_PSUS`, on by default,
-`INVENTORY_ONEVIEW_PSU_CONCURRENCY` bounding the fan-out).
+Power supplies and, since 2026-09-07, CPU thread counts are the two
+potentially-per-server calls — each tried the cheap way first (most
+servers' `expand=all` response already carries both), falling back to a
+bounded per-server call and independently switchable off
+(`INVENTORY_ONEVIEW_COLLECT_PSUS`/`_PSU_CONCURRENCY`,
+`INVENTORY_ONEVIEW_COLLECT_CPU_THREADS`/`_CPU_THREADS_CONCURRENCY`).
+`/processors` is OneView's only source for `cpu_threads` —
+`server-hardware`'s own fields carry no thread count, unlike every other
+collector, which gets one for free on data already fetched.
 
 **Validated against a live appliance on 2026-09-07** (821 servers, 685
 profiles, iLO 5 and iLO 6 both present) — `uv run python -m

@@ -238,7 +238,7 @@ split one machine into two documents.
 |---|---|---|
 | `cpu_sockets` | `processorCount` | "Number of processors installed" |
 | `cpu_cores` | `processorCount * processorCoreCount` | **see below** |
-| `cpu_threads` | — | not reported anywhere; `None` |
+| `cpu_threads` | `sum(Processors[].TotalThreads)` | **see "CPU threads" below** |
 | `cpu_model` | `processorType` | |
 | `memory_total_bytes` | `memoryMb * 1048576` | |
 
@@ -254,20 +254,42 @@ yields `None`, never a partial product.
 1,048,576 bytes)". The factor is spelled out inline. Contrast ADR-0017's
 `TotalMemory`, which carries no documented unit anywhere.
 
-**No thread count exists** on `server-hardware` — there is no
-`logicalProcessorCount`, `threadCount` or hyperthreading flag anywhere in
-`ServerHardwareV12`. The only source is `/processors`' `TotalThreads`,
-one call per server, which this collector does not make. `None` is
-reported and ingest carries the stored value forward. **`2 x cores` is
-the heuristic ADR-0020 deleted from the Dell collector and must not
-reappear here.**
+### CPU threads
 
-**`/processors` is the cross-check on the multiplication, and it is the
-probe's headline.** Each socket reports its own `TotalCores`, so
-`sum(TotalCores)` measures the same quantity `processorCount *
-processorCoreCount` computes. If they disagree, the core count is wrong
-for the whole fleet, silently — `tools/verify_oneview.py` prints the
-verdict twice, once at the top and once in its closing summary.
+**No thread count exists on `server-hardware` itself** — there is no
+`logicalProcessorCount`, `threadCount` or hyperthreading flag anywhere in
+`ServerHardwareV12`. The only source is `/processors`' per-socket
+`TotalThreads` — the same endpoint `tools/verify_oneview.py`'s
+core-count cross-check already calls.
+
+**Read for real, added 2026-09-07**, after the probe confirmed the
+per-socket data exists and `Processors` showed up in `subResources`
+alongside `PowerSupplies` on a live appliance. `cpu_threads_from` sums
+every socket's `TotalThreads` (`mapping.py`), and `OneViewProvider`
+fetches `Processors` the same two-tier way as power supplies: most
+servers' `expand=all` response already carries it for free, and only the
+rest cost a per-server `GET {uri}/processors`, bounded by a semaphore and
+switchable off entirely (`INVENTORY_ONEVIEW_COLLECT_CPU_THREADS`,
+`INVENTORY_ONEVIEW_CPU_THREADS_CONCURRENCY` — same shape as
+`_COLLECT_PSUS`/`_PSU_CONCURRENCY`). Every other collector (Redfish,
+UCS Manager/Central, Intersight) gets a real thread count for free, as a
+field on data already being fetched for other reasons; OneView is the
+only one where this genuinely costs a second per-server call, which is
+why it stayed `None` until it did.
+
+An absent socket (`Status.State == "Absent"`) is not counted, matching
+every other absence rule in this mapping. A read with no numeric
+`TotalThreads` anywhere reports `cpu_threads: None`, never zero —
+**`2 x cores` is the heuristic ADR-0020 deleted from the Dell collector
+and must not reappear here as a fallback for a failed read.**
+
+**`/processors` is also the cross-check on the core-count multiplication,
+and it is the probe's headline.** Each socket reports its own
+`TotalCores`, so `sum(TotalCores)` measures the same quantity
+`processorCount * processorCoreCount` computes. If they disagree, the
+core count is wrong for the whole fleet, silently — `tools/verify_oneview.py`
+prints the verdict twice, once at the top and once in its closing
+summary. Confirmed matching on all 5 sampled servers, 2026-09-07.
 
 ## Subresources and `collectionState`
 

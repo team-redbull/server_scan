@@ -8,13 +8,16 @@ calls (server profiles, profile templates, and one `expand=all` sweep of
 server hardware) name every server, resolve its template, and carry its
 drive and PCI inventory inline.
 
-The one per-server call is `/powerSupplies`, gated by `collectPsus`: it
-is the difference between roughly 15 requests and roughly one per server,
-and it is what finally populates the health engine's power metrics.
+Two calls are potentially per-server: `/powerSupplies` (gated by
+`collectPsus`, populating the health engine's power metrics) and
+`/processors` (gated by `collectCpuThreads`, the only source for
+`cpu_threads`). Each is tried the cheap way first — many servers'
+`expand=all` response already carries both — so either one is the
+difference between roughly 15 requests and roughly one per server only
+for whatever fraction the sweep didn't already cover.
 
-NEVER VALIDATED AGAINST LIVE HPE HARDWARE. Run
-`python3 -m tools.verify_oneview` against the real appliance before
-scheduling this. See docs/adr/0022-oneview-only-hpe-collector.md and
+Validated against a live appliance 2026-09-07 (821 servers) — see
+docs/adr/0022-oneview-only-hpe-collector.md's "Results, 2026-09-07" and
 docs/hpe-collectors.md.
 */ -}}
 {{- if .Values.collectors.oneview.enabled }}
@@ -57,6 +60,10 @@ spec:
                   value: {{ .Values.collectors.oneview.collectPsus | quote }}
                 - name: INVENTORY_ONEVIEW_PSU_CONCURRENCY
                   value: {{ .Values.collectors.oneview.psuConcurrency | quote }}
+                - name: INVENTORY_ONEVIEW_COLLECT_CPU_THREADS
+                  value: {{ .Values.collectors.oneview.collectCpuThreads | quote }}
+                - name: INVENTORY_ONEVIEW_CPU_THREADS_CONCURRENCY
+                  value: {{ .Values.collectors.oneview.cpuThreadsConcurrency | quote }}
                 - name: INVENTORY_ONEVIEW_API_VERSION
                   value: {{ .Values.collectors.oneview.apiVersion | quote }}
                 - name: INVENTORY_ONEVIEW_PAGE_SIZE

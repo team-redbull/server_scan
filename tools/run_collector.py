@@ -359,12 +359,14 @@ def _oneview_provider(
         # Applied to the *profile* name, which is the only place a HPE
         # server's operator-assigned name exists. Still only an
         # efficiency gate; `_NameFilteredProvider` remains authoritative
-        # — but it does decide which servers cost a `/powerSupplies`
-        # call, which is the one per-server cost this collector has.
+        # — but it does decide which servers cost a `/powerSupplies` or
+        # `/processors` call, the two per-server costs this collector has.
         name_pattern=settings.collector_name_pattern,
         page_size=settings.oneview_page_size,
         collect_psus=settings.oneview_collect_psus,
         psu_concurrency=settings.oneview_psu_concurrency,
+        collect_cpu_threads=settings.oneview_collect_cpu_threads,
+        cpu_threads_concurrency=settings.oneview_cpu_threads_concurrency,
         api_version=settings.oneview_api_version,
         verify_tls=settings.oneview_verify_tls,
     )

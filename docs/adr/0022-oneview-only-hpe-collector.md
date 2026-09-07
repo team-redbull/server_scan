@@ -565,3 +565,13 @@ pending its own decision.
   server to zero drives) was found and fixed the same day. The GPU
   questions stay open until a GPU-equipped HPE server is available to
   test against.
+- **`cpu_threads` is read for real now, not hardcoded `None`.** The
+  live-hardware run confirmed `/processors` reports per-socket
+  `TotalThreads` and that `Processors` rides `expand=all`'s bulk sweep
+  for most servers, the same as `PowerSupplies`. `OneViewProvider` now
+  fetches it the same two-tier way — free where the sweep already has
+  it, one bounded per-server call otherwise, switchable off
+  (`INVENTORY_ONEVIEW_COLLECT_CPU_THREADS`). Brings HPE to parity with
+  every other collector, all of which get a real thread count for free
+  as a field on data already being fetched. See `docs/hpe-collectors.md`,
+  "CPU threads".

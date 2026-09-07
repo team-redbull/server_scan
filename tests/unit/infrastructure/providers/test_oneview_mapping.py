@@ -15,6 +15,7 @@ import pytest
 
 from app.domain.enums import Vendor
 from app.infrastructure.providers.oneview.mapping import (
+    cpu_threads_from,
     ilo_generation,
     management_processor_address,
     profile_from,
@@ -705,3 +706,56 @@ class TestPsus:
 
         assert server.psus is not None
         assert server.psus[0]["health"] == "CRITICAL"
+
+
+class TestCpuThreads:
+    """`/processors` is the only source OneView has for a thread count —
+    `server-hardware`'s own fields carry `processorCount`/
+    `processorCoreCount` but nothing per-thread.
+    """
+
+    def test_no_processor_data_is_unread_not_zero(self) -> None:
+        assert _mapped().cpu_threads is None
+
+    def test_threads_sum_across_sockets(self) -> None:
+        rows = [
+            {"Id": "0", "TotalCores": 26, "TotalThreads": 52},
+            {"Id": "1", "TotalCores": 26, "TotalThreads": 52},
+        ]
+
+        assert cpu_threads_from(rows) == 104
+
+    def test_an_absent_socket_is_not_counted(self) -> None:
+        rows = [
+            {"Id": "0", "TotalCores": 26, "TotalThreads": 52},
+            {"Id": "1", "Status": {"State": "Absent"}},
+        ]
+
+        assert cpu_threads_from(rows) == 52
+
+    def test_no_numeric_totalthreads_reports_unread_not_zero(self) -> None:
+        assert cpu_threads_from([{"Id": "0", "TotalCores": 26}]) is None
+
+    def test_a_collected_but_empty_read_reports_unread_not_zero(self) -> None:
+        """An empty `Processors` list is not a real state for a server
+        that has a CPU by construction — this only happens when the
+        subresource genuinely has nothing usable in it, and should read
+        the same as `None` rather than as a confident zero threads.
+        """
+        assert cpu_threads_from([]) is None
+
+    def test_unread_stays_unread(self) -> None:
+        assert cpu_threads_from(None) is None
+
+    def test_processors_reach_the_provider_server(self) -> None:
+        server = server_from(
+            hardware=_hardware(),
+            profile=_profile(),
+            manager_id="mgr_oneview",
+            processors=[
+                {"Id": "0", "TotalCores": 26, "TotalThreads": 52},
+                {"Id": "1", "TotalCores": 26, "TotalThreads": 52},
+            ],
+        )
+
+        assert server.cpu_threads == 104

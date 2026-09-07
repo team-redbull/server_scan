@@ -56,6 +56,15 @@ LOCAL_STORAGE_V2 = "LocalStorageV2"
 # docs/hpe-collectors.md, "Power supplies".
 POWER_SUPPLIES = "PowerSupplies"
 
+# Same undetermined-by-docs situation as `POWER_SUPPLIES`: `/processors`
+# is the only place OneView reports a per-socket `TotalThreads`
+# (`server-hardware`'s own top-level fields carry
+# `processorCount`/`processorCoreCount` only). Confirmed present in
+# `subResources` alongside `PowerSupplies` on a live appliance
+# 2026-09-07, so the same expand-first, per-server-call-as-fallback
+# pattern applies. See docs/hpe-collectors.md, "CPU threads".
+PROCESSORS = "Processors"
+
 # `Oem.Hpe.PowerSupplyStatus.State` -> this platform's health. Mapped
 # rather than flattened to a boolean: OneView distinguishes a PSU that
 # lost AC input from one that is degraded from one that failed outright,
@@ -547,6 +556,32 @@ def psus_from(rows: list[dict[str, Any]] | None) -> tuple[dict[str, object], ...
     return tuple(psus)
 
 
+def cpu_threads_from(rows: list[dict[str, Any]] | None) -> int | None:
+    """
+    Sum every processor's own thread count into a whole-system total.
+
+    `/processors` is the only place OneView reports a per-socket
+    `TotalThreads` — `server-hardware`'s top-level fields carry
+    `processorCount`/`processorCoreCount` only, never a thread count, so
+    `cpu_cores` (computed from those two) has no equivalent source for
+    threads. Mirrors `sum(TotalCores)`, the cross-check
+    `tools/verify_oneview.py` already makes against the same endpoint.
+
+    Args:
+        rows (list[dict[str, Any]] | None): `Processors` entries, or
+            `None` when they could not be read this run.
+
+    Returns:
+        int | None: The whole-system thread count, or `None` when the
+            rows are unread or report no numeric `TotalThreads` at all.
+    """
+    if rows is None:
+        return None
+    threads = [_opt_int(row.get("TotalThreads")) for row in rows if not is_absent(row)]
+    valid = [t for t in threads if t is not None]
+    return sum(valid) if valid else None
+
+
 @dataclass(frozen=True, slots=True)
 class OneViewProfile:
     """
@@ -605,6 +640,7 @@ def server_from(
     profile: OneViewProfile,
     manager_id: str | None,
     power_supplies: list[dict[str, Any]] | None = None,
+    processors: list[dict[str, Any]] | None = None,
 ) -> ProviderServer:
     """
     Map one server-hardware member and its profile onto a `ProviderServer`.
@@ -620,6 +656,11 @@ def server_from(
             `PowerSupplies` rows — from the expanded payload when the
             appliance includes them, otherwise from the per-server
             `/powerSupplies` call. `None` means unread.
+        processors (list[dict[str, Any]] | None): This server's
+            `Processors` rows — from the expanded payload when the
+            appliance includes them, otherwise from the per-server
+            `/processors` call. `None` means unread; the only field this
+            currently feeds is `cpu_threads`.
 
     Returns:
         ProviderServer: The server as this collector sees it. Every
@@ -664,10 +705,12 @@ def server_from(
             if sockets is not None and cores_per_socket is not None
             else None
         ),
-        # OneView reports no thread count on `server-hardware` at all,
-        # and a `2 x cores` guess is exactly the heuristic ADR-0020
-        # deleted. `None` lets ingest carry forward whatever is stored.
-        cpu_threads=None,
+        # `server-hardware`'s top-level fields carry no thread count at
+        # all — only `/processors` does (see `cpu_threads_from`). A
+        # `2 x cores` guess is exactly the heuristic ADR-0020 deleted, so
+        # this stays `None` (ingest carries forward the stored value)
+        # whenever `processors` itself is unread.
+        cpu_threads=cpu_threads_from(processors),
         cpu_model=_opt_str(hardware.get("processorType")),
         # "Amount of memory installed on this server hardware in MiB
         # (1 MiB = 1,048,576 bytes)" — HPE documents the factor inline,
