@@ -909,6 +909,72 @@ class TestNameFilteredProviderCollectionErrors:
         assert wrapped.collection_errors == ()
 
 
+class TestEndpointlessAndUnfilteredTypes:
+    """`REDFISH_STANDALONE` is the one manager type with no configured
+    endpoint (`_ENDPOINTLESS_TYPES`) and the one exempt from
+    `INVENTORY_COLLECTOR_NAME_PATTERN` (`_UNFILTERED_TYPES`). Both lines
+    are read inside `_run` itself, ahead of `_build_provider`, and neither
+    had a test naming the type: flipping either one silently ingests zero
+    standalone BMCs (an empty inventory reads as a healthy, small run,
+    exit 0) or demands `INVENTORY_REDFISH_STANDALONE_IP`, a variable that
+    deliberately does not exist. See C4 / T3 in `docs/notes/
+    2026-09-audit.md`.
+    """
+
+    class _RaisingResolver:
+        """Stands in for `EnvConnectionResolver` — `.resolve()` raises, so
+        a call proves `_ENDPOINTLESS_TYPES` was not honoured, rather than
+        silently succeeding against whatever the ambient environment
+        happens to configure.
+        """
+
+        def __init__(self, _settings: Any) -> None:
+            pass
+
+        def resolve(self, manager_type: ManagerType) -> ManagerConnection:
+            raise AssertionError(f"resolve() must not be called for {manager_type}")
+
+    async def test_redfish_standalone_never_resolves_an_endpoint(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: Any
+    ) -> None:
+        settings = _settings(redfish_inventory_file="inventory/standalone.yaml")
+        monkeypatch.setattr(run_collector, "EnvConnectionResolver", self._RaisingResolver)
+        monkeypatch.setattr(run_collector, "_build_provider", _factory(TestNameFilter._Fake()))
+        monkeypatch.setattr(run_collector, "get_settings", lambda: settings)
+
+        code = await _run(manager_type=ManagerType.REDFISH_STANDALONE, dry_run=True)
+
+        assert code == 0
+        # The `Manager` projection's endpoint is the inventory file path —
+        # not an `_IP` variable `EnvConnectionResolver.resolve` would have
+        # demanded (and, per `_RaisingResolver`, would have crashed on).
+        assert "inventory/standalone.yaml" in capsys.readouterr().out
+
+    async def test_redfish_standalone_ignores_the_name_pattern(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: Any
+    ) -> None:
+        settings = _settings(
+            redfish_inventory_file="inventory/standalone.yaml",
+            collector_name_pattern="^ocp",
+        )
+        monkeypatch.setattr(
+            run_collector,
+            "_build_provider",
+            _factory(TestNameFilter._Fake("ocp4-prod-tlv-infra-01", "vmhost-two-14")),
+        )
+        monkeypatch.setattr(run_collector, "get_settings", lambda: settings)
+
+        code = await _run(manager_type=ManagerType.REDFISH_STANDALONE, dry_run=True)
+
+        assert code == 0
+        out = capsys.readouterr().out
+        # A standalone inventory file is already the filter, and a far more
+        # precise one — applying `^ocp` on top of it would discard every
+        # host the operator listed. Both names must survive.
+        assert "ocp4-prod-tlv-infra-01" in out
+        assert "vmhost-two-14" in out
+
+
 class FakeMongo:
     """Stands in for `MongoClientHolder` so the exit-code decision can be
     tested without a database. Only exercised by `TestRunExitCodes` below,
@@ -1078,6 +1144,38 @@ class TestDryRunNeverTouchesMongo:
         monkeypatch.setattr(run_collector, "get_settings", _central_settings_for_run)
 
         assert await _run(manager_type=ManagerType.UCS_CENTRAL, dry_run=True) == 0
+
+
+class TestDryRunExitCodes:
+    """`--dry-run` has its own exit-code branch, separate from
+    `TestRunExitCodes`'s 0/1/2/3 above: 0 on success, 1 on any exception.
+    Nothing previously drove `_run(dry_run=True)` all the way to its
+    returned code — only the printed output and count were asserted — so
+    the failure branch (`_run:1049-1052`) was uncovered.
+    """
+
+    async def test_a_successful_dry_run_exits_zero(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        async def _fake_dry_run(*_args: Any, **_kwargs: Any) -> int:
+            return 3
+
+        monkeypatch.setattr(run_collector, "_dry_run_one_manager", _fake_dry_run)
+        monkeypatch.setattr(run_collector, "get_settings", _central_settings_for_run)
+
+        assert await _run(manager_type=ManagerType.UCS_CENTRAL, dry_run=True) == 0
+
+    async def test_a_failed_dry_run_exits_one(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: Any
+    ) -> None:
+        async def _failing_dry_run(*_args: Any, **_kwargs: Any) -> int:
+            raise RuntimeError("vendor endpoint unreachable")
+
+        monkeypatch.setattr(run_collector, "_dry_run_one_manager", _failing_dry_run)
+        monkeypatch.setattr(run_collector, "get_settings", _central_settings_for_run)
+
+        code = await _run(manager_type=ManagerType.UCS_CENTRAL, dry_run=True)
+
+        assert code == 1
+        assert "FAILED" in capsys.readouterr().out
 
 
 class TestManagerTypeInLogContext:

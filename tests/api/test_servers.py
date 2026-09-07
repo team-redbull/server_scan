@@ -208,6 +208,12 @@ async def test_unknown_filter_returns_400_problem_json(
     assert body["status"] == 400
     assert "request_id" in body
     assert body["instance"] == "/api/v1/servers"
+    # RFC 9457 names `type` and `title` as the two core members alongside
+    # `status`/`detail`/`instance` — asserted here because nothing in the
+    # suite previously did, so dropping either would pass every other test.
+    assert body["type"] == "/problems/unknown-filter"
+    assert body["title"] == "Unknown Filter"
+    assert body["detail"] == "Unknown filter: 'not_a_real_filter'"
 
 
 async def test_unknown_sort_returns_400(

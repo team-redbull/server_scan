@@ -3,23 +3,21 @@
 Companion to `docs/notes/2026-09-audit.md` (findings, with IDs referenced
 here) and the seven `docs/notes/2026-09-research-*.md` files.
 
-**Status: approved 2026-09-06. Phases 1-8 done, committed, and pushed to
+**Status: approved 2026-09-06. Phases 1-9 done, committed, and pushed to
 `dev-refactor` (`686160f`, `453f47e`+`8dfed16`+`517cfce`, `c90968a`,
-`4806d21`+`6066cc5`+`2920510`, `b5d6702`, `37d1cce`, `a669a97`, `8d463b8`
-respectively — Phase 2 shipped as three commits and Phase 4 as three
-instead of one, see their own sections for why). Phase 6 also surfaced
-and fixed an unrelated dev-tooling bug (`d448822`): `scripts/dev-up.sh
-down` never removed Mongo's named volume, so `down && up` silently kept
-the previous run's data instead of the empty database the README
-documents that sequence as producing. Two small follow-ups landed after
-Phase 8 (`27ca909` — the `actions/cache` pin Phase 8 itself added
-declared node20, CI's own deprecation annotation caught it on the very
-next run; `e38de2a` — docs only) plus one out-of-band, user-requested
+`4806d21`+`6066cc5`+`2920510`, `b5d6702`, `37d1cce`, `a669a97`, `8d463b8`,
+Phase 9's own commit respectively — Phase 2 shipped as three commits and
+Phase 4 as three instead of one, see their own sections for why). Phase 6
+also surfaced and fixed an unrelated dev-tooling bug (`d448822`):
+`scripts/dev-up.sh down` never removed Mongo's named volume, so `down &&
+up` silently kept the previous run's data instead of the empty database
+the README documents that sequence as producing. Two small follow-ups
+landed after Phase 8 (`27ca909` — the `actions/cache` pin Phase 8 itself
+added declared node20, CI's own deprecation annotation caught it on the
+very next run; `e38de2a` — docs only) plus one out-of-band, user-requested
 feature between Phase 8 and 9 (`734717e`, its own section below,
 "Between Phase 8 and 9"): all five collectors now log/print a
-`took=`/`collector.run_complete` run duration. **Phase 9 next — see
-"Picking this up in a new session" at the end of this file before
-starting.**
+`took=`/`collector.run_complete` run duration. **Phase 10 next.**
 
 Ordering follows the brief: contract and architecture first while the diff
 is still legible, mechanical sweeps last. One phase = one reviewable
@@ -578,14 +576,75 @@ above. No test asserts an exact duration. Full gate green: `ruff check`,
 
 ## Phase 9 — Test gaps
 
-**Commit:** `test: skip cleanly instead of erroring when the dev stack is down`
+**Shipped as `test: skip cleanly instead of erroring when the dev stack is
+down`.**
 
-T1 (`tests/api/` conftest + skip guard — the "hung suite" fix reached
-`tests/integration/` only; measured 3 errors in 21.23 s versus
-integration's 5 clean skips), T3 (`_UNFILTERED_TYPES`,
-`_ENDPOINTLESS_TYPES`, `--dry-run` exit codes, RFC 9457
-`type`/`title`/`detail` — dropping `title` currently passes the suite),
-C4. Extend `ty` to `tests/` if Phase 1 did not.
+- **T1.** `tests/api/` had no conftest and no skip guard —
+  `tests/integration/`'s memoized-unreachable mechanism was applied to
+  that directory only. Re-measured before fixing: with Mongo on a dead
+  port, `tests/api/test_health.py` gave 3 errors in 21.23s where
+  `tests/integration/` gave 5 clean skips, confirming the finding was
+  still real. Fixed by lifting the memo out of
+  `tests/integration/conftest.py` into a new shared module,
+  `tests/_stack_availability.py` (`connect_mongo_or_skip`/
+  `connect_redis_or_skip`, deliberately not `test_`-prefixed so pytest
+  doesn't collect it as a suite of its own), and adding
+  `tests/api/conftest.py` with one `autouse=True` fixture that calls both
+  before any test's own `app_context` fixture runs — rather than editing
+  each of the eight near-identical `app_context` fixtures individually
+  (that duplication is S4, out of this phase's scope). Verified: a dead
+  Mongo port now gives `4 skipped in 5.49s` for `tests/api/test_health.py`
+  (was 3 errors in 21.23s); the real stack still gives `55 passed in
+  5.26s` for the whole directory. `tests/integration/`'s own behaviour is
+  unchanged (`75 passed` live, `10 passed, 65 skipped` dead — some of that
+  directory's tests need neither service). Picked up S11 in the same
+  move since it's a one-word fix to code already being touched: the
+  shared helper catches `(PyMongoError, OSError)`, not `PyMongoError`
+  alone, so a malformed URI scheme memoizes instead of propagating past
+  the guard it was supposed to hit.
+- **T3 + C4 — four untested behaviours, all in `tools/run_collector.py`
+  or the RFC 9457 envelope, each verified to fail before its test existed
+  and pass after (confirmed by breaking the source under `git stash` and
+  rerunning, then restoring):**
+  - `_UNFILTERED_TYPES` (`REDFISH_STANDALONE`'s exemption from
+    `INVENTORY_COLLECTOR_NAME_PATTERN`) and `_ENDPOINTLESS_TYPES` (its
+    `ManagerConnection` built from `settings.redfish_inventory_file`
+    rather than resolved) — this is C4, restated as T3's first half.
+    Neither string appeared anywhere in `tests/` before this. New class
+    `TestEndpointlessAndUnfilteredTypes` in `tests/unit/tools/
+    test_run_collector.py`: one test asserts `_run(manager_type=
+    REDFISH_STANDALONE)` never calls `EnvConnectionResolver.resolve`
+    (a resolver stub raises if it's called at all) and that the printed
+    manager endpoint is the inventory file path; the other asserts a
+    configured `^ocp` pattern does not filter a standalone run's output.
+    Emptying both frozensets by hand reproduced exactly the failure each
+    test names — `ManagerNotConfiguredError` demanding
+    `INVENTORY_REDFISH_STANDALONE_IP` for the first, a silently dropped
+    server for the second — confirming this was a real, not
+    theoretical, gap.
+  - `--dry-run` exit codes (10b): nothing previously drove `_run(dry_run=
+    True)` to its returned code, only its printed output/count. New
+    `TestDryRunExitCodes`: success returns 0 (already known from other
+    tests but not from this angle) and a raised exception from
+    `_dry_run_one_manager` returns 1 with `FAILED` printed — the one
+    branch (`_run:1049-1052`) with no prior coverage.
+  - RFC 9457 `type`/`title`/`detail` (11): confirmed the audit's own
+    claim by temporarily deleting the `"title"` key from
+    `_problem_response` and rerunning — the suite stayed green. Extended
+    `tests/api/test_servers.py::test_unknown_filter_returns_400_problem_json`
+    (the one existing test already asserting the envelope shape) with
+    `type == "/problems/unknown-filter"`, `title == "Unknown Filter"`,
+    `detail == "Unknown filter: 'not_a_real_filter'"` — re-ran the same
+    deletion afterward and confirmed it now fails.
+- **`ty` already covers `tests/`** — Phase 1's `686160f` did this
+  (`ty check backend/app tools tests`), so nothing further was needed
+  here; `uv run ty check backend/app tools tests` passes clean including
+  every file this phase touched.
+
+Full gate green: `ruff check .`, `ruff format --check .`, `ty check
+backend/app tools tests`, `pytest -q` — **1084 passed**, up from 1080 (4
+new in `test_run_collector.py`; the RFC 9457 fix extends an existing test
+rather than adding one).
 
 ---
 
@@ -744,32 +803,25 @@ under the real per-user session cap, before this ships.
 
 ---
 
-## Picking this up in a new session (2026-09-07)
+## Picking this up in a new session (2026-09-07, after Phase 9)
 
 Handed off deliberately clean — verified before ending this session, not
 assumed:
 
-- `git status` on `dev-refactor` is clean and fully pushed (`734717e` is
-  `HEAD`, `origin/dev-refactor` matches). No stash, no uncommitted work,
-  no open worktree besides the main one.
-- The dev stack is down (`podman ps -a` empty) and no `uvicorn`/`vite`
-  process is running — nothing to tear down before starting.
+- Phases 1-9 are done, committed on `dev-refactor`, and (once this
+  session pushes) match `origin/dev-refactor`. No stash, no open
+  worktree besides the main one. **Phase 10 next** — the largest and
+  least risky phase, deliberately last; read its own section above
+  (docstring scale, the `D212`/`D213` trap, the length rule) before
+  starting rather than working from memory of it.
+- The dev stack was already running when this session began (measured
+  22h uptime) — left as found; a future session should still check
+  `podman ps` before assuming anything about it.
 - The only untracked files are `.claude/.proven-config-version` and
   `.claude/proven-config.json` — pre-existing debris from some other
   tool's own state-caching (not from this refactor, not written by any
   work in this plan), present since before Phase 6. Not a decision to
   make on this plan's behalf; leave them alone unless the user asks.
-- **Phase 9's premise was re-verified today, not just re-read**: pointed
-  the tool at `tests/api/` with the dev stack down and it genuinely hung
-  well past a normal test run (confirming T1's "3 errors in 21.23s"
-  finding is still real, not stale from when this plan was written) —
-  stopped deliberately rather than let it finish, since fixing it *is*
-  Phase 9's job, not this handoff's.
-- Read `docs/notes/2026-09-audit-tools-tests.md` for T1/T3/C4's full
-  detail before starting — this plan's Phase 9 section is only the
-  summary, and (per this session's experience with Phase 8's stale
-  counts) re-measure rather than trust any number in it that a command
-  can re-check in seconds.
 - The standing gate before calling any phase done is still: `uv run
   ruff check . && uv run ruff format --check . && uv run ty check
   backend/app tools tests && uv run pytest -q`, plus the frontend
