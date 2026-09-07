@@ -30,6 +30,10 @@ spec:
                   value: production
                 - name: INVENTORY_COLLECTOR_NAME_PATTERN
                   value: {{ .Values.collectors.namePattern | quote }}
+                {{- if hasKey .Values.collectors.oneview "namePattern" }}
+                - name: INVENTORY_ONEVIEW_NAME_PATTERN
+                  value: {{ .Values.collectors.oneview.namePattern | quote }}
+                {{- end }}
                 - name: INVENTORY_ONEVIEW_COLLECT_PSUS
                   value: {{ .Values.collectors.oneview.collectPsus | quote }}
                 - name: INVENTORY_ONEVIEW_PSU_CONCURRENCY

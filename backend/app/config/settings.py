@@ -409,6 +409,18 @@ class Settings(BaseSettings):
     # job (`app.domain.services.classification`), not this.
     collector_name_pattern: str = ""
 
+    # Per-collector overrides of `collector_name_pattern`, keyed on manager
+    # type because that is how CronJobs, credentials and provider factories
+    # are already partitioned. `None` inherits the global; an explicitly-set
+    # empty string is the only way a collector opts *out* of a non-empty
+    # global, which is why these are optional rather than plain `str`.
+    # Resolved in one place — `tools.run_collector.resolve_name_pattern`.
+    ucs_central_name_pattern: str | None = None
+    intersight_name_pattern: str | None = None
+    ome_name_pattern: str | None = None
+    oneview_name_pattern: str | None = None
+    redfish_name_pattern: str | None = None
+
     @field_validator("cors_allowed_origins", mode="before")
     @classmethod
     def _split_csv(cls, value: object) -> object:

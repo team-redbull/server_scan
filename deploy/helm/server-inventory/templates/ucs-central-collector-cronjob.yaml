@@ -30,6 +30,10 @@ spec:
                   value: production
                 - name: INVENTORY_COLLECTOR_NAME_PATTERN
                   value: {{ .Values.collectors.namePattern | quote }}
+                {{- if hasKey .Values.collectors.ucsCentral "namePattern" }}
+                - name: INVENTORY_UCS_CENTRAL_NAME_PATTERN
+                  value: {{ .Values.collectors.ucsCentral.namePattern | quote }}
+                {{- end }}
                 - name: INVENTORY_UCS_CENTRAL_DOMAIN_CONCURRENCY
                   value: {{ .Values.collectors.ucsCentral.domainConcurrency | quote }}
                 {{- include "serverInventory.dbEnv" . | nindent 16 }}

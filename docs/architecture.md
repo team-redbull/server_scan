@@ -529,10 +529,13 @@ semantics, and Redfish has neither.
 **Three properties invert what the other collectors assume.**
 
 *The fleet list is input, not discovery.* Nothing enumerates standalone
-machines, so a mounted TOML inventory does. It is also the only
-collection filter — `INVENTORY_COLLECTOR_NAME_PATTERN` is deliberately
-not applied, because a BMC does not know the server's `ocp4-...` name and
-`^ocp` would discard every listed host. Credentials resolve
+machines, so a mounted TOML inventory does. It is normally the only
+collection filter — the shared `INVENTORY_COLLECTOR_NAME_PATTERN` is
+deliberately not applied, because a BMC does not know the server's
+`ocp4-...` name and `^ocp` would discard every listed host. Only this
+collector's own `INVENTORY_REDFISH_NAME_PATTERN` overrides that; every
+manager type has such an override, reconciled with the shared default in
+`tools.run_collector.resolve_name_pattern`. Credentials resolve
 host -> host-named -> group -> defaults -> a fleet-wide fallback, and the
 whole file is validated before a single connection opens: an unknown
 group, an undefined credential, a duplicate host, an address carrying

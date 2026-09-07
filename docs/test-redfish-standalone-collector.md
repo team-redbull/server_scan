@@ -70,7 +70,10 @@ it is almost never what you want.
 **`INVENTORY_COLLECTOR_NAME_PATTERN` does not apply to this collector.**
 The inventory file is the filter, and a more precise one. If `^ocp` were
 applied over a name a BMC does not know, it would discard every host you
-listed.
+listed. `INVENTORY_REDFISH_NAME_PATTERN` overrides that exemption if you
+do want a name filter here on top of the inventory file — the exemption
+suppresses the shared default, not a pattern set for this collector by
+name.
 
 ---
 

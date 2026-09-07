@@ -24,6 +24,7 @@ from tools.run_collector import (
     _parse_args,
     _run,
     _run_one_manager,
+    resolve_name_pattern,
 )
 
 from app.application.services.ingest import IngestSummary
@@ -38,6 +39,9 @@ from app.domain.ports.provider import (
     ProviderServer,
     ServerInventoryProvider,
 )
+from app.infrastructure.providers.oneview.provider import OneViewProvider
+from app.infrastructure.providers.openmanage.provider import OpenManageProvider
+from app.infrastructure.providers.ucs_central.provider import UcsCentralProvider
 
 pytestmark = pytest.mark.unit
 
@@ -945,6 +949,119 @@ class TestDryRun:
         assert provider.torn_down
 
 
+class TestResolveNamePattern:
+    """`resolve_name_pattern` — the one place the global, each collector's
+    override and `_UNFILTERED_TYPES` are reconciled.
+
+    It has to be one place: the authoritative `_NameFilteredProvider` and
+    the three collectors' own pruning gates would otherwise be free to
+    filter on different patterns, and a run would silently collect their
+    intersection.
+    """
+
+    def test_a_collector_with_no_override_inherits_the_global(self) -> None:
+        settings = _settings(collector_name_pattern="^ocp")
+        for manager_type in (
+            ManagerType.UCS_CENTRAL,
+            ManagerType.INTERSIGHT,
+            ManagerType.OPENMANAGE,
+            ManagerType.ONEVIEW,
+        ):
+            assert resolve_name_pattern(manager_type, settings) == "^ocp"
+
+    def test_an_override_wins_over_the_global(self) -> None:
+        settings = _settings(collector_name_pattern="^ocp", oneview_name_pattern="^hpe")
+        assert resolve_name_pattern(ManagerType.ONEVIEW, settings) == "^hpe"
+        # And only for that collector.
+        assert resolve_name_pattern(ManagerType.INTERSIGHT, settings) == "^ocp"
+
+    def test_an_explicitly_empty_override_opts_out_of_a_nonempty_global(self) -> None:
+        """The reason the overrides are optional rather than plain `str`:
+        `None` inherits, and `""` is the only way to say "collect
+        everything here" while the global still filters everyone else.
+        """
+        settings = _settings(collector_name_pattern="^ocp", ome_name_pattern="")
+        assert resolve_name_pattern(ManagerType.OPENMANAGE, settings) == ""
+        assert resolve_name_pattern(ManagerType.UCS_CENTRAL, settings) == "^ocp"
+
+    def test_redfish_standalone_is_exempt_from_the_global(self) -> None:
+        """A BMC does not know the server's `ocp4-...` name, so applying
+        `^ocp` there would discard every host the operator listed.
+        """
+        settings = _settings(collector_name_pattern="^ocp")
+        assert resolve_name_pattern(ManagerType.REDFISH_STANDALONE, settings) == ""
+
+    def test_an_explicit_override_beats_the_redfish_exemption(self) -> None:
+        """The exemption suppresses the *global*, not an operator who has
+        asked for a filter on this collector by name.
+        """
+        settings = _settings(collector_name_pattern="^ocp", redfish_name_pattern="^lab")
+        assert resolve_name_pattern(ManagerType.REDFISH_STANDALONE, settings) == "^lab"
+
+
+class TestOverridesReachTheInnerPruningGates:
+    """Three collectors prune on the name pattern *before* the
+    authoritative `_NameFilteredProvider` ever sees a server — OME skips
+    BMCs, UCS Central skips domains, OneView skips the per-server
+    `/powerSupplies` and `/processors` calls. Each one reading `Settings`
+    itself is what would let a run filter on the override and prune on the
+    global, collecting the intersection with nothing logged.
+    """
+
+    def test_ucs_central_prunes_domains_on_the_override(self) -> None:
+        provider = _build_provider(
+            _manager(),
+            credential_resolver=FakeCredentialResolver(),
+            timeout_seconds=5.0,
+            settings=_central_settings(
+                collector_name_pattern="^ocp", ucs_central_name_pattern="^cisco"
+            ),
+        )
+        assert isinstance(provider, UcsCentralProvider)
+        assert provider._name_pattern == "^cisco"
+
+    def test_oneview_gates_its_per_server_calls_on_the_override(self) -> None:
+        provider = _build_provider(
+            _manager(type=ManagerType.ONEVIEW, endpoint="ov-1.example.net"),
+            credential_resolver=FakeCredentialResolver(),
+            timeout_seconds=5.0,
+            settings=_settings(collector_name_pattern="^ocp", oneview_name_pattern="^hpe"),
+        )
+        assert isinstance(provider, OneViewProvider)
+        assert provider._pattern is not None
+        assert provider._pattern.pattern == "^hpe"
+
+    def test_openmanage_prunes_bmcs_on_the_override(self) -> None:
+        provider = _build_provider(
+            _manager(type=ManagerType.OPENMANAGE),
+            credential_resolver=FakeCredentialResolver(),
+            timeout_seconds=5.0,
+            settings=_settings(
+                collector_name_pattern="^ocp",
+                ome_name_pattern="^dell",
+                ome_bmc_username="bmc-admin",
+                ome_bmc_password="bmc-secret",
+            ),
+        )
+        assert isinstance(provider, OpenManageProvider)
+        assert provider._pattern is not None
+        assert provider._pattern.pattern == "^dell"
+
+    def test_an_empty_override_leaves_the_gate_unfiltered(self) -> None:
+        """`""` compiles to no pruning at all, not to an empty regex that
+        matches everything by accident — same distinction `_filtered`
+        makes.
+        """
+        provider = _build_provider(
+            _manager(type=ManagerType.ONEVIEW, endpoint="ov-1.example.net"),
+            credential_resolver=FakeCredentialResolver(),
+            timeout_seconds=5.0,
+            settings=_settings(collector_name_pattern="^ocp", oneview_name_pattern=""),
+        )
+        assert isinstance(provider, OneViewProvider)
+        assert provider._pattern is None
+
+
 class TestNameFilter:
     """`INVENTORY_COLLECTOR_NAME_PATTERN` — a vendor manager holds the
     whole datacenter, so this is what decides which of its servers are
@@ -1144,6 +1261,31 @@ class TestEndpointlessAndUnfilteredTypes:
         # host the operator listed. Both names must survive.
         assert "ocp4-prod-tlv-infra-01" in out
         assert "vmhost-two-14" in out
+
+    async def test_an_explicit_redfish_pattern_overrides_the_exemption(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: Any
+    ) -> None:
+        """`_UNFILTERED_TYPES` suppresses the *global* pattern, not an
+        operator who set `INVENTORY_REDFISH_NAME_PATTERN` by name.
+        """
+        settings = _settings(
+            redfish_inventory_file="inventory/standalone.yaml",
+            collector_name_pattern="",
+            redfish_name_pattern="^ocp",
+        )
+        monkeypatch.setattr(
+            run_collector,
+            "_build_provider",
+            _factory(TestNameFilter._Fake("ocp4-prod-tlv-infra-01", "vmhost-two-14")),
+        )
+        monkeypatch.setattr(run_collector, "get_settings", lambda: settings)
+
+        code = await _run(manager_type=ManagerType.REDFISH_STANDALONE, dry_run=True)
+
+        assert code == 0
+        out = capsys.readouterr().out
+        assert "ocp4-prod-tlv-infra-01" in out
+        assert "vmhost-two-14" not in out
 
 
 class FakeMongo:

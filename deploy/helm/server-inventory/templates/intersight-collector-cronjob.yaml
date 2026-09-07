@@ -30,6 +30,10 @@ spec:
                   value: production
                 - name: INVENTORY_COLLECTOR_NAME_PATTERN
                   value: {{ .Values.collectors.namePattern | quote }}
+                {{- if hasKey .Values.collectors.intersight "namePattern" }}
+                - name: INVENTORY_INTERSIGHT_NAME_PATTERN
+                  value: {{ .Values.collectors.intersight.namePattern | quote }}
+                {{- end }}
                 - name: INVENTORY_INTERSIGHT_MANAGEMENT_MODES
                   value: {{ .Values.collectors.intersight.managementModes | quote }}
                 - name: INVENTORY_INTERSIGHT_PAGE_SIZE

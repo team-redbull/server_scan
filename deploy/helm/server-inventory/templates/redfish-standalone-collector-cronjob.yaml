@@ -37,6 +37,10 @@ spec:
                   value: production
                 - name: INVENTORY_REDFISH_INVENTORY_FILE
                   value: /etc/redfish/inventory.toml
+                {{- if hasKey $rf "namePattern" }}
+                - name: INVENTORY_REDFISH_NAME_PATTERN
+                  value: {{ $rf.namePattern | quote }}
+                {{- end }}
                 {{- if $rf.credentialsSecret }}
                 - name: INVENTORY_REDFISH_CREDENTIALS_FILE
                   value: /etc/redfish-credentials/credentials.toml

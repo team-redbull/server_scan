@@ -30,6 +30,10 @@ spec:
                   value: production
                 - name: INVENTORY_COLLECTOR_NAME_PATTERN
                   value: {{ .Values.collectors.namePattern | quote }}
+                {{- if hasKey .Values.collectors.ome "namePattern" }}
+                - name: INVENTORY_OME_NAME_PATTERN
+                  value: {{ .Values.collectors.ome.namePattern | quote }}
+                {{- end }}
                 - name: INVENTORY_REDFISH_FLEET_CONCURRENCY
                   value: {{ .Values.collectors.ome.bmcConcurrency | quote }}
                 - name: INVENTORY_OME_BMC_VERIFY_TLS
