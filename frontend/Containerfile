@@ -29,3 +29,12 @@ COPY --from=build /app/dist /usr/share/nginx/html
 COPY nginx.conf /etc/nginx/nginx.conf
 
 EXPOSE 8080
+
+# REQUIRED, not a default worth inheriting: ubi9/nginx-124 is an S2I
+# *builder* image, and its own CMD runs `$STI_SCRIPTS_PATH/usage`, which
+# prints "This is a S2I rhel base image", exits 0 and never starts nginx.
+# Without this line the container CrashLoopBackOffs with a help message and
+# no error — which is exactly how it failed the first time it was ever
+# deployed. `daemon off` keeps nginx in the foreground so it stays PID 1's
+# child and a crash actually restarts the pod.
+CMD ["nginx", "-g", "daemon off;"]

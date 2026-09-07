@@ -42,7 +42,7 @@ spec:
           automountServiceAccountToken: false
           containers:
             - name: collector
-              image: "{{ .Values.backend.image.repository }}:{{ .Values.backend.image.tag }}"
+              image: {{ include "serverInventory.apiImage" . | quote }}
               imagePullPolicy: {{ .Values.backend.image.pullPolicy }}
               command: ["python3", "-m", "tools.run_collector", "--manager-type", "OPENMANAGE"]
               env:

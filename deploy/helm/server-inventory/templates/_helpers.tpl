@@ -72,3 +72,26 @@ Callers must `nindent` this to their own env-list depth.
       key: cursor-secret
 {{- end }}
 {{- end -}}
+
+{{- /*
+The two images, tag included.
+
+`image.tag` is empty by default and falls back to the chart's `appVersion`,
+so an install is pinned to the release the chart was published for rather
+than to a floating tag. `latest` was the previous default and was actively
+harmful here: with `imagePullPolicy: IfNotPresent` a node that already holds
+a `latest` layer never re-pulls it, so a cluster silently keeps running
+whatever it first pulled — even across a pod delete, and even after a new
+release. Pinning makes an upgrade a value change, which is a thing GitOps
+can see and roll back.
+
+Override `tag` to run a specific build (a `sha-<commit>` tag, or an older
+release) without touching the chart.
+*/ -}}
+{{- define "serverInventory.apiImage" -}}
+{{ .Values.backend.image.repository }}:{{ .Values.backend.image.tag | default .Chart.AppVersion }}
+{{- end -}}
+
+{{- define "serverInventory.frontendImage" -}}
+{{ .Values.frontend.image.repository }}:{{ .Values.frontend.image.tag | default .Chart.AppVersion }}
+{{- end -}}

@@ -21,7 +21,7 @@ spec:
       automountServiceAccountToken: false
       containers:
         - name: api
-          image: "{{ .Values.backend.image.repository }}:{{ .Values.backend.image.tag }}"
+          image: {{ include "serverInventory.apiImage" . | quote }}
           imagePullPolicy: {{ .Values.backend.image.pullPolicy }}
           ports:
             - name: http

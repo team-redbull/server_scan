@@ -105,6 +105,22 @@ deploy/helm/server-inventory` on a connected machine, then commit the
 resulting `charts/*.tgz`. Note that Bitnami's charts default their image
 to `:latest`; `values.yaml` says how to pin one.
 
+## Image tags
+
+Both images default to the chart's `appVersion` — a real release like
+`11.0.1`, published by CI as `X.Y.Z` with no leading `v`
+(docker/metadata-action's `{{version}}` strips it, so the git tag `v11.0.0`
+becomes the image tag `11.0.0`). Upgrading is a bump of `appVersion`, or of
+`backend.image.tag` / `frontend.image.tag` to override one image.
+
+**Do not point these at `latest`.** It reads as "always current" and is the
+opposite: `pullPolicy: IfNotPresent` means a node that already holds a
+`latest` layer never pulls it again, so the cluster keeps running the first
+build it ever saw — through a pod delete, a rollout and every later release.
+That is not hypothetical here; it is how this chart's first deployment
+failed. A pinned tag also gives GitOps something to diff and roll back,
+which a floating one cannot.
+
 ## The frontend
 
 `frontend.enabled` deploys the SPA image CI already publishes. The SPA

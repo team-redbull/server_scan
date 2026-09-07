@@ -1,11 +1,21 @@
 backend:
   image:
     # Published by .github/workflows/ci.yml's `publish` job on every push
-    # to main (see docs/adr/0010-image-publishing-and-versioning.md) —
-    # pin `tag` to a real vX.Y.Z release for anything beyond local
-    # experimentation; `latest` always means whatever main last built.
+    # to main (docs/adr/0010-image-publishing-and-versioning.md), tagged
+    # `X.Y.Z` — no `v`, since docker/metadata-action's {{version}} strips
+    # it — plus `X.Y`, `X`, `sha-<commit>` and a rolling `latest`.
+    #
+    # Blank means the chart's own `appVersion`, which is a real release.
+    # DO NOT set this to `latest`: with `pullPolicy: IfNotPresent` a node
+    # that already holds a `latest` layer never re-pulls it, so the cluster
+    # silently keeps the first build it ever saw — across pod deletes and
+    # across releases. Upgrading is a bump of `appVersion` (or of this),
+    # which is a change GitOps can see, diff and roll back.
     repository: ghcr.io/team-redbull/server_scan-api
-    tag: latest
+    tag: ""
+    # Correct BECAUSE the tag is immutable: an image already on the node is
+    # the same image. `Always` only makes sense with a floating tag, which
+    # is what the line above exists to avoid.
     pullPolicy: IfNotPresent
   replicaCount: 2
   port: 8080
@@ -35,8 +45,9 @@ backend:
 frontend:
   enabled: false
   image:
+    # Same rules as backend.image above — blank means `appVersion`.
     repository: ghcr.io/team-redbull/server_scan-frontend
-    tag: latest
+    tag: ""
     pullPolicy: IfNotPresent
   replicaCount: 2
   resources:

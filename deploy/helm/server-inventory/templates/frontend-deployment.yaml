@@ -28,7 +28,7 @@ spec:
       automountServiceAccountToken: false
       containers:
         - name: frontend
-          image: "{{ .Values.frontend.image.repository }}:{{ .Values.frontend.image.tag }}"
+          image: {{ include "serverInventory.frontendImage" . | quote }}
           imagePullPolicy: {{ .Values.frontend.image.pullPolicy }}
           ports:
             - name: http

@@ -8,7 +8,7 @@
 # mirroring instructions (PyPI/npm packages, not just images).
 #
 # Pin every tag to a real version before mirroring into a production
-# registry — "latest" and "9.8" mean "whatever this repo currently points
+# registry — "9.8" means "whatever this repo currently points
 # at", not a version identifier a mirror sync should be repeated against
 # blindly. Re-run this list's images through your mirror whenever any of
 # the source files above changes.
@@ -16,17 +16,20 @@
 # --- 1. Application images (required — this is what you deploy) ---
 # Published by .github/workflows/ci.yml's `publish` job on every push to
 # main that passes CI (docs/adr/0010-image-publishing-and-versioning.md).
-# `latest` always means whatever main last built; for a real deployment,
-# pin to a specific vX.Y.Z release instead — check
-# `git tag --sort=-v:refname | head -1` on a connected machine, or the
-# GHCR package page, for the current one.
+# The tag is `X.Y.Z` with NO leading `v` — docker/metadata-action's
+# {{version}} strips it, so the git tag `v11.0.0` publishes `11.0.0`.
+# Mirror the version the chart's `appVersion` names, not `latest`: with
+# `pullPolicy: IfNotPresent` a node that already holds a `latest` layer
+# never re-pulls it, so a mirrored `latest` freezes at whatever it first
+# synced. `git tag --sort=-v:refname | head -1` on a connected machine, or
+# the GHCR package page, gives the current release.
 #
 # The same API image also runs every collector CronJob
 # (tools/run_collector.py --manager-type <TYPE>) — it is not a second
 # image, deploy/README.md's "same image as the API ... so no second image
 # is needed" is deliberate.
-ghcr.io/team-redbull/server_scan-api:latest
-ghcr.io/team-redbull/server_scan-frontend:latest
+ghcr.io/team-redbull/server_scan-api:11.0.1        # match deploy/helm/server-inventory/Chart.yaml's appVersion
+ghcr.io/team-redbull/server_scan-frontend:11.0.1   # same
 
 # --- 2. Build-time base images (only if you build these two images
 #         yourself inside the air-gapped environment, rather than
