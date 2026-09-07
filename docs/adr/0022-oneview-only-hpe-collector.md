@@ -521,6 +521,13 @@ After the fix, `ocp4-five-compute-08` correctly reports 4 drives. See
 the two-controllers-concatenate case, and the empty-V2-falls-back-to-V1
 case), all verified to fail against the pre-fix code.
 
+**Re-confirmed against the live appliance itself, not just the unit
+tests**: `uv run python -m tools.verify_oneview` was re-run after the fix
+(commit `c6302cc`) landed, and drive counts across the sampled servers
+came back correct. The unit tests above prove the logic against
+synthetic fixtures modeling the real payload shape; this is the same fix
+proving out against the real appliance it was diagnosed against.
+
 **One more finding, not acted on yet:** 688 of 821 servers' `expand=all`
 sweep already carried `PowerSupplies` with no per-server call needed —
 see `docs/hpe-collectors.md`'s "Power supplies" section for the number
