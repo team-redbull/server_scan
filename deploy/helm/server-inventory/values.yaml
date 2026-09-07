@@ -100,11 +100,30 @@ mongodb:
   auth:
     enabled: true
     rootUser: root
-    # SET THESE. A blank password makes the subchart generate one, and
-    # `helm template` — how Argo CD renders this chart — has no `lookup`, so
-    # a generated password is re-minted on every sync and every pod ends up
-    # holding a credential the database no longer has. Keep them
-    # alphanumeric: they go into a URI unescaped.
+
+    # A Secret managed outside this chart, holding `mongodb-root-password`
+    # and `mongodb-passwords` (the subchart's own key names). Setting it is
+    # the production path, and it changes where the CONNECTION STRING comes
+    # from too: the chart never sees the password, so it cannot compose a
+    # URI around it. That Secret must therefore also carry `mongo-uri`, and
+    # `db.secretName` must name it. One Secret, both keys — created by a
+    # secrets operator, or by hand:
+    #
+    #   oc create secret generic server-inventory-db \
+    #     --from-literal=mongodb-root-password=... \
+    #     --from-literal=mongodb-passwords=... \
+    #     --from-literal=mongo-uri='mongodb://server_inventory:...@server-inventory-mongodb:27017/server_inventory?authSource=server_inventory'
+    #
+    # Leave it empty and the two passwords below are used instead, and the
+    # chart composes the URI itself.
+    existingSecret: ""
+
+    # SET THESE unless `existingSecret` above is set. A blank password makes
+    # the subchart generate one, and `helm template` — how Argo CD renders
+    # this chart — has no `lookup`, so a generated password is re-minted on
+    # every sync and every pod ends up holding a credential the database no
+    # longer has. Keep them alphanumeric: they go into a URI unescaped, and
+    # DO NOT commit them — that is what `existingSecret` is for.
     rootPassword: ""
     usernames: ["server_inventory"]
     passwords: [""]
@@ -142,7 +161,16 @@ redis:
 
   auth:
     enabled: true
-    # SET THIS, for the same generated-password reason as MongoDB above.
+
+    # Same escape hatch, same consequence as MongoDB's above: set this and
+    # the Secret must also carry `redis-uri`, with `db.secretName` naming it.
+    # `existingSecretPasswordKey` is the key inside it holding the password —
+    # the subchart has no default for it.
+    existingSecret: ""
+    existingSecretPasswordKey: ""
+
+    # SET THIS unless `existingSecret` is, for the same generated-password
+    # reason as MongoDB above. Do not commit it.
     password: ""
 
   master:

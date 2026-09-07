@@ -81,6 +81,25 @@ generates one — and `helm template`, which is how Argo CD renders this
 chart, has no `lookup`, so a generated password is re-minted on every sync
 while the database keeps the first one.
 
+**Do not commit them.** For anything beyond a throwaway install, set
+`mongodb.auth.existingSecret` / `redis.auth.existingSecret` and let a
+secrets operator own the Secret. That changes where the *connection string*
+comes from too: the chart never sees the password, so it cannot compose a
+URI around it, and it falls back to `db.secretName` for that database. One
+Secret then carries both — the subchart's own key
+(`mongodb-root-password` + `mongodb-passwords`, or whatever
+`redis.auth.existingSecretPasswordKey` names) and the `mongo-uri` /
+`redis-uri` the API reads:
+
+```bash
+oc create secret generic server-inventory-db \
+  --from-literal=mongodb-root-password='...' \
+  --from-literal=mongodb-passwords='...' \
+  --from-literal=redis-password='...' \
+  --from-literal=mongo-uri='mongodb://server_inventory:...@server-inventory-mongodb:27017/server_inventory?authSource=server_inventory' \
+  --from-literal=redis-uri='redis://:...@server-inventory-redis-master:6379/0'
+```
+
 Air-gapped installs need the subcharts vendored: `helm dependency update
 deploy/helm/server-inventory` on a connected machine, then commit the
 resulting `charts/*.tgz`. Note that Bitnami's charts default their image

@@ -1,14 +1,31 @@
 {{- /*
-Where the MongoDB connection string comes from.
+Where each connection string comes from.
 
-Bundled (`mongodb.enabled`) means this chart renders it into its own
-`<release>-bundled-db` Secret from the subchart's auth values; otherwise it is
-`db.secretName`, a Secret the chart consumes but does not create. The two
-are independent per database, so an install can bundle Redis and point at
-an operated MongoDB, or the reverse.
+The chart composes one into its own `<release>-bundled-db` Secret only when
+it has the password to compose it *with* — bundled, and with the auth values
+in this chart's own values. Everything else reads `db.secretName`, a Secret
+the chart consumes but does not create: an externally provisioned database,
+and equally a bundled one whose password comes from `auth.existingSecret`
+(Vault, External Secrets, `oc create secret`), where the chart never sees the
+password and so cannot build a URI around it — that Secret carries the URI
+alongside the password.
+
+The two databases are resolved independently, so an install can bundle Redis
+and point at an operated MongoDB, or the reverse.
 */ -}}
+{{- /* Emit "true" or NOTHING — a define always returns a string, and a
+       bare `and` returns the literal "false", which every `if` in Helm
+       reads as truthy. */ -}}
+{{- define "serverInventory.composeMongoUri" -}}
+{{- if and .Values.mongodb.enabled (not .Values.mongodb.auth.existingSecret) -}}true{{- end -}}
+{{- end -}}
+
+{{- define "serverInventory.composeRedisUri" -}}
+{{- if and .Values.redis.enabled (not .Values.redis.auth.existingSecret) -}}true{{- end -}}
+{{- end -}}
+
 {{- define "serverInventory.mongoSecret" -}}
-{{- if .Values.mongodb.enabled -}}
+{{- if include "serverInventory.composeMongoUri" . -}}
 {{ .Release.Name }}-bundled-db
 {{- else -}}
 {{ .Values.db.secretName }}
@@ -16,7 +33,7 @@ an operated MongoDB, or the reverse.
 {{- end -}}
 
 {{- define "serverInventory.redisSecret" -}}
-{{- if .Values.redis.enabled -}}
+{{- if include "serverInventory.composeRedisUri" . -}}
 {{ .Release.Name }}-bundled-db
 {{- else -}}
 {{ .Values.db.secretName }}
