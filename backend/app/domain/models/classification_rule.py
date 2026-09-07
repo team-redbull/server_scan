@@ -38,14 +38,22 @@ CLASSIFIABLE_FIELDS = frozenset({"name", "hostname", "serial", "model", "site_id
 
 
 class RuleScope(BaseModel):
+    """The vendor/manager-type/site dimensions a classification rule is scoped to."""
+
     vendor: Vendor | None = None
     manager_type: ManagerType | None = None
     site_id: str | None = None
 
     def specificity(self) -> int:
-        """Powers of two so more-specific scopes strictly outrank less
+        """
+        Score how specific this scope is, for resolving overlapping rules.
+
+        Powers of two so more-specific scopes strictly outrank less
         specific ones regardless of how many dimensions are set — see
         `app.domain.services.classification`'s resolution algorithm.
+
+        Returns:
+            int: A specificity score; higher means more specific.
         """
         return (
             (4 if self.site_id is not None else 0)
@@ -56,6 +64,17 @@ class RuleScope(BaseModel):
     def matches(
         self, *, vendor: Vendor, manager_type: ManagerType | None, site_id: str | None
     ) -> bool:
+        """
+        Check whether a server's dimensions satisfy this scope.
+
+        Args:
+            vendor (Vendor): The server's vendor.
+            manager_type (ManagerType | None): The server's manager type, if any.
+            site_id (str | None): The server's site id, if any.
+
+        Returns:
+            bool: True if every dimension set on this scope matches.
+        """
         if self.vendor is not None and self.vendor != vendor:
             return False
         if self.manager_type is not None and self.manager_type != manager_type:
@@ -64,12 +83,16 @@ class RuleScope(BaseModel):
 
 
 class RuleFlags(BaseModel):
+    """Regex evaluation flags applied when matching a classification rule's pattern."""
+
     ignore_case: bool = True
     multiline: bool = False
     dotall: bool = False
 
 
 class RuleStats(BaseModel):
+    """Runtime statistics tracked for a classification rule's matches."""
+
     match_count: int = 0
     last_matched_at: datetime | None = None
     timeout_count: int = 0
@@ -77,6 +100,8 @@ class RuleStats(BaseModel):
 
 
 class ClassificationRule(BaseModel):
+    """One document in the `classification_rules` collection."""
+
     id: str = Field(alias="_id")
     name: str
     description: str = ""

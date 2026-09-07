@@ -20,18 +20,24 @@ from app.domain.models.classification_rule import ClassificationRule
 
 
 class RuleScopeSchema(BaseModel):
+    """The vendor/manager-type/site a classification rule is restricted to."""
+
     vendor: Vendor | None = None
     manager_type: ManagerType | None = None
     site_id: str | None = None
 
 
 class RuleFlagsSchema(BaseModel):
+    """The regex flags a classification rule's pattern is compiled with."""
+
     ignore_case: bool = True
     multiline: bool = False
     dotall: bool = False
 
 
 class RuleStatsSchema(BaseModel):
+    """A classification rule's accumulated match/timeout/quarantine counters."""
+
     match_count: int
     last_matched_at: datetime | None
     timeout_count: int
@@ -39,6 +45,8 @@ class RuleStatsSchema(BaseModel):
 
 
 class ClassificationRuleResponse(BaseModel):
+    """The public representation of one classification rule."""
+
     id: str
     name: str
     description: str
@@ -61,6 +69,15 @@ class ClassificationRuleResponse(BaseModel):
 
     @classmethod
     def from_rule(cls, rule: ClassificationRule) -> ClassificationRuleResponse:
+        """
+        Build the response schema from a domain classification rule.
+
+        Args:
+            rule (ClassificationRule): The stored rule.
+
+        Returns:
+            ClassificationRuleResponse: The response model.
+        """
         return cls(
             id=rule.id,
             name=rule.name,
@@ -98,14 +115,16 @@ class ClassificationRuleResponse(BaseModel):
 
 
 class ClassificationRuleListResponse(BaseModel):
+    """The full list of classification rules."""
+
     items: list[ClassificationRuleResponse]
 
 
 class ClassificationPreviewRequest(BaseModel):
-    """Same shape as `ClassificationRuleCreate`, minus everything the
-    preview algorithm doesn't need — a draft may be previewed before the
-    author has settled on a `name`/`source`/`priority` at all. Only
-    `field` and `pattern` are required.
+    """A draft rule to preview matches for, before it has a name or priority.
+
+    Only `field` and `pattern` are required — a draft may be previewed
+    before the author has settled on the rest of a rule's shape.
     """
 
     installation_type: InstallationType | None = None
@@ -116,6 +135,8 @@ class ClassificationPreviewRequest(BaseModel):
 
 
 class ClassificationPreviewResponse(BaseModel):
+    """How many servers a previewed rule would match, with a sample."""
+
     matched_count: int
     truncated: bool
     sample: list[dict[str, str]]

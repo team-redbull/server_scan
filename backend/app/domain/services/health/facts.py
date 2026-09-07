@@ -16,6 +16,17 @@ from app.domain.models.server import Server
 
 
 def extract_facts(server: Server) -> dict[str, Any]:
+    """
+    Flatten a `Server` into the dotted-key facts dict the metric registry resolves against.
+
+    Args:
+        server (Server): The server to extract facts from.
+
+    Returns:
+        dict[str, Any]: A flat mapping of dotted metric-name-shaped keys
+            (`"cpu.socket_count"`, `"storage.failed_drive_count"`, ...) to
+            their current values.
+    """
     drive_healths = [d.health for d in server.hardware.storage.drives if d.health is not None]
     link_states = [i.link_state.value for i in server.network.interfaces]
     psu_healths = [p.health for p in server.hardware.power.psus if p.health is not None]

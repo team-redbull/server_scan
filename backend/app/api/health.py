@@ -31,6 +31,12 @@ router = APIRouter(tags=["platform"])
 
 @router.get("/health/live")
 async def liveness() -> dict[str, str]:
+    """
+    Report process liveness with no dependency checks.
+
+    Returns:
+        dict[str, str]: `{"status": "ok"}` whenever this handler can run.
+    """
     return {"status": "ok"}
 
 
@@ -40,6 +46,15 @@ async def readiness(
     mongo: Annotated[MongoClientHolder, Depends(get_mongo_holder)],
     redis: Annotated[RedisClientHolder, Depends(get_redis_holder)],
 ) -> dict[str, object]:
+    """
+    Report dependency readiness, failing only on MongoDB.
+
+    Sets a 503 status when MongoDB is unreachable; a Redis outage is
+    reported but never fails readiness, per the module docstring.
+
+    Returns:
+        dict[str, object]: Overall status plus a per-dependency breakdown.
+    """
     mongo_ok = await mongo.ping()
     redis_ok = await redis.ping()
 

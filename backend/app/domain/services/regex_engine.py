@@ -47,7 +47,17 @@ _CANARY_INPUTS = (
 
 
 class RegexModuleEngine:
+    """The `RegexEngine` `Protocol`'s implementation, backed by the third-party `regex` module."""
+
     def __init__(self, *, max_pattern_length: int, match_timeout_seconds: float) -> None:
+        """
+        Configure the pattern length ceiling and match/canary time budget.
+
+        Args:
+            max_pattern_length (int): The maximum accepted pattern length, in characters.
+            match_timeout_seconds (float): The time budget for `search()`
+                and for each canary probe in `validate()`.
+        """
         self._max_pattern_length = max_pattern_length
         self._timeout = match_timeout_seconds
         self._compile = lru_cache(maxsize=1024)(self._compile_uncached)
@@ -66,6 +76,19 @@ class RegexModuleEngine:
         return regex.compile(pattern, flags=flags)
 
     def validate(self, pattern: str, *, ignore_case: bool, multiline: bool, dotall: bool) -> None:
+        """
+        Reject a pattern that is too long, doesn't compile, or fails a canary timing probe.
+
+        Args:
+            pattern (str): The regex source to validate.
+            ignore_case (bool): Whether matching would be case-insensitive.
+            multiline (bool): Whether `^`/`$` would match at line boundaries.
+            dotall (bool): Whether `.` would match a newline.
+
+        Raises:
+            RegexUnsafeError: If `pattern` exceeds `max_pattern_length`,
+                fails to compile, or times out against any canary input.
+        """
         if len(pattern) > self._max_pattern_length:
             raise RegexUnsafeError(
                 f"pattern length {len(pattern)} exceeds max {self._max_pattern_length}"
@@ -95,6 +118,23 @@ class RegexModuleEngine:
         multiline: bool,
         dotall: bool,
     ) -> RegexMatch | None:
+        """
+        Search `subject` for the first match of `pattern`.
+
+        Args:
+            pattern (str): The regex source to match. Should already have
+                passed `validate()`.
+            subject (str): The text to search.
+            ignore_case (bool): Whether matching is case-insensitive.
+            multiline (bool): Whether `^`/`$` match at line boundaries.
+            dotall (bool): Whether `.` matches a newline.
+
+        Returns:
+            RegexMatch | None: The first match, or `None` if there isn't one.
+
+        Raises:
+            RegexTimeout: If matching exceeds `match_timeout_seconds`.
+        """
         compiled = self._compile(
             pattern,
             self._flags_bitmask(ignore_case=ignore_case, multiline=multiline, dotall=dotall),

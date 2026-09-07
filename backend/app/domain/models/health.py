@@ -17,10 +17,14 @@ from app.domain.enums import HealthSeverity
 
 
 class CategoryHealth(BaseModel):
+    """The evaluated severity for a single health category."""
+
     severity: HealthSeverity = HealthSeverity.UNKNOWN
 
 
 class Health(BaseModel):
+    """The health rollup embedded on a `Server` document, one severity per category."""
+
     overall: HealthSeverity = HealthSeverity.UNKNOWN
     cpu: HealthSeverity = HealthSeverity.UNKNOWN
     memory: HealthSeverity = HealthSeverity.UNKNOWN

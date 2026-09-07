@@ -133,7 +133,8 @@ class IntersightClient:
         debug_http: bool = False,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
-        """
+        """Build a client configured for one Intersight appliance and API key.
+
         Args:
             endpoint (str): Bare host — `intersight.com`, or the
                 appliance FQDN for a Private Virtual Appliance.
@@ -173,7 +174,8 @@ class IntersightClient:
         await self._client.aclose()
 
     async def __aenter__(self) -> IntersightClient:
-        """
+        """Enter the async context manager.
+
         Returns:
             IntersightClient: This client.
         """

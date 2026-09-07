@@ -688,18 +688,10 @@ def _gpu_identity(rng: random.Random, collector: ManagerType) -> tuple[str, str,
 
 def _build_psus(rng: random.Random) -> tuple[dict[str, object], ...]:
     """
-    A server's fitted power supplies, keyed as every real collector emits
-    them.
+    A server's fitted power supplies, keyed as every real collector emits them.
 
-    Reported by all four collectors since the Redfish mapping gained
-    `psus_from_supplies`, so this is `()` for nobody and `None` only for
-    the iLO-4 servers whose subresource call fails — a fake fleet that
-    reported no PSUs at all would put every seeded server in
-    `unread_fields` and make that marker read as noise.
-
-    Health is UP/DOWN/DISABLED/UNKNOWN, never a `HealthSeverity`: it is
-    the vocabulary `power.failed_psu_count` counts, and a policy looking
-    for "CRITICAL" here would match nothing.
+    Every collector reports PSUs now, so this is never `()`; health is
+    UP/DOWN/DISABLED/UNKNOWN, the vocabulary `power.failed_psu_count` reads.
 
     Args:
         rng (random.Random): The seeded generator.
@@ -725,21 +717,10 @@ def _build_psus(rng: random.Random) -> tuple[dict[str, object], ...]:
 
 def _build_gpus(rng: random.Random, collector: ManagerType) -> tuple[dict[str, object], ...] | None:
     """
-    A server's GPUs, keyed exactly as `redfish.mapping.gpus_from_processors`
-    emits them.
+    A server's GPUs, keyed as `redfish.mapping.gpus_from_processors` emits them.
 
-    Each collector has a different ceiling here, and reproducing that is
-    the point: UCS Central reads a `graphicsCard`'s identity, PCI address
-    and temperature and nothing else; Intersight's `graphics.Card`
-    carries no memory, thermal, power or ECC field anywhere in its
-    schema, so those are `None` while the GPU itself is real; Redfish and
-    OneView report the telemetry, from `ProcessorMetrics`/
-    `EnvironmentMetrics`.
-
-    `memory_bytes` is `None` on every branch, because it is `None` on
-    every real collector — the number the UI shows is `GpuCatalog`'s,
-    filled in at ingest. Pre-filling it here would make a local run prove
-    nothing about the catalog.
+    `memory_bytes` is always `None`, matching every real collector — the
+    UI's VRAM figure comes from `GpuCatalog` at ingest, not from here.
 
     Args:
         rng (random.Random): The seeded generator.
@@ -935,6 +916,7 @@ def _nics_for(
         rng (random.Random): The seeded generator.
         collector (ManagerType): The collector that owns this server.
         macs (tuple[str, ...]): The server's MACs, one per interface.
+        slot (int | None): Its add-in NIC's slot, or None for onboard only.
 
     Returns:
         tuple[ProviderNic, ...]: One entry per physical port, empty for a

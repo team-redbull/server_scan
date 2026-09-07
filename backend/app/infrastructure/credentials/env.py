@@ -76,9 +76,14 @@ _ENDPOINT_FIELD: dict[ManagerType, str] = {
 
 
 def _env_var(field: str) -> str:
-    """The environment variable a settings field reads, for error
-    messages — the whole point of the message is to name the thing the
-    operator has to go and set.
+    """
+    The environment variable a settings field reads, for error messages.
+
+    Args:
+        field (str): A `Settings` field name.
+
+    Returns:
+        str: The `INVENTORY_`-prefixed variable name an operator sets.
     """
     return f"INVENTORY_{field.upper()}"
 
@@ -117,9 +122,30 @@ class EnvConnectionResolver:
     """Implements `app.domain.ports.credentials.CredentialResolver`."""
 
     def __init__(self, settings: Settings) -> None:
+        """
+        Build the resolver.
+
+        Args:
+            settings (Settings): The process-wide settings to resolve
+                every manager type's connection from.
+        """
         self._settings = settings
 
     def resolve(self, manager_type: ManagerType) -> ManagerConnection:
+        """
+        Resolve one manager type's endpoint and login from settings.
+
+        Args:
+            manager_type (ManagerType): Which collector to resolve for.
+
+        Returns:
+            ManagerConnection: The endpoint, username and password to
+                connect with.
+
+        Raises:
+            ManagerNotConfiguredError: If the type has no connection
+                shape at all, or any required variable is unset.
+        """
         if manager_type is ManagerType.UCS_MANAGER:
             raise ManagerNotConfiguredError(
                 "UCS_MANAGER has no endpoint of its own to configure — each domain is "

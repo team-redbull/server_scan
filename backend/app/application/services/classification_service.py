@@ -1,5 +1,5 @@
-"""`ClassificationService`: the one integration seam for slice 2's rule
-engine.
+"""
+`ClassificationService`: the one integration seam for slice 2's rule engine.
 
 Two ways to reach the domain's pure `classify()` function, and both are
 this module's job precisely so a caller never has to call `list_all()`
@@ -67,9 +67,22 @@ _UNSCOPED_SOURCES = frozenset({_GLOBAL_CUSTOM, _SYSTEM_DEFAULT})
 def validate_rule_write(
     rule: ClassificationRule, engine: RegexEngine, *, is_create: bool = False
 ) -> None:
-    """Cross-field business-rule validation run before a rule (create or a
-    merged update) is persisted. Raises the appropriate `AppError`
-    subclass on the first violation found; never returns a value.
+    """
+    Cross-field business-rule validation run before a rule is persisted.
+
+    Validates a fully-merged rule (create or a merged update) — there is
+    no partial-update variant.
+
+    Args:
+        rule (ClassificationRule): The fully-merged rule that would be written.
+        engine (RegexEngine): Used to validate the rule's regex pattern.
+        is_create (bool): Whether this is a create, which rejects `SYSTEM_DEFAULT`.
+
+    Raises:
+        RuleScopeInvalidError: The rule's source, priority band, or scope is invalid.
+        ValidationAppError: `rule.field` is not a classifiable field.
+        RegexUnsafeAppError: The pattern is unsafe (ReDoS risk).
+        RegexInvalidAppError: The pattern does not compile.
     """
     if is_create and rule.source == _SYSTEM_DEFAULT:
         # SYSTEM_DEFAULT rules are seeded (see `default_system_rules` in
@@ -152,20 +165,30 @@ def _validate_pattern(
 
 
 class ClassificationService:
+    """Classifies servers against the active classification ruleset."""
+
     def __init__(
         self,
         *,
         rule_repo: MongoClassificationRuleRepository,
         engine: RegexEngine,
     ) -> None:
+        """
+        Initialize the service with its rule repository and regex engine.
+
+        Args:
+            rule_repo (MongoClassificationRuleRepository): The rules collection.
+            engine (RegexEngine): Used to evaluate each rule's pattern.
+        """
         self._rule_repo = rule_repo
         self._engine = engine
 
     async def classify_server(self, classifiable: ClassifiableServer) -> ClassificationResult:
-        """Load every enabled rule and resolve `classifiable` against it.
+        """
+        Load every enabled rule and resolve `classifiable` against it.
+
         Quarantined rules are excluded by the domain `classify()` function
-        itself (see its own predicate), not pre-filtered here — this
-        method never re-implements that predicate, it only supplies the
+        itself, not pre-filtered here — this method only supplies the
         enabled ruleset.
 
         Args:
@@ -179,13 +202,14 @@ class ClassificationService:
         return self.classify_with_ruleset(classifiable, rules)
 
     async def load_ruleset(self) -> list[ClassificationRule]:
-        """The current active (enabled) ruleset, for a caller that will
-        classify many servers against the same snapshot in one run — the
-        ingestion pipeline, never a fresh `classify_server` call repeated
-        per server. Centralizing `enabled_only=True` here rather than
-        letting a caller reach for `list_all()` directly is what keeps
-        this method (and `classify_server`) the only two places that
-        filter can be forgotten.
+        """
+        The current active (enabled) ruleset.
+
+        For a caller that will classify many servers against the same
+        snapshot in one run — the ingestion pipeline, never a fresh
+        `classify_server` call repeated per server. Centralizing
+        `enabled_only=True` here keeps this method (and `classify_server`)
+        the only two places that filter can be forgotten.
 
         Returns:
             list[ClassificationRule]: The rules to pass into
@@ -196,8 +220,10 @@ class ClassificationService:
     def classify_with_ruleset(
         self, classifiable: ClassifiableServer, ruleset: list[ClassificationRule]
     ) -> ClassificationResult:
-        """Classify against an already-loaded ruleset (`load_ruleset`) —
-        the ingest-loop counterpart to `classify_server`, which loads its
+        """
+        Classify against an already-loaded ruleset (`load_ruleset`).
+
+        The ingest-loop counterpart to `classify_server`, which loads its
         own ruleset on every call. A caller classifying many servers in
         one run should call `load_ruleset` once and this per server, never
         `classify_server` in a loop.

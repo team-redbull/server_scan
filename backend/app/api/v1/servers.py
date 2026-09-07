@@ -113,12 +113,31 @@ async def _server_repo(
     mongo: Annotated[MongoClientHolder, Depends(get_mongo_holder)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> MongoServerRepository:
+    """
+    Build the server repository for one request.
+
+    Args:
+        mongo (MongoClientHolder): The shared Mongo client holder.
+        settings (Settings): Supplies the cursor-signing secret.
+
+    Returns:
+        MongoServerRepository: A repository bound to that client.
+    """
     return MongoServerRepository(mongo, cursor_secret=settings.cursor_secret)
 
 
 async def _cache_client(
     redis: Annotated[RedisClientHolder, Depends(get_redis_holder)],
 ) -> CacheClient:
+    """
+    Build the cache-aside client for one request.
+
+    Args:
+        redis (RedisClientHolder): The shared Redis client holder.
+
+    Returns:
+        CacheClient: A cache client bound to that connection.
+    """
     return CacheClient(redis)
 
 
@@ -126,6 +145,15 @@ _METRIC_REGISTRY = build_default_registry()
 
 
 async def _regex_engine(settings: Annotated[Settings, Depends(get_settings)]) -> RegexEngine:
+    """
+    Build the regex engine used to evaluate classification rules.
+
+    Args:
+        settings (Settings): Supplies the pattern-length and timeout limits.
+
+    Returns:
+        RegexEngine: The configured engine.
+    """
     return RegexModuleEngine(
         max_pattern_length=settings.regex_max_pattern_length,
         match_timeout_seconds=settings.regex_match_timeout_seconds,
@@ -136,12 +164,32 @@ async def _classification_service(
     mongo: Annotated[MongoClientHolder, Depends(get_mongo_holder)],
     engine: Annotated[RegexEngine, Depends(_regex_engine)],
 ) -> ClassificationService:
+    """
+    Build the classification service for one request.
+
+    Args:
+        mongo (MongoClientHolder): The shared Mongo client holder.
+        engine (RegexEngine): The regex engine to evaluate rules with.
+
+    Returns:
+        ClassificationService: A service bound to those dependencies.
+    """
     return ClassificationService(rule_repo=MongoClassificationRuleRepository(mongo), engine=engine)
 
 
 async def _health_policy_service(
     mongo: Annotated[MongoClientHolder, Depends(get_mongo_holder)],
 ) -> HealthPolicyService:
+    """
+    Build the health policy service for one request.
+
+    Args:
+        mongo (MongoClientHolder): The shared Mongo client holder.
+
+    Returns:
+        HealthPolicyService: A service bound to that client and the
+            module-level metric registry.
+    """
     return HealthPolicyService(
         policy_repo=MongoHealthPolicyRepository(mongo),
         registry=_METRIC_REGISTRY,
@@ -151,6 +199,15 @@ async def _health_policy_service(
 async def _audit_service(
     mongo: Annotated[MongoClientHolder, Depends(get_mongo_holder)],
 ) -> AuditService:
+    """
+    Build the audit service for one request.
+
+    Args:
+        mongo (MongoClientHolder): The shared Mongo client holder.
+
+    Returns:
+        AuditService: A service bound to that client.
+    """
     return AuditService(repo=MongoAuditEventRepository(mongo))
 
 
@@ -158,13 +215,30 @@ async def _maintenance_service(
     server_repo: Annotated[MongoServerRepository, Depends(_server_repo)],
     audit: Annotated[AuditService, Depends(_audit_service)],
 ) -> MaintenanceService:
+    """
+    Build the maintenance service for one request.
+
+    Args:
+        server_repo (MongoServerRepository): The server repository.
+        audit (AuditService): Records the maintenance-change audit event.
+
+    Returns:
+        MaintenanceService: A service bound to those dependencies.
+    """
     return MaintenanceService(server_repo=server_repo, audit=audit)
 
 
 def _revision_pointer_key(server_id: str) -> str:
-    """Self-maintained cache entry mapping `server_id` -> its current
-    `revision`, so `server_key(id, revision)` can be looked up without a
-    full Mongo read first. See module docstring.
+    """Build the cache key mapping a server ID to its current revision.
+
+    Lets `server_key(id, revision)` be looked up without a full Mongo read
+    first. See the module docstring.
+
+    Args:
+        server_id (str): The server's ID.
+
+    Returns:
+        str: The pointer entry's cache key.
     """
     return f"si:1:srv:{server_id}:rev"
 
@@ -182,6 +256,35 @@ async def list_servers(
     page_size: int | None = Query(default=None, ge=1),
     with_count: bool = Query(default=False),
 ) -> ServerListResponse | Response:
+    """
+    List servers, keyset-paginated, with generic filters and search.
+
+    Every query parameter outside the fixed non-filter set (`search`,
+    `sort`, `sort_desc`, `cursor`, `page_size`, `with_count`) is treated as
+    a filter key and validated against the whitelist — see the module
+    docstring for why that is generic rather than individually typed.
+
+    Args:
+        request (Request): Carries the raw filter query parameters.
+        repo (MongoServerRepository): The server repository.
+        cache (CacheClient): Cache-aside for the list page.
+        settings (Settings): Supplies the default/max page size.
+        search (str | None): Free-text search over the server's search tokens.
+        sort (str): The field to sort by.
+        sort_desc (bool): Sort descending instead of ascending.
+        cursor (str | None): Opaque keyset cursor from a previous page.
+        page_size (int | None): Page size; defaults to `settings.default_page_size`.
+        with_count (bool): Whether to compute the total matching count.
+
+    Returns:
+        ServerListResponse | Response: The page of servers — a raw cached
+            JSON body on a cache hit (see the module docstring), the
+            validated model on a miss.
+
+    Raises:
+        UnknownFilterError: A query parameter isn't a recognized filter key.
+        PageSizeTooLargeError: `page_size` exceeds `settings.max_page_size`.
+    """
     effective_page_size = page_size if page_size is not None else settings.default_page_size
     if effective_page_size > settings.max_page_size:
         raise PageSizeTooLargeError(
@@ -267,8 +370,7 @@ async def server_facets(
     search: str | None = Query(default=None),
 ) -> ServerFacets | Response:
     """
-    How many servers each filter option would match, under the filters
-    already applied.
+    How many servers each filter option would match, under the current filters.
 
     Takes the same `?vendor=`/`?site_id=`/... parameters and the same
     `?search=` as `GET /servers`, so a caller passes its current query
@@ -309,6 +411,24 @@ async def get_server(
     cache: Annotated[CacheClient, Depends(_cache_client)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> ServerDetail | Response:
+    """
+    Get one server's full detail.
+
+    Args:
+        server_id (str): The server's ID.
+        repo (MongoServerRepository): The server repository.
+        cache (CacheClient): Cache-aside for the detail document, keyed by
+            revision (see the module docstring).
+        settings (Settings): Supplies the NIC OS-name mapping.
+
+    Returns:
+        ServerDetail | Response: The server's detail — a raw cached JSON
+            body on a cache hit (see `list_servers`'s docstring for why),
+            the validated model on a miss.
+
+    Raises:
+        NotFoundError: No server has that ID.
+    """
     pointer_key = _revision_pointer_key(server_id)
     cached_revision = await cache.get(pointer_key)
     if isinstance(cached_revision, int):
@@ -334,12 +454,17 @@ async def get_server(
 
 
 async def _invalidate_detail_cache(server_id: str, cache: CacheClient) -> None:
-    """`server_key` embeds `revision`, so bumping `revision` on write
-    already makes the previous cache entry unreachable — but the pointer
-    entry (`_revision_pointer_key`) still points at the old revision until
-    it expires on its own TTL, which would cost one extra (harmless, but
-    avoidable) Mongo round trip on the very next `GET`. Deleting it here
-    means the next read goes straight to the new revision's key.
+    """Delete the revision-pointer cache entry so the next read sees the new revision.
+
+    `server_key` embeds `revision`, so bumping `revision` on write already
+    makes the previous cache entry unreachable — but the pointer entry
+    (`_revision_pointer_key`) still points at the old revision until it
+    expires on its own TTL, which would cost one extra (harmless, but
+    avoidable) Mongo round trip on the very next `GET`.
+
+    Args:
+        server_id (str): The server whose pointer entry to delete.
+        cache (CacheClient): The cache client.
     """
     await cache.delete(_revision_pointer_key(server_id))
 
@@ -355,11 +480,30 @@ async def reclassify_server(
     request_id: Annotated[str | None, Depends(get_request_id)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> ServerDetail:
-    """Re-runs the classification engine against this server's current
-    identity fields and the *current* ruleset, and persists the result —
-    the same classification step ingestion runs automatically, exposed
+    """
+    Re-run classification for one server against the current ruleset.
+
+    The same classification step ingestion runs automatically, exposed
     here so editing a rule can be followed by "show me the effect on this
-    server" without waiting for the server's next ingest cycle.
+    server" without waiting for the server's next ingest cycle. Persists
+    the result and records a `CLASSIFICATION_CHANGED` audit event when the
+    installation type changes.
+
+    Args:
+        server_id (str): The server's ID.
+        repo (MongoServerRepository): The server repository.
+        cache (CacheClient): Cache-aside to invalidate on write.
+        service (ClassificationService): Runs the classification engine.
+        audit (AuditService): Records the change, if any.
+        actor (Actor): The actor to attribute the audit event to.
+        request_id (str | None): The current request's ID, for the audit event.
+        settings (Settings): Supplies the NIC OS-name mapping.
+
+    Returns:
+        ServerDetail: The server after reclassification.
+
+    Raises:
+        NotFoundError: No server has that ID.
     """
     server = await repo.get_by_id(server_id)
     if server is None:
@@ -411,10 +555,29 @@ async def recalculate_server_health(
     request_id: Annotated[str | None, Depends(get_request_id)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> ServerDetail:
-    """Re-runs the health policy engine against this server's current
-    facts and the *current* policy set, and persists the result. Same
-    rationale as `reclassify_server`: proves "I edited a threshold, did
-    this server's health change" without waiting for its next ingest.
+    """
+    Re-run health evaluation for one server against the current policy set.
+
+    Same rationale as `reclassify_server`: proves "I edited a threshold,
+    did this server's health change" without waiting for its next ingest.
+    Persists the result and records a `HEALTH_STATUS_CHANGED` audit event
+    when the overall severity changes.
+
+    Args:
+        server_id (str): The server's ID.
+        repo (MongoServerRepository): The server repository.
+        cache (CacheClient): Cache-aside to invalidate on write.
+        service (HealthPolicyService): Runs the health policy engine.
+        audit (AuditService): Records the change, if any.
+        actor (Actor): The actor to attribute the audit event to.
+        request_id (str | None): The current request's ID, for the audit event.
+        settings (Settings): Supplies the NIC OS-name mapping.
+
+    Returns:
+        ServerDetail: The server after health re-evaluation.
+
+    Raises:
+        NotFoundError: No server has that ID.
     """
     server = await repo.get_by_id(server_id)
     if server is None:
@@ -455,6 +618,24 @@ async def enable_maintenance(
     request_id: Annotated[str | None, Depends(get_request_id)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> ServerDetail:
+    """
+    Enable maintenance mode on a server.
+
+    Args:
+        server_id (str): The server's ID.
+        payload (MaintenanceEnableRequest): The reason/ticket/expected end.
+        service (MaintenanceService): Applies the maintenance state change.
+        cache (CacheClient): Cache-aside to invalidate on write.
+        actor (Actor): The actor to attribute the audit event to.
+        request_id (str | None): The current request's ID, for the audit event.
+        settings (Settings): Supplies the NIC OS-name mapping.
+
+    Returns:
+        ServerDetail: The server with maintenance enabled.
+
+    Raises:
+        NotFoundError: No server has that ID.
+    """
     server = await service.enable(
         server_id,
         reason=payload.reason,
@@ -476,6 +657,23 @@ async def disable_maintenance(
     request_id: Annotated[str | None, Depends(get_request_id)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> ServerDetail:
+    """
+    Disable maintenance mode on a server.
+
+    Args:
+        server_id (str): The server's ID.
+        service (MaintenanceService): Applies the maintenance state change.
+        cache (CacheClient): Cache-aside to invalidate on write.
+        actor (Actor): The actor to attribute the audit event to.
+        request_id (str | None): The current request's ID, for the audit event.
+        settings (Settings): Supplies the NIC OS-name mapping.
+
+    Returns:
+        ServerDetail: The server with maintenance disabled.
+
+    Raises:
+        NotFoundError: No server has that ID.
+    """
     server = await service.disable(server_id, actor=actor, request_id=request_id)
     await _invalidate_detail_cache(server_id, cache)
     return ServerDetail.from_server(server, nic_name_catalog(settings.nic_os_names))

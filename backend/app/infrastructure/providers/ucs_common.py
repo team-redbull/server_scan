@@ -1,9 +1,8 @@
-"""Logic shared by the Cisco collectors — `ucsmsdk` (UCS Manager, one
-domain), `ucscsdk` (UCS Central, every registered domain) and the
-Intersight REST API, which describes the same hardware with the same
-state vocabulary.
+"""Logic shared by the Cisco collectors, which describe the same hardware with the same vocabulary.
 
-See docs/cisco-collectors.md, "Shared object model and DN joins".
+`ucsmsdk` (UCS Manager, one domain), `ucscsdk` (UCS Central, every
+registered domain) and the Intersight REST API. See docs/cisco-
+collectors.md, "Shared object model and DN joins".
 """
 
 from __future__ import annotations
@@ -68,8 +67,7 @@ def normalize_admin_state(value: object) -> str:
 
 def is_equipped(server_mo: Any) -> bool:
     """
-    Report whether a compute MO is a physically-present, independently
-    addressable server.
+    Report whether a compute MO is a physically-present, independently addressable server.
 
     See docs/cisco-collectors.md, "Shared object model and DN joins".
 
@@ -94,10 +92,10 @@ def group_by_owning_server_dn(
     mos: Iterable[Any], *, server_dns: Iterable[str]
 ) -> dict[str, list[Any]]:
     """
-    Bucket descendant managed objects under the compute unit each one lives
-    below, dropping anything owned by something other than a server.
+    Bucket descendant managed objects under the compute unit each lives below.
 
-    See docs/cisco-collectors.md, "Shared object model and DN joins".
+    Drops anything owned by something other than a server. See
+    docs/cisco-collectors.md, "Shared object model and DN joins".
 
     Args:
         mos (Iterable[Any]): Descendant managed objects, typically the whole
@@ -125,8 +123,7 @@ def group_by_owning_server_dn(
 
 def bmc_interface(mgmt_ifs: list[Any], *, server_dn: str) -> Any | None:
     """
-    Pick a server's own CIMC management interface out of every `mgmtIf`
-    under its DN.
+    Pick a server's own CIMC management interface out of every `mgmtIf` under its DN.
 
     See docs/cisco-collectors.md, "BMC and management interface selection".
 
@@ -155,18 +152,13 @@ def bmc_interface(mgmt_ifs: list[Any], *, server_dn: str) -> Any | None:
 
 def management_ip_by_parent_dn(ip_addrs: Iterable[Any]) -> dict[str, Any]:
     """
-    Index every real management IP assignment by the DN of the object it
-    hangs directly off of.
+    Index every real management IP assignment by the DN of the object it hangs off of.
 
-    `vnicIpV4PooledAddr`/`vnicIpV4StaticAddr` (one populated when the
-    service profile's management IP address policy draws from a pool, the
-    other when it is set statically) are valid direct children of *two*
-    different parents per the installed `ucsmsdk`'s `mo_meta.parents`: a
-    compute unit's `mgmtController` (`{server_dn}/mgmt`) and the service
-    profile's own DN (`lsServer`). Confirmed against real UCS Manager
-    hardware that only the second is actually populated — the first is
-    schema-valid but was empty — so callers key into this by both a
-    profile DN and a `{server_dn}/mgmt` DN and take whichever hits. See
+    `vnicIpV4PooledAddr`/`vnicIpV4StaticAddr` are schema-valid direct
+    children of two different parents (a compute unit's `mgmtController`
+    and the service profile's own `lsServer` DN), but confirmed against
+    real UCS Manager hardware that only the profile DN is ever populated —
+    so callers key into this by both and take whichever hits. See
     docs/cisco-collectors.md, "BMC and management interface selection".
 
     Args:
@@ -193,8 +185,7 @@ def management_ip_by_parent_dn(ip_addrs: Iterable[Any]) -> dict[str, Any]:
 
 def partition_profiles(ls_servers: Iterable[Any]) -> tuple[dict[str, Any], dict[str, str]]:
     """
-    Split one `lsServer` query into real service profiles and the templates
-    they derive from.
+    Split one `lsServer` query into real service profiles and the templates they derive from.
 
     See docs/cisco-collectors.md, "Service profiles and server names".
 

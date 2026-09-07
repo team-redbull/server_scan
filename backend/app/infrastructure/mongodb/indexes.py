@@ -223,8 +223,7 @@ async def _create_indexes(
     db: AsyncDatabase[dict[str, Any]], collection: str, indexes: list[IndexModel]
 ) -> None:
     """
-    Create a collection's declared indexes, replacing any whose stored
-    specification has since changed.
+    Create a collection's declared indexes, replacing any changed ones.
 
     MongoDB rejects `createIndexes` outright (`IndexKeySpecsConflict`)
     when an index of the same name exists with different options, so
@@ -275,8 +274,13 @@ async def _create_indexes(
 
 
 async def ensure_indexes(db: AsyncDatabase[dict[str, Any]]) -> None:
-    """Create every declared index if missing. Safe to call on every
-    process startup — see module docstring.
+    """
+    Create every declared index if missing.
+
+    Safe to call on every process startup — see the module docstring.
+
+    Args:
+        db (AsyncDatabase[dict[str, Any]]): The database to act on.
     """
     await _create_indexes(db, SERVERS_COLLECTION, SERVER_INDEXES)
     await _create_indexes(db, SITES_COLLECTION, SITE_INDEXES)

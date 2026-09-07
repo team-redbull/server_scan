@@ -1,5 +1,4 @@
-"""The `audit_events` collection: an immutable, append-only log of every
-platform mutation.
+"""The `audit_events` collection: an immutable, append-only log of every platform mutation.
 
 Append-only is enforced by construction, not by a database permission
 alone: `MongoAuditEventRepository` (infrastructure layer) exposes only
@@ -23,18 +22,24 @@ from pydantic import BaseModel, Field
 
 
 class ActorType(StrEnum):
+    """The kind of principal that performed an audited action."""
+
     SYSTEM = "SYSTEM"
     USER = "USER"
     TOKEN = "TOKEN"  # noqa: S105 - an actor-type label, not a credential
 
 
 class Actor(BaseModel):
+    """The principal an `AuditEvent` records as having performed it."""
+
     type: ActorType
     id: str
     display: str | None = None
 
 
 class EventType(StrEnum):
+    """The closed, append-only registry of audit event kinds."""
+
     SERVER_CREATED = "SERVER_CREATED"
     SERVER_UPDATED = "SERVER_UPDATED"
     SERVER_DELETED = "SERVER_DELETED"
@@ -61,6 +66,8 @@ class EventType(StrEnum):
 
 
 class AuditEvent(BaseModel):
+    """One immutable, append-only record in the `audit_events` collection."""
+
     id: str = Field(alias="_id")
     event_type: EventType
     # Nullable: most event types are server-scoped, but rule/policy events

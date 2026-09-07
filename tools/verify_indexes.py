@@ -1,7 +1,9 @@
-"""Prove — against the live database, at real scale — that every query
-shape `GET /api/v1/servers` (and the classification/health resolution and
-preview paths) can actually issue is index-covered, not just "should be"
-by inspection of `app.infrastructure.mongodb.indexes`.
+"""
+Prove, against the live database at real scale, that every query shape is index-covered.
+
+Covers `GET /api/v1/servers` and the classification/health resolution and
+preview paths — not just "should be" by inspection of
+`app.infrastructure.mongodb.indexes`.
 
 Why this exists as a script rather than only as `.explain()` assertions in
 the integration test suite (`tests/integration/test_server_repository.py`
@@ -44,14 +46,25 @@ logger = structlog.get_logger(__name__)
 
 @dataclass(slots=True)
 class QueryCheck:
+    """One query shape to `.explain()` and check for a COLLSCAN.
+
+    Attributes:
+        description (str): Printed label for this check's result line.
+        collection (str): The MongoDB collection to query.
+        filter (dict[str, object]): The query's filter document.
+        sort (list[tuple[str, int]] | None): Sort spec, or None for
+            unsorted.
+        limit (int | None): Result limit, or None for unbounded.
+        expect_collscan (bool): True for shapes that are *supposed* to be
+            a bounded COLLSCAN (e.g. an unfiltered preview candidate scan
+            capped by `limit`) — reported, not a failure.
+    """
+
     description: str
     collection: str
     filter: dict[str, object]
     sort: list[tuple[str, int]] | None = None
     limit: int | None = None
-    # True for shapes that are *supposed* to be a bounded COLLSCAN (e.g. an
-    # unfiltered preview candidate scan capped by `limit`) — reported, not
-    # a failure.
     expect_collscan: bool = False
 
 
@@ -83,6 +96,15 @@ _SORT_SHAPES: dict[str, str] = {
 
 
 def _build_server_checks() -> list[QueryCheck]:
+    """
+    Build every query shape `MongoServerRepository.list_page` can issue.
+
+    Returns:
+        list[QueryCheck]: No filter, each single `FILTER_FIELDS` entry
+            alone, and search alone, each paired with every
+            `SORT_FIELDS` value, plus the `count_documents` and preview
+            candidate-scan shapes.
+    """
     checks: list[QueryCheck] = []
     for filter_name, filter_query in _SERVER_FILTER_SHAPES.items():
         for sort_name, sort_field in _SORT_SHAPES.items():
@@ -148,6 +170,14 @@ def _build_server_checks() -> list[QueryCheck]:
 
 
 def _classification_health_checks() -> list[QueryCheck]:
+    """
+    Build the classification-rule and health-policy resolution query shapes.
+
+    Returns:
+        list[QueryCheck]: One shape per collection, matching how
+            `ClassificationService`/`HealthPolicyService` resolve their
+            enabled, ordered rule set.
+    """
     return [
         QueryCheck(
             description="classification_rules: resolution (enabled=true, sorted)",
@@ -165,6 +195,13 @@ def _classification_health_checks() -> list[QueryCheck]:
 
 
 def _audit_event_checks() -> list[QueryCheck]:
+    """
+    Build the audit-event feed query shapes: global, and each supported filter.
+
+    Returns:
+        list[QueryCheck]: The global feed shape plus one per filterable
+            field (`server_id`, `event_type`, `actor.id`).
+    """
     return [
         QueryCheck(
             description="audit_events: global feed",
@@ -198,9 +235,19 @@ def _audit_event_checks() -> list[QueryCheck]:
 
 
 def _winning_stage_names(plan: dict[str, Any]) -> set[str]:
+    """
+    Collect every stage name (e.g. `COLLSCAN`, `IXSCAN`, `SORT`) in a winning plan tree.
+
+    Args:
+        plan (dict[str, Any]): The `explain()` output's `winningPlan`.
+
+    Returns:
+        set[str]: Every `stage` value found anywhere in the plan tree.
+    """
     stages: set[str] = set()
 
     def walk(node: dict[str, Any]) -> None:
+        """Recurse into `node`'s child stages, collecting into `stages`."""
         stage = node.get("stage")
         if stage:
             stages.add(stage)
@@ -217,9 +264,19 @@ def _winning_stage_names(plan: dict[str, Any]) -> set[str]:
 
 
 def _index_names(plan: dict[str, Any]) -> set[str]:
+    """
+    Collect every index name used anywhere in a winning plan tree.
+
+    Args:
+        plan (dict[str, Any]): The `explain()` output's `winningPlan`.
+
+    Returns:
+        set[str]: Every `indexName` value found anywhere in the plan tree.
+    """
     names: set[str] = set()
 
     def walk(node: dict[str, Any]) -> None:
+        """Recurse into `node`'s child stages, collecting into `names`."""
         name = node.get("indexName")
         if name:
             names.add(name)
@@ -236,6 +293,17 @@ def _index_names(plan: dict[str, Any]) -> set[str]:
 
 
 async def _run_check(db: Any, check: QueryCheck) -> tuple[bool, str]:
+    """
+    Run `check` through `.explain()` and report whether its plan matches expectations.
+
+    Args:
+        db (Any): The database to query.
+        check (QueryCheck): The shape to run and its COLLSCAN expectation.
+
+    Returns:
+        tuple[bool, str]: Whether the plan matched expectations, and the
+            printable result line.
+    """
     cursor = db[check.collection].find(check.filter)
     if check.sort:
         cursor = cursor.sort(check.sort)
@@ -273,6 +341,13 @@ async def _run_check(db: Any, check: QueryCheck) -> tuple[bool, str]:
 
 
 async def main() -> None:
+    """
+    Run every query check against the connected database and print a report.
+
+    Raises:
+        SystemExit: With code 1 when any query shape that has a
+            supporting index fell back to a COLLSCAN anyway.
+    """
     settings = get_settings()
     configure_logging(
         level=settings.log_level,

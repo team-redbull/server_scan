@@ -375,8 +375,7 @@ class GpuCatalog:
 
     def enrich(self, gpu: Mapping[str, Any]) -> dict[str, Any]:
         """
-        Fill in a GPU's memory from this catalog, when the API left it
-        unknown and this catalog recognizes the card.
+        Fill in a GPU's memory from this catalog, when the API left it unknown.
 
         Real data always wins: a GPU whose `memory_bytes` a collector
         already populated is returned unchanged — this catalog only fills

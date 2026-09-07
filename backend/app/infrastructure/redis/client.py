@@ -24,10 +24,24 @@ class RedisClientHolder:
     """Owns the single Redis connection pool for this process."""
 
     def __init__(self, settings: Settings) -> None:
+        """
+        Store settings; connect() creates the actual connection pool.
+
+        Args:
+            settings (Settings): Provides the Redis URI, pool size and
+                timeouts used by `connect`.
+        """
         self._settings = settings
         self._client: Redis | None = None
 
     async def connect(self) -> None:
+        """
+        Create the process-wide Redis connection pool.
+
+        Idempotent — a second call is a no-op if a client already exists.
+        A failed startup ping is logged and swallowed, not raised: Redis
+        is a cache, not a dependency the service requires to start.
+        """
         if self._client is not None:
             return
         self._client = Redis.from_url(
@@ -48,6 +62,7 @@ class RedisClientHolder:
             logger.warning("redis.connect_failed_at_startup")
 
     async def close(self) -> None:
+        """Close the connection pool and release it, if connected."""
         if self._client is not None:
             await self._client.aclose()
             self._client = None
@@ -55,11 +70,26 @@ class RedisClientHolder:
 
     @property
     def client(self) -> Redis:
+        """
+        The underlying Redis client.
+
+        Returns:
+            Redis: The client handle.
+
+        Raises:
+            RuntimeError: If `connect()` has not been called yet.
+        """
         if self._client is None:
             raise RuntimeError("RedisClientHolder.connect() was not called")
         return self._client
 
     async def ping(self) -> bool:
+        """
+        Check Redis connectivity. Never raises — returns False on failure.
+
+        Returns:
+            bool: True if the ping succeeded, False otherwise.
+        """
         if self._client is None:
             return False
         try:

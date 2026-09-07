@@ -32,6 +32,8 @@ _DEFAULT_PORTS: dict[str, int] = {"ipmi": 623}
 
 @dataclass(frozen=True, slots=True)
 class BmcAddress:
+    """A BMC address split into its raw form and parsed components."""
+
     raw: str
     scheme: str | None
     host: str | None
@@ -41,9 +43,17 @@ class BmcAddress:
 
 
 def parse_bmc_address(raw: str | None) -> BmcAddress | None:
-    """Parse a BMC address into its components. Returns `None` for empty
-    input; never raises on malformed input — worst case, `host` is `None`
-    and the raw string is preserved for a human to look at.
+    """
+    Parse a BMC address into its components.
+
+    Never raises on malformed input — worst case, `host` is `None` and
+    the raw string is preserved for a human to look at.
+
+    Args:
+        raw (str | None): The vendor-reported BMC address, or `None`.
+
+    Returns:
+        BmcAddress | None: The parsed address, or `None` for empty input.
     """
     if not raw or not raw.strip():
         return None

@@ -21,11 +21,12 @@ logger = structlog.get_logger(__name__)
 
 class UcsCentralConnectionError(Exception):
     """
-    Any failure talking to UCS Central: auth rejected, an XML API error
-    response, a network-level failure, or the timeout this module imposes
-    because the SDK offers none.
+    Any failure talking to UCS Central.
 
-    See docs/cisco-collectors.md, "SDK behaviour, sessions and timeouts".
+    Covers auth rejected, an XML API error response, a network-level
+    failure, or the timeout this module imposes because the SDK offers
+    none. See docs/cisco-collectors.md, "SDK behaviour, sessions and
+    timeouts".
     """
 
 

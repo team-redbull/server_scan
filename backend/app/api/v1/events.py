@@ -31,6 +31,15 @@ _MAX_PAGE_SIZE = 200
 async def _event_repo(
     mongo: Annotated[MongoClientHolder, Depends(get_mongo_holder)],
 ) -> MongoAuditEventRepository:
+    """
+    Build the audit event repository for one request.
+
+    Args:
+        mongo (MongoClientHolder): The shared Mongo client holder.
+
+    Returns:
+        MongoAuditEventRepository: A repository bound to that client.
+    """
     return MongoAuditEventRepository(mongo)
 
 
@@ -52,6 +61,20 @@ async def list_events(
     cursor: str | None = Query(default=None),
     page_size: int = Query(default=_DEFAULT_PAGE_SIZE, ge=1, le=_MAX_PAGE_SIZE),
 ) -> AuditEventListResponse:
+    """
+    List audit events across every server, newest first, with keyset paging.
+
+    Args:
+        repo (MongoAuditEventRepository): The audit event repository.
+        server_id (str | None): Restrict to events for this server.
+        event_type (str | None): Restrict to this event type.
+        actor_id (str | None): Restrict to events recorded by this actor.
+        cursor (str | None): Opaque cursor from a previous page's response.
+        page_size (int): Maximum items to return, 1-200.
+
+    Returns:
+        AuditEventListResponse: The matching page of events.
+    """
     page = await repo.list_page(
         server_id=server_id,
         event_type=event_type,
@@ -69,5 +92,17 @@ async def list_server_events(
     cursor: str | None = Query(default=None),
     page_size: int = Query(default=_DEFAULT_PAGE_SIZE, ge=1, le=_MAX_PAGE_SIZE),
 ) -> AuditEventListResponse:
+    """
+    List audit events for one server, newest first, with keyset paging.
+
+    Args:
+        server_id (str): The server's ID.
+        repo (MongoAuditEventRepository): The audit event repository.
+        cursor (str | None): Opaque cursor from a previous page's response.
+        page_size (int): Maximum items to return, 1-200.
+
+    Returns:
+        AuditEventListResponse: The matching page of events.
+    """
     page = await repo.list_page(server_id=server_id, cursor=cursor, page_size=page_size)
     return _to_response(page, page_size=page_size)

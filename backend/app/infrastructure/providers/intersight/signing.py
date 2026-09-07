@@ -129,7 +129,8 @@ class IntersightSigner:
     """
 
     def __init__(self, *, key_id: str, private_key_pem: str) -> None:
-        """
+        """Load and validate the key this signer will sign every request with.
+
         Args:
             key_id (str): The API Key ID, as Intersight displays it.
             private_key_pem (str): The unencrypted PEM private half.

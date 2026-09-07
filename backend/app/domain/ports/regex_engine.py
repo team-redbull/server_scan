@@ -14,30 +14,47 @@ from typing import Protocol
 
 
 class RegexTimeout(Exception):
-    """Raised when a pattern's match against a subject exceeds the
-    configured time budget. Callers (the classification engine) catch
-    this per-rule and quarantine the offending rule rather than letting
-    one pathological pattern stall an entire classification run.
+    """
+    Raised when a match against a subject exceeds the configured time budget.
+
+    Callers (the classification engine) catch this per-rule and
+    quarantine the offending rule rather than letting one pathological
+    pattern stall an entire classification run.
     """
 
 
 class RegexUnsafeError(Exception):
-    """Raised at compile time (not match time) for a pattern rejected
-    before it's ever run — too long, or fails a canary timing probe
-    against known-pathological inputs.
+    """
+    Raised at compile time for a pattern rejected before it's ever run.
+
+    A pattern is rejected for being too long or for failing a canary
+    timing probe against known-pathological inputs.
     """
 
 
 @dataclass(frozen=True, slots=True)
 class RegexMatch:
+    """The span of one successful match, start/end offsets into the subject string."""
+
     start: int
     end: int
 
 
 class RegexEngine(Protocol):
+    """The regex operations `classification` depends on, not on a specific library."""
+
     def validate(self, pattern: str, *, ignore_case: bool, multiline: bool, dotall: bool) -> None:
-        """Raise `RegexUnsafeError` if `pattern` should never be accepted
-        (too long, fails a timeout canary). Called at rule write time.
+        """
+        Reject a pattern that should never be accepted, at rule write time.
+
+        Args:
+            pattern (str): The regex source to validate.
+            ignore_case (bool): Whether matching would be case-insensitive.
+            multiline (bool): Whether `^`/`$` would match at line boundaries.
+            dotall (bool): Whether `.` would match a newline.
+
+        Raises:
+            RegexUnsafeError: If `pattern` is too long or fails a timeout canary.
         """
         ...
 
@@ -50,5 +67,20 @@ class RegexEngine(Protocol):
         multiline: bool,
         dotall: bool,
     ) -> RegexMatch | None:
-        """Raise `RegexTimeout` if matching exceeds the configured budget."""
+        """
+        Search `subject` for the first match of `pattern`.
+
+        Args:
+            pattern (str): The regex source to match.
+            subject (str): The text to search.
+            ignore_case (bool): Whether matching is case-insensitive.
+            multiline (bool): Whether `^`/`$` match at line boundaries.
+            dotall (bool): Whether `.` matches a newline.
+
+        Returns:
+            RegexMatch | None: The first match, or `None` if there isn't one.
+
+        Raises:
+            RegexTimeout: If matching exceeds the configured time budget.
+        """
         ...

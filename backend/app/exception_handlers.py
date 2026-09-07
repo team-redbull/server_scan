@@ -55,6 +55,13 @@ def _problem_response(
 
 
 def register_exception_handlers(app: FastAPI) -> None:
+    """
+    Wire every exception type this app raises to an RFC 9457 response.
+
+    Args:
+        app (FastAPI): The application to register handlers on.
+    """
+
     @app.exception_handler(AppError)
     async def handle_app_error(request: Request, exc: AppError) -> JSONResponse:
         logger.info(

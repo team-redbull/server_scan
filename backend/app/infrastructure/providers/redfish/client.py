@@ -1,17 +1,13 @@
-"""Async Redfish client for one BMC, on the `httpx` this project already
-pins.
+"""Async Redfish client for one BMC, built on the `httpx` this project already pins.
 
-Written rather than taken from a library for reasons recorded in
-docs/adr/0016-redfish-standalone-collector.md: the DMTF library hardcodes
-`verify = False` and logs response headers unredacted (where the session
-token lives), and `sushy` is sync-only and untyped. What is carried over
-from `sushy` is its hard-won field knowledge, not its code — `Connection:
-close`, split connect/read timeouts, and never retrying an `SSLError`.
-
-The exception hierarchy is wider than the Cisco clients' single type on
-purpose. Those deliberately collapse "rejected" and "unreachable"; here
-the two must drive different behaviour, because retrying a rejected login
-across an estate locks accounts.
+Written rather than taken from a library — see docs/adr/0016 — because the
+DMTF library hardcodes `verify = False` and logs the session token
+unredacted, and `sushy` is sync-only and untyped; what carries over from
+`sushy` is its field knowledge (`Connection: close`, split connect/read
+timeouts, never retrying an `SSLError`), not its code. The exception
+hierarchy is wider than the Cisco clients' single type on purpose: a
+rejected login and an unreachable BMC must drive different retry
+behaviour, since retrying a rejected login across an estate locks accounts.
 """
 
 from __future__ import annotations
@@ -209,8 +205,7 @@ class RedfishClient:
 
     async def __aenter__(self) -> Self:
         """
-        Probe the service root, confirm it is conformant Redfish, and open
-        a session.
+        Probe the service root, confirm it is conformant Redfish, and open a session.
 
         Returns:
             Self: The authenticated client.
@@ -271,14 +266,11 @@ class RedfishClient:
 
     def _assert_conformant(self, root: dict[str, Any]) -> None:
         """
-        Reject a service that is not conformant Redfish, before any
-        credential is sent.
+        Reject a service that is not conformant Redfish, before any credential is sent.
 
-        Pre-Redfish services (notably HPE iLO 4) answer `/redfish/v1` with
-        a dotted `@odata.type` and different property spellings. Without
-        this check they produce a half-populated record or a failure deep
-        in the traversal; with it they fail legibly. Stated by shape, not
-        by vendor, so any equally divergent BMC fails the same way.
+        Pre-Redfish services (notably HPE iLO 4) answer `/redfish/v1` with a
+        dotted `@odata.type` and different property spellings; checked by
+        shape, not by vendor, so any equally divergent BMC fails the same way.
 
         Args:
             root (dict[str, Any]): The service root payload.

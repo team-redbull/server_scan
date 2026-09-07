@@ -1,9 +1,8 @@
-"""Read-only probe answering the questions `docs/adr/0017` could not
-settle without a live Intersight: **is the API key accepted, what does
-`TotalMemory` actually mean, and does anything here name a server in a
-way this platform can use?**
+"""Read-only probe settling the questions `docs/adr/0017` could not.
 
-Those three decide whether the Intersight collector works at all. No
+**Is the API key accepted, what does `TotalMemory` actually mean, and
+does anything here name a server in a way this platform can use**? Those
+three decide whether the Intersight collector works at all. No
 live Intersight call has ever been made against this code — the DevNet
 sandbox went offline in August 2026 and Cisco publishes response schemas
 without example values, so the mapping is built entirely from the
@@ -297,8 +296,7 @@ async def _inspect(client: IntersightClient, *, show_names: int, sample: int) ->
 
 async def _check_memory_unit(client: IntersightClient, summaries: list[dict[str, Any]]) -> None:
     """
-    Settle `TotalMemory`'s undocumented unit against two independent
-    signals.
+    Settle `TotalMemory`'s undocumented unit against two independent signals.
 
     ADR-0017's highest-risk open item. `TotalMemory` carries no unit
     anywhere in the contract, and the collector assumes MiB — if that is
@@ -438,8 +436,7 @@ async def _resource_by_owner(
 
 async def _storage_controller_owner_map(client: IntersightClient) -> dict[str, str]:
     """
-    `storage.Controller` `Moid` -> owning server `Moid`, following the
-    same `ComputeBoard` fallback the collector itself now uses.
+    `storage.Controller` `Moid` -> owning server `Moid`, following the same `ComputeBoard` fallback.
 
     Shared by sections 5 and 6, both of which need to resolve a disk to
     its server through its controller. A local copy of
@@ -503,8 +500,7 @@ async def _check_boot_optimized_storage(
     client: IntersightClient, summaries: list[dict[str, Any]], controller_owner: dict[str, str]
 ) -> None:
     """
-    Check whether Cisco's M.2/SD boot-optimized storage subsystem
-    explains a server reporting zero `storage.PhysicalDisk` rows.
+    Check whether Cisco's boot-optimized M.2/SD storage explains a zero-drive report.
 
     `pci.Device` was checked and ruled out during the follow-up research
     that prompted this (`docs/notes/intersight-inventory-model.md`,
@@ -545,8 +541,7 @@ async def _check_boot_optimized_storage(
         controller_resource: str, drive_resource: str, owner_field: str
     ) -> dict[str, int]:
         """
-        Boot-optimized drives per server, for one generation
-        (FlexUtil or FlexFlash).
+        Count boot-optimized drives per server, for one generation (FlexUtil or FlexFlash).
 
         Args:
             controller_resource (str): The controller class's path.
@@ -623,8 +618,7 @@ async def _check_boot_optimized_storage(
 
 def _drive_capacity_bytes(disk: Mapping[str, Any]) -> int | None:
     """
-    A drive's capacity in bytes, mirroring
-    `intersight.mapping._capacity_bytes` exactly.
+    A drive's capacity in bytes, mirroring `intersight.mapping._capacity_bytes` exactly.
 
     A local copy rather than importing the mapping module's private
     helper, matching this file's own convention (see `_int`'s
@@ -648,8 +642,7 @@ async def _check_disk_capacity(
     client: IntersightClient, summaries: list[dict[str, Any]], controller_owner: dict[str, str]
 ) -> None:
     """
-    Flag every drive whose capacity the mapping cannot parse, with the
-    raw fields Intersight actually sent for it.
+    Flag every drive whose capacity the mapping cannot parse, with the raw fields it sent.
 
     Prompted by a live report: one server's drives all showed correct
     model/serial/type/health but "size unknown", while the Intersight UI

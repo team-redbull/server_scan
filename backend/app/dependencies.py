@@ -25,16 +25,43 @@ from app.infrastructure.redis import RedisClientHolder
 
 
 async def get_mongo_holder(request: Request) -> MongoClientHolder:
+    """
+    The process-wide `MongoClientHolder` the lifespan already connected.
+
+    Args:
+        request (Request): The current request.
+
+    Returns:
+        MongoClientHolder: The connected holder stashed on `app.state`.
+    """
     holder: MongoClientHolder = request.app.state.mongo
     return holder
 
 
 async def get_redis_holder(request: Request) -> RedisClientHolder:
+    """
+    The process-wide `RedisClientHolder` the lifespan already connected.
+
+    Args:
+        request (Request): The current request.
+
+    Returns:
+        RedisClientHolder: The connected holder stashed on `app.state`.
+    """
     holder: RedisClientHolder = request.app.state.redis
     return holder
 
 
 async def get_request_id(request: Request) -> str | None:
+    """
+    This request's id, bound by `RequestContextMiddleware`.
+
+    Args:
+        request (Request): The current request.
+
+    Returns:
+        str | None: The request id, or None if the middleware hasn't run.
+    """
     return getattr(request.state, "request_id", None)
 
 
@@ -49,4 +76,17 @@ _UNAUTHENTICATED_ACTOR = Actor(type=ActorType.USER, id="unauthenticated", displa
 
 
 async def get_current_actor(_request: Request) -> Actor:
+    """
+    The actor an audit event should be attributed to.
+
+    Always the well-known unauthenticated actor today — see the module
+    comment above for why.
+
+    Args:
+        _request (Request): Unused; kept so this matches every other
+            dependency's signature and swaps in cleanly once auth lands.
+
+    Returns:
+        Actor: `_UNAUTHENTICATED_ACTOR`.
+    """
     return _UNAUTHENTICATED_ACTOR

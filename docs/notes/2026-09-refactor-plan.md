@@ -3,11 +3,12 @@
 Companion to `docs/notes/2026-09-audit.md` (findings, with IDs referenced
 here) and the seven `docs/notes/2026-09-research-*.md` files.
 
-**Status: approved 2026-09-06. Phases 1-9 done, committed, and pushed to
+**Status: approved 2026-09-06. Phases 1-10 done, committed, and pushed to
 `dev-refactor` (`686160f`, `453f47e`+`8dfed16`+`517cfce`, `c90968a`,
 `4806d21`+`6066cc5`+`2920510`, `b5d6702`, `37d1cce`, `a669a97`, `8d463b8`,
-Phase 9's own commit respectively — Phase 2 shipped as three commits and
-Phase 4 as three instead of one, see their own sections for why). Phase 6
+Phase 9's own commit, Phase 10's own commit respectively — Phase 2 shipped
+as three commits and Phase 4 as three instead of one, see their own
+sections for why). Phase 6
 also surfaced and fixed an unrelated dev-tooling bug (`d448822`):
 `scripts/dev-up.sh down` never removed Mongo's named volume, so `down &&
 up` silently kept the previous run's data instead of the empty database
@@ -17,7 +18,9 @@ added declared node20, CI's own deprecation annotation caught it on the
 very next run; `e38de2a` — docs only) plus one out-of-band, user-requested
 feature between Phase 8 and 9 (`734717e`, its own section below,
 "Between Phase 8 and 9"): all five collectors now log/print a
-`took=`/`collector.run_complete` run duration. **Phase 10 next.**
+`took=`/`collector.run_complete` run duration. **Phase 11 next** — the
+last phase actually scheduled in this pass; Phase 12 stays deliberately
+deferred (see its own section).
 
 Ordering follows the brief: contract and architecture first while the diff
 is still legible, mechanical sweeps last. One phase = one reviewable
@@ -686,6 +689,90 @@ convention 8 was written to stop. `Args:`/`Returns:`/`Raises:` stay full
 and typed regardless of summary length — this rule is about the prose
 above them, not about dropping the structured part. A summary that
 already fits 1-3 lines needs no change in this sweep.
+
+**Shipped as `refactor: give every backend function a Google-style docstring`.**
+
+**Re-measured rather than trusted, per this session's own established
+practice**: `uv run ruff check --select D backend/app tools` (before any
+`[tool.ruff.lint]` config existed to scope it) found **402** real
+violations, not the stale 244/363 + 42/84 estimate above — the original
+audit's numbers were from an AST pass with its own conformance
+definition, not from ruff's actual `D` rule set. `git diff --stat` at
+completion: **127 files, ~2,700 insertions**.
+
+- **The trap was real but the fix wasn't "select D213"** — D213 doesn't
+  need separate selecting; `convention = "google"` enables D212 by
+  default, and simply adding `"D212"` to `[tool.ruff.lint] ignore`
+  (alongside `D203`, which the CLI already warns is incompatible with
+  `D211`) is sufficient. Confirmed empirically: CLAUDE.md's own docstring
+  example (`"""` alone, summary on the next line) fails with `D212` under
+  bare `select = ["D"]` + `convention = "google"`, and passes clean once
+  `D212` is ignored — no `D213` selection needed or possible (it's the
+  mutually-exclusive counterpart, not an independent switch). `D` was
+  added to `[tool.ruff.lint] select` and `tests/**` was added to
+  `per-file-ignores` for `D` in the same commit as the docstring sweep
+  itself, exactly as the trap paragraph above demanded (not staged into
+  Phase 8, which would have gone red for however long the sweep took).
+- **A second, sharper trap found only by hitting it twice**: `D205`
+  ("blank line required between summary and description") rejects a
+  summary that wraps naturally across 2-3 physical lines with *no* blank
+  line — even one grammatical sentence, even well inside the 1-3 line
+  cap above. pydocstyle treats only the literal first physical line as
+  the summary; anything on the next line without an intervening blank is
+  "description" and must be separated from it. This is not mentioned
+  anywhere in pydocstyle's own docs in those terms and was the single
+  highest-frequency violation (136 of 402). Every parallel worker below
+  was briefed on it explicitly, with a worked example, after the
+  coordinating session's own first two docstrings on `errors.py` hit it.
+- **A related trap, `ruff format` vs `D210`**: a docstring whose content
+  starts with a literal `"` character (`""" "REVISION_CONFLICT" -> ...`)
+  gets a space inserted by `ruff format` to disambiguate the delimiter,
+  which then fails `D210` ("no whitespace after opening quotes") —
+  `ruff format` and `ruff check` disagree and cannot both be satisfied by
+  quoting differently; the only fix is not opening a docstring with a
+  literal quote character.
+- **The two decisions, made and applied**: every Pydantic `BaseModel`
+  subclass got a short (1-3 line) class docstring *additively* — every
+  existing per-field `#` comment was left untouched, verified by grep
+  against every fact named in convention 8's own list (GPU catalog
+  equality rule, OneView `count=-1`, the UCS-login-without-endpoint
+  rationale, the Dell two-login split, Intersight's `TotalMemory` unit
+  caveat, `ProfileTemplate`'s four-vendor comparison — all confirmed
+  present in the final tree). All 24 `AppError` subclasses got a
+  one-line docstring naming their HTTP status and condition;
+  `ManagerHasChildrenError`/`InvalidManagerHierarchyError` — dead code,
+  never raised anywhere, a leftover from before managers became
+  config-derived projections — are documented as such rather than given
+  a docstring implying they fire from somewhere.
+- **Execution: seven parallel `general-purpose` agents plus the
+  coordinating session's own work**, split by directory
+  (`infrastructure/mongodb`+`redis`+`logging`; `domain/models`;
+  `domain/services`+`ports`+`value_objects`; `api/v1`+`middleware`;
+  `application/services`+`config`; `tools/`; `infrastructure/providers`+
+  `utils`+`observability`), each with the full docstring-shape briefing,
+  the two D-traps above, the Pydantic/AppError decisions, and an explicit
+  "never delete a hard-won fact" instruction. `backend/app`'s top-level
+  files (`main.py`, `dependencies.py`, `errors.py`,
+  `exception_handlers.py`) and `infrastructure`'s top-level/`credentials`
+  files were done directly by the coordinating session rather than
+  delegated, being small and foundational. One directory,
+  `backend/app/domain/enums/` (a package, not the single file the
+  original file-listing command assumed), was missed by every worker's
+  scope and caught only by the final repo-wide `ruff check .` — fixed
+  directly afterward. Two mechanical defects survived a worker's own
+  verification and were caught only by the coordinating session reading
+  the diff: `tools/verify_ucs_central.py` and `tools/verify_intersight.py`
+  each ended up with a module docstring containing the original opening
+  sentence duplicated/split awkwardly around a synthetically-added
+  one-line summary (the worker's own account of *why* — reconciling a
+  sub-100-char single-line-summary requirement against an original
+  opening sentence too long to fit one line — was accurate; the specific
+  wording just needed tightening) — both rewritten to one clean summary
+  line each, re-verified.
+- **Verified**: `uv run ruff check .`, `uv run ruff format --check .`,
+  and `uv run ty check backend/app tools tests` all clean; `uv run
+  pytest -q` — **1084 passed**, unchanged from Phase 9 (documentation-only
+  change, no test was expected to move).
 
 ---
 

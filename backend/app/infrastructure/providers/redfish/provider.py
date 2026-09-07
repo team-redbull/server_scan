@@ -675,12 +675,10 @@ class RedfishStandaloneProvider(ServerInventoryProvider):
         self, client: Any, resource: dict[str, Any], key: str
     ) -> dict[str, Any] | None:
         """
-        Fetch a single linked sub-resource, tolerating a BMC that cannot
-        serve it.
+        Fetch a single linked sub-resource, tolerating a BMC that cannot serve it.
 
-        The single-resource analogue of `_optional`, which follows a
-        link to a *collection*; this follows a link to one resource
-        (`Processor.Metrics`, `.EnvironmentMetrics`).
+        The single-resource analogue of `_optional`, which follows a link to
+        a *collection* (`Processor.Metrics`, `.EnvironmentMetrics` here).
 
         Args:
             client (Any): The authenticated client.

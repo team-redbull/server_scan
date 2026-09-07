@@ -23,6 +23,8 @@ from pydantic import BaseModel, Field
 
 
 class ConnectivityAttachment(BaseModel):
+    """One reported fabric attachment — a physical uplink or a vNIC carved out of one."""
+
     type: str = "UNKNOWN"  # e.g. FABRIC_INTERCONNECT
     provider: str | None = None  # e.g. UCS_MANAGER
     fabric: str | None = None  # "A" | "B" | ... — nullable, never assumed
@@ -44,9 +46,10 @@ class ConnectivityAttachment(BaseModel):
 
 
 class ConnectivityFacts(BaseModel):
-    """Derived, computed once at ingest and stored — health policies read
-    these scalars rather than re-aggregating `attachments` on every
-    evaluation. `total != up + down` is possible and deliberate: an
+    """Fabric-path scalars derived from `attachments` once at ingest and stored.
+
+    Health policies read these rather than re-aggregating `attachments` on
+    every evaluation. `total != up + down` is possible and deliberate: an
     attachment in an UNKNOWN or DEGRADED oper_state counts toward neither.
     """
 
@@ -57,15 +60,18 @@ class ConnectivityFacts(BaseModel):
 
 
 class Connectivity(BaseModel):
+    """A server's fabric attachments plus the derived facts computed from them."""
+
     attachments: list[ConnectivityAttachment] = Field(default_factory=list)
     facts: ConnectivityFacts = Field(default_factory=ConnectivityFacts)
 
 
 def compute_connectivity_facts(attachments: list[ConnectivityAttachment]) -> ConnectivityFacts:
-    """Pure function deriving `ConnectivityFacts` from a list of
-    attachments. Called by the ingestion pipeline immediately after
-    normalizing attachments, so the stored facts are never allowed to
-    drift from the attachments they were derived from.
+    """Derive `ConnectivityFacts` from a list of attachments.
+
+    Called by the ingestion pipeline immediately after normalizing
+    attachments, so the stored facts are never allowed to drift from the
+    attachments they were derived from.
 
     Only `PHYSICAL` attachments count. A UCS server reports its vNICs
     alongside the ports they ride on, and counting both would report a

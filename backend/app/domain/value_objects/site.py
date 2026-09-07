@@ -155,6 +155,8 @@ class SiteCatalog:
     @property
     def codes(self) -> tuple[str, ...]:
         """
+        Every configured site code, in configured order.
+
         Returns:
             tuple[str, ...]: Every site code, in configured order.
         """
@@ -162,6 +164,8 @@ class SiteCatalog:
 
     def __contains__(self, code: object) -> bool:
         """
+        Whether this deployment knows about a candidate site code.
+
         Args:
             code (object): A candidate site code.
 

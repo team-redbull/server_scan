@@ -22,7 +22,16 @@ from app.utils.timeutil import utcnow
 
 
 class MaintenanceService:
+    """Enables and disables a server's maintenance window."""
+
     def __init__(self, *, server_repo: ServerRepository, audit: AuditService) -> None:
+        """
+        Initialize the service with its server repository and audit service.
+
+        Args:
+            server_repo (ServerRepository): The servers collection.
+            audit (AuditService): Records maintenance enable/disable events.
+        """
         self._server_repo = server_repo
         self._audit = audit
 
@@ -36,6 +45,23 @@ class MaintenanceService:
         actor: Actor,
         request_id: str | None,
     ) -> Server:
+        """
+        Enable (or update) a server's maintenance window.
+
+        Args:
+            server_id (str): The server to put into maintenance.
+            reason (str | None): Why the server is in maintenance.
+            ticket (str | None): A reference to an external tracking ticket.
+            expected_end (datetime | None): When the window is expected to end.
+            actor (Actor): Who is enabling maintenance.
+            request_id (str | None): The originating API request id, if any.
+
+        Returns:
+            Server: The updated server, with `maintenance` and `revision` bumped.
+
+        Raises:
+            NotFoundError: No server exists with `server_id`.
+        """
         server = await self._get_or_404(server_id)
         expected_revision = server.revision
         was_enabled = server.maintenance.enabled
@@ -66,6 +92,20 @@ class MaintenanceService:
         return server
 
     async def disable(self, server_id: str, *, actor: Actor, request_id: str | None) -> Server:
+        """
+        End a server's maintenance window.
+
+        Args:
+            server_id (str): The server to take out of maintenance.
+            actor (Actor): Who is disabling maintenance.
+            request_id (str | None): The originating API request id, if any.
+
+        Returns:
+            Server: The updated server, with `maintenance` and `revision` bumped.
+
+        Raises:
+            NotFoundError: No server exists with `server_id`.
+        """
         server = await self._get_or_404(server_id)
         expected_revision = server.revision
         was_enabled = server.maintenance.enabled

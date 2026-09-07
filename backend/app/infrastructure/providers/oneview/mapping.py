@@ -422,13 +422,10 @@ def _storage(
     hardware: dict[str, Any],
 ) -> tuple[tuple[dict[str, object], ...] | None, int | None]:
     """
-    Read the server's drives from whichever local-storage schema it
-    answers on.
+    Read the server's drives from whichever local-storage schema it answers on.
 
-    A Gen10-Plus-or-later adapter provides `LocalStorageV2` "instead of
-    (or in addition to)" `LocalStorage`, so both are read and V2 wins
-    where a server reports both — it is stock Redfish, with capacity
-    documented in bytes and no marketing-capacity field to pick wrongly.
+    A Gen10-Plus adapter reports `LocalStorageV2` instead of (or alongside)
+    `LocalStorage`; V2 is tried first and wins whenever both are present.
 
     Args:
         hardware (dict[str, Any]): One `/rest/server-hardware` member.

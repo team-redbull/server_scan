@@ -18,9 +18,11 @@ _INSECURE_DEV_CURSOR_SECRET = "dev-insecure-cursor-secret-change-in-production" 
 
 
 class Settings(BaseSettings):
-    """Application settings, sourced from environment variables (prefix INVENTORY_)
-    and an optional `.env` file. See `.env.example` for the full list with
-    explanations.
+    """
+    Application settings, sourced from environment variables and an optional `.env` file.
+
+    Every field's environment variable is prefixed `INVENTORY_`; see
+    `.env.example` for the full list with explanations.
     """
 
     model_config = SettingsConfigDict(
@@ -408,8 +410,7 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def _refuse_the_dev_cursor_secret_in_production(self) -> Settings:
         """
-        Fail startup rather than sign every cursor with a secret anyone
-        can read out of this file.
+        Fail startup rather than sign a cursor with a secret anyone can read out of this file.
 
         `cursor_secret` was previously "only a code comment, not enforced
         at startup" (see CLAUDE.md's own correction of that claim) — an
@@ -454,7 +455,13 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
-    """Cached settings singleton. Tests can call `get_settings.cache_clear()`
-    after `monkeypatch.setenv(...)` to pick up overrides.
+    """
+    Return the cached `Settings` singleton, constructing it on first call.
+
+    Tests can call `get_settings.cache_clear()` after
+    `monkeypatch.setenv(...)` to pick up overrides.
+
+    Returns:
+        Settings: The process-wide settings instance.
     """
     return Settings()

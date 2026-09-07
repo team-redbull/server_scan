@@ -16,6 +16,8 @@ from app.domain.enums import LinkState
 
 
 class BmcInfo(BaseModel):
+    """A server's baseboard management controller address, parsed into parts."""
+
     address_raw: str | None = None
     scheme: str | None = None
     host: str | None = None
@@ -26,6 +28,8 @@ class BmcInfo(BaseModel):
 
 
 class NetworkInterface(BaseModel):
+    """One network interface reported for a server."""
+
     name: str
     mac: str | None = None
     speed_mbps: int | None = None
@@ -36,5 +40,7 @@ class NetworkInterface(BaseModel):
 
 
 class NetworkInfo(BaseModel):
+    """A server's BMC address and its network interfaces."""
+
     bmc: BmcInfo = Field(default_factory=BmcInfo)
     interfaces: list[NetworkInterface] = Field(default_factory=list)

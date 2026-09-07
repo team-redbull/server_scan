@@ -54,15 +54,36 @@ _CACHE_EXCEPTIONS = (RedisError, TimeoutError)
 
 
 class CacheClient:
-    """Cache-aside wrapper. Never raises — every method degrades to a
-    no-op/`None` on any Redis failure so callers never need their own
-    try/except around a cache call.
+    """
+    Cache-aside wrapper. Never raises.
+
+    Every method degrades to a no-op/`None` on any Redis failure so
+    callers never need their own try/except around a cache call.
     """
 
     def __init__(self, redis: RedisClientHolder) -> None:
+        """
+        Store the shared Redis client holder.
+
+        Args:
+            redis (RedisClientHolder): The connected client holder.
+        """
         self._redis = redis
 
     async def get(self, key: str) -> Any | None:
+        """
+        Read and JSON-decode a cached value.
+
+        Degrades to `None` on any Redis failure or malformed payload,
+        indistinguishable from a cache miss so the caller falls through
+        to MongoDB either way.
+
+        Args:
+            key (str): The cache key.
+
+        Returns:
+            Any | None: The decoded value, or None on a miss or failure.
+        """
         try:
             raw = await self._redis.client.get(key)
         except _CACHE_EXCEPTIONS as exc:
@@ -88,7 +109,10 @@ class CacheClient:
         return value
 
     async def get_raw(self, key: str) -> bytes | str | None:
-        """Same cache-aside contract as `get` (degrades to `None` on any
+        """
+        Read a cached value without JSON-decoding it.
+
+        Same cache-aside contract as `get` (degrades to `None` on any
         Redis failure, never raises), but skips `json.loads` — for a
         caller about to hand the bytes straight back as the HTTP response
         body unchanged, which would otherwise decode them here only to
@@ -98,6 +122,13 @@ class CacheClient:
         this method skips is the same cost. Never use this for a value a
         caller is going to inspect or mutate — `get` is still correct
         there.
+
+        Args:
+            key (str): The cache key.
+
+        Returns:
+            bytes | str | None: The raw stored payload, or None on a miss
+                or failure.
         """
         try:
             raw = await self._redis.client.get(key)
@@ -114,6 +145,17 @@ class CacheClient:
         return raw
 
     async def set(self, key: str, value: object, *, ttl_seconds: int) -> None:
+        """
+        JSON-encode and store a value with a TTL.
+
+        Degrades to a no-op, logged, on a non-serializable value or any
+        Redis failure — never raises.
+
+        Args:
+            key (str): The cache key.
+            value (object): The value to store; must be JSON-serializable.
+            ttl_seconds (int): Seconds until the key expires.
+        """
         try:
             payload = json.dumps(value, default=str)
         except TypeError as exc:
@@ -133,6 +175,12 @@ class CacheClient:
         cache_operations_total.labels(operation="set", outcome="success").inc()
 
     async def delete(self, key: str) -> None:
+        """
+        Delete a cached key. Degrades to a no-op on any Redis failure.
+
+        Args:
+            key (str): The cache key to delete.
+        """
         try:
             await self._redis.client.delete(key)
         except _CACHE_EXCEPTIONS as exc:

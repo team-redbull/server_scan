@@ -45,19 +45,22 @@ from app.infrastructure.mongodb.server_repository import FacetRow
 
 
 class ConnectivitySummary(BaseModel):
-    """`ServerSummary`'s slice of `Connectivity` — facts only, never the
-    full `attachments` list (that's detail-only; see the module docstring
-    on why summaries stay lean).
+    """`ServerSummary`'s slice of `Connectivity`.
+
+    Facts only, never the full `attachments` list (that's detail-only; see
+    the module docstring on why summaries stay lean).
     """
 
     facts: ConnectivityFacts
 
 
 class ServerSummary(BaseModel):
-    """List-response projection. Nested (`classification.installation_type`,
-    `health.overall`, `maintenance.enabled`, `connectivity.facts`) to match
-    `ServerDetail`'s shape rather than flattening these onto the top level
-    — one nesting convention across both endpoints, not two.
+    """List-response projection of a server.
+
+    Nested (`classification.installation_type`, `health.overall`,
+    `maintenance.enabled`, `connectivity.facts`) to match `ServerDetail`'s
+    shape rather than flattening these onto the top level — one nesting
+    convention across both endpoints, not two.
     """
 
     id: str
@@ -76,6 +79,15 @@ class ServerSummary(BaseModel):
 
     @classmethod
     def from_server(cls, server: Server) -> ServerSummary:
+        """
+        Build the list-response projection from a domain server.
+
+        Args:
+            server (Server): The stored document.
+
+        Returns:
+            ServerSummary: The response model.
+        """
         return cls(
             id=server.id,
             name=server.name,
@@ -94,6 +106,8 @@ class ServerSummary(BaseModel):
 
 
 class PageInfo(BaseModel):
+    """Keyset paging metadata for a page of servers."""
+
     next_cursor: str | None
     has_more: bool
     page_size: int
@@ -102,6 +116,8 @@ class PageInfo(BaseModel):
 
 
 class ServerListResponse(BaseModel):
+    """One page of servers plus its paging metadata."""
+
     items: list[ServerSummary]
     page: PageInfo
 
@@ -112,8 +128,10 @@ _NO_NIC_NAMES = NicNameCatalog(names_by_kind={})
 
 
 class ServerDetail(BaseModel):
-    """Full server detail. See module docstring for why this is a
-    dedicated model rather than `Server` returned as-is.
+    """Full server detail.
+
+    See the module docstring for why this is a dedicated model rather than
+    `Server` returned as-is.
     """
 
     id: str

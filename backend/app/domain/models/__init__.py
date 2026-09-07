@@ -1,3 +1,5 @@
+"""Pydantic domain models for every MongoDB document shape this platform stores."""
+
 from app.domain.models.common import AuditFields
 from app.domain.models.connectivity import Connectivity, ConnectivityAttachment, ConnectivityFacts
 from app.domain.models.hardware import (

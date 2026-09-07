@@ -27,6 +27,8 @@ CATEGORIES = ("cpu", "memory", "storage", "network", "connectivity", "power")
 
 @dataclass(frozen=True, slots=True)
 class Evaluation:
+    """The result of evaluating one `policy_key` family's winning policy."""
+
     policy_id: str
     policy_key: str
     policy_name: str
@@ -39,6 +41,8 @@ class Evaluation:
 
 @dataclass(frozen=True, slots=True)
 class ShadowedEntry:
+    """A policy that lost its `policy_key` family and was not evaluated."""
+
     policy_id: str
     policy_key: str
     shadowed_by: str
@@ -46,6 +50,8 @@ class ShadowedEntry:
 
 @dataclass(frozen=True, slots=True)
 class SuppressedEntry:
+    """A family winner in `SUPPRESS` mode: an explicit, auditable no-op rather than silence."""
+
     policy_id: str
     policy_key: str
     policy_name: str
@@ -53,6 +59,8 @@ class SuppressedEntry:
 
 @dataclass(frozen=True, slots=True)
 class CategoryHealth:
+    """The rolled-up severity for one health category (cpu, memory, storage, ...)."""
+
     severity: HealthSeverity
     active_count: int
     evaluated_count: int
@@ -60,6 +68,8 @@ class CategoryHealth:
 
 @dataclass(frozen=True, slots=True)
 class HealthState:
+    """The full result of evaluating a server's health: overall, per-category and per-policy."""
+
     overall: HealthSeverity
     categories: dict[str, CategoryHealth]
     evaluations: list[Evaluation]
@@ -79,10 +89,24 @@ def _family_sort_key(policy: HealthPolicy) -> tuple[int, int, str]:
 def resolve_families(
     policies: list[HealthPolicy], *, vendor: str, manager_type: str | None, site_id: str | None
 ) -> tuple[dict[str, HealthPolicy], list[ShadowedEntry]]:
-    """Groups scope-matching policies (including disabled ones — a
-    disabled, high-priority, scoped policy is how an operator switches a
-    default off for that scope) by `policy_key`, and returns the winner of
-    each family plus a record of everyone that family's winner shadowed.
+    """
+    Resolve each `policy_key` family to its single winning policy (ADR-0005).
+
+    Groups scope-matching policies (including disabled ones — a disabled,
+    high-priority, scoped policy is how an operator switches a default off
+    for that scope) by `policy_key`; within a family, the winner is the
+    highest scope specificity, then highest priority, then lowest id.
+
+    Args:
+        policies (list[HealthPolicy]): The candidate policies, any order.
+        vendor (str): The server's vendor, for scope matching.
+        manager_type (str | None): The server's manager type, for scope matching.
+        site_id (str | None): The server's site, for scope matching.
+
+    Returns:
+        tuple[dict[str, HealthPolicy], list[ShadowedEntry]]: Each family's
+            winner, keyed by `policy_key`, plus a record of every policy
+            that winner shadowed.
     """
     matching = [
         p
@@ -112,6 +136,27 @@ def evaluate_health(
     manager_type: str | None,
     site_id: str | None,
 ) -> HealthState:
+    """
+    Evaluate every policy family and roll the results up into overall health.
+
+    Resolves each `policy_key` family to its winner (`resolve_families`),
+    evaluates each non-disabled, non-suppressed winner's condition against
+    `facts`, then takes the highest active severity per category and the
+    highest category severity overall.
+
+    Args:
+        facts (dict[str, Any]): The extracted server facts (see
+            `app.domain.services.health.facts.extract_facts`).
+        policies (list[HealthPolicy]): The candidate policies, any order.
+        registry (MetricRegistry): The registry to resolve conditions and
+            evidence metrics against.
+        vendor (str): The server's vendor, for scope matching.
+        manager_type (str | None): The server's manager type, for scope matching.
+        site_id (str | None): The server's site, for scope matching.
+
+    Returns:
+        HealthState: The full evaluation result.
+    """
     winners, shadowed = resolve_families(
         policies, vendor=vendor, manager_type=manager_type, site_id=site_id
     )

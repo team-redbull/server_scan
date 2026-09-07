@@ -225,7 +225,8 @@ class IntersightProvider(ServerInventoryProvider):
         debug_http: bool = False,
         client_factory: Callable[[], Any] | None = None,
     ) -> None:
-        """
+        """Configure one Intersight collection run.
+
         Args:
             manager (Manager): The `Manager` projection this run writes.
             endpoint (str): The bare host to sign requests against.

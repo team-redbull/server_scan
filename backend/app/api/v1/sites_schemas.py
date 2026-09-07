@@ -11,6 +11,8 @@ from pydantic import BaseModel, Field
 
 
 class VendorCount(BaseModel):
+    """How many servers of one vendor a breakdown counts."""
+
     vendor: str
     count: int
 
@@ -38,6 +40,8 @@ class Breakdown(BaseModel):
 
 
 class SiteStats(Breakdown):
+    """One site's fleet-wide breakdown, sliced further by installation type."""
+
     site_id: str
     name: str
 
@@ -49,4 +53,6 @@ class SiteStats(Breakdown):
 
 
 class SiteStatsListResponse(BaseModel):
+    """Every configured site's statistics, plus "Unassigned"."""
+
     items: list[SiteStats]

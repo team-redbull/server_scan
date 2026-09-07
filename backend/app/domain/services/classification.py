@@ -60,6 +60,8 @@ class ClassifiableServer:
 
 @dataclass(frozen=True, slots=True)
 class ClassificationConflict:
+    """A rule tied with the winner on precedence but disagreed on `installation_type`."""
+
     rule_id: str
     rule_name: str
     installation_type: InstallationType
@@ -67,11 +69,15 @@ class ClassificationConflict:
 
 @dataclass(frozen=True, slots=True)
 class RuleTimeoutError:
+    """A rule whose pattern exceeded the regex engine's time budget and was skipped."""
+
     rule_id: str
 
 
 @dataclass(frozen=True, slots=True)
 class ClassificationResult:
+    """The outcome of resolving one server against a rule set: the winning rule, if any."""
+
     installation_type: InstallationType
     rule_id: str | None
     rule_name: str | None
@@ -99,6 +105,25 @@ def classify(
     rules: list[ClassificationRule],
     engine: RegexEngine,
 ) -> ClassificationResult:
+    """
+    Resolve one server's `InstallationType` against a set of classification rules.
+
+    Scope-matching, enabled, non-quarantined rules are tried in
+    priority-DESC, specificity-DESC, order-ASC, id-ASC order; the first
+    whose pattern matches its target field wins. Scanning continues past
+    the winner only while precedence is tied, purely to record a
+    disagreement as a `ClassificationConflict` — the winner never changes
+    once found.
+
+    Args:
+        server (ClassifiableServer): The server to classify.
+        rules (list[ClassificationRule]): The candidate rules, in any order.
+        engine (RegexEngine): The regex engine to match rule patterns with.
+
+    Returns:
+        ClassificationResult: The winning rule's outcome, or
+            `InstallationType.UNCLASSIFIED` with no winner if nothing matched.
+    """
     candidates = [
         r
         for r in rules

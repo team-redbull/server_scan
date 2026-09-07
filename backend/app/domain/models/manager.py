@@ -36,6 +36,8 @@ ALLOWED_PARENT_TYPES: dict[ManagerType, frozenset[ManagerType]] = {
 
 
 class Manager(BaseModel):
+    """One document in the `managers` collection — a projection of a collector's configuration."""
+
     id: str = Field(alias="_id")
     name: str
     type: ManagerType

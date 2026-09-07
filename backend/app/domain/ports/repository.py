@@ -49,21 +49,39 @@ class Page:
 
 
 class ServerRepository(Protocol):
+    """The persistence operations the application layer depends on, implemented by MongoDB."""
+
     async def upsert(self, server: Server) -> Server:
-        """Insert or update a server document by `_id`. Ingestion-owned
-        fields overwrite; caller is responsible for not clobbering
-        user-owned fields (tags/notes) — see the field-ownership note in
-        `app.application.services.ingest`.
+        """
+        Insert or update a server document by `_id`.
+
+        Ingestion-owned fields overwrite; the caller is responsible for
+        not clobbering user-owned fields (tags/notes) — see the
+        field-ownership note in `app.application.services.ingest`.
+
+        Args:
+            server (Server): The document to write.
+
+        Returns:
+            Server: The written document.
         """
         ...
 
     async def upsert_with_revision_check(self, server: Server, *, expected_revision: int) -> Server:
-        """Replace an *existing* server document by `_id`, but only if its
-        stored `revision` still equals `expected_revision` — optimistic
-        concurrency for a read-modify-write cycle (reclassify, health
-        recalculate, maintenance enable/disable) against a server another
-        request may have concurrently written. Never inserts: unlike
-        `upsert`, a missing document is a conflict, not a create.
+        """
+        Replace an existing server document, only if its stored revision still matches.
+
+        Optimistic concurrency for a read-modify-write cycle (reclassify,
+        health recalculate, maintenance enable/disable) against a server
+        another request may have concurrently written. Never inserts:
+        unlike `upsert`, a missing document is a conflict, not a create.
+
+        Args:
+            server (Server): The document to write, with its new field values.
+            expected_revision (int): The `revision` the caller last read.
+
+        Returns:
+            Server: The written document.
 
         Raises:
             RevisionConflictError: The document's stored revision has
@@ -72,7 +90,17 @@ class ServerRepository(Protocol):
         """
         ...
 
-    async def get_by_id(self, server_id: str) -> Server | None: ...
+    async def get_by_id(self, server_id: str) -> Server | None:
+        """
+        Look up a server by its `_id`.
+
+        Args:
+            server_id (str): The server's `_id`.
+
+        Returns:
+            Server | None: The matching document, or `None` if it doesn't exist.
+        """
+        ...
 
     async def list_page(
         self,
@@ -85,12 +113,46 @@ class ServerRepository(Protocol):
         page_size: int,
         with_count: bool,
     ) -> Page:
-        """`filters` is already validated/whitelisted by the caller
+        """
+        Fetch one keyset-paginated page of servers.
+
+        `filters` is already validated/whitelisted by the caller
         (`app.domain.services.search`) — this method trusts its keys are
         safe Mongo field paths, never raw user input.
+
+        Args:
+            filters (dict[str, object]): Whitelisted Mongo field/value filters.
+            search (str | None): A free-text search term, or `None`.
+            sort (str): The field to sort by.
+            sort_desc (bool): Whether to sort descending.
+            cursor (str | None): An opaque cursor from a previous page, or
+                `None` for the first page.
+            page_size (int): The maximum number of items to return.
+            with_count (bool): Whether to populate `Page.total_count`, which
+                costs an extra query.
+
+        Returns:
+            Page: The matching page.
         """
         ...
 
-    async def count(self, filters: dict[str, object]) -> int: ...
+    async def count(self, filters: dict[str, object]) -> int:
+        """
+        Count servers matching whitelisted filters.
 
-    async def site_breakdown(self) -> list[SiteBreakdownRow]: ...
+        Args:
+            filters (dict[str, object]): Whitelisted Mongo field/value filters.
+
+        Returns:
+            int: The number of matching servers.
+        """
+        ...
+
+    async def site_breakdown(self) -> list[SiteBreakdownRow]:
+        """
+        Count servers grouped by site, vendor, health, maintenance and installation type.
+
+        Returns:
+            list[SiteBreakdownRow]: One row per distinct combination found.
+        """
+        ...

@@ -54,6 +54,20 @@ logger = structlog.get_logger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """
+    Start and stop the app's own resources, in dependency order.
+
+    Settings -> logging -> Mongo -> bootstrap defaults -> Redis -> ready
+    on the way up; the reverse, plus draining any in-flight coalesced
+    computation first, on the way down.
+
+    Args:
+        app (FastAPI): The application being started, to stash the
+            connected clients on (`app.state.mongo`/`.redis`).
+
+    Yields:
+        None: Control, for the app's request-serving lifetime.
+    """
     settings = get_settings()
     configure_logging(
         level=settings.log_level,
@@ -100,6 +114,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 def create_app() -> FastAPI:
+    """
+    Build the FastAPI app: middleware, exception handlers, every router.
+
+    Returns:
+        FastAPI: A fully configured, not-yet-started application.
+    """
     settings = get_settings()
 
     app = FastAPI(

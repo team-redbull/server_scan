@@ -27,14 +27,32 @@ _REQUEST_ID_HEADER = "X-Request-Id"
 
 
 class RequestContextMiddleware:
-    """Pure-ASGI middleware (not BaseHTTPMiddleware) to avoid its known
+    """Pure-ASGI middleware assigning a request ID and logging request completion.
+
+    Pure ASGI, not `BaseHTTPMiddleware`, to avoid the latter's known
     interaction problems with streaming responses and background tasks.
     """
 
     def __init__(self, app: ASGIApp) -> None:
+        """
+        Wrap the next ASGI application in the stack.
+
+        Args:
+            app (ASGIApp): The wrapped application.
+        """
         self.app = app
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        """
+        Assign a request ID, run the wrapped app, and log completion.
+
+        Non-HTTP scopes (e.g. lifespan, websocket) pass through untouched.
+
+        Args:
+            scope (Scope): The ASGI connection scope.
+            receive (Receive): The ASGI receive callable.
+            send (Send): The ASGI send callable.
+        """
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return

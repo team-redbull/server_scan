@@ -1,6 +1,7 @@
-"""Maps engine results (`ClassificationResult`, `HealthState`) onto the
-small embedded models a `Server` document actually persists
-(`Classification`, `Health`).
+"""
+Maps engine results onto the small embedded models a `Server` document persists.
+
+`ClassificationResult` -> `Classification`, `HealthState` -> `Health`.
 
 A dedicated mapping module rather than inlining this in `ingest.py`: the
 engines' result types carry engine-internal detail (conflicts, per-leaf
@@ -22,6 +23,16 @@ from app.domain.services.health.evaluate import CATEGORIES, HealthState
 def classification_from_result(
     result: ClassificationResult, *, previous_version: int
 ) -> Classification:
+    """
+    Summarize a `ClassificationResult` into the embedded `Classification` a server persists.
+
+    Args:
+        result (ClassificationResult): The engine's full classification result.
+        previous_version (int): The server's classification version before this run.
+
+    Returns:
+        Classification: The persisted summary, with `classification_version` incremented.
+    """
     return Classification(
         installation_type=result.installation_type,
         matched_rule_id=result.rule_id,
@@ -33,6 +44,15 @@ def classification_from_result(
 
 
 def health_from_state(state: HealthState) -> Health:
+    """
+    Summarize a `HealthState` into the embedded `Health` a server persists.
+
+    Args:
+        state (HealthState): The engine's full evaluation result.
+
+    Returns:
+        Health: The persisted per-category severities and overall status.
+    """
     severities = {cat: state.categories[cat].severity for cat in CATEGORIES}
     return Health(
         overall=state.overall,

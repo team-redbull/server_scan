@@ -135,8 +135,7 @@ class OpenManageProvider(ServerInventoryProvider):
 
     def _new_client(self) -> OmeClient:
         """
-        Build a client for this appliance. Sessions are never shared across
-        calls.
+        Build a client for this appliance — sessions are never shared across calls.
 
         Returns:
             OmeClient: A fresh, not-yet-logged-in client.

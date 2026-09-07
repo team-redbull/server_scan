@@ -52,8 +52,11 @@ class ManagerConnection:
     password: str
 
     def __repr__(self) -> str:
-        """Redacted, so a stray log line, traceback frame or debugger
-        session can never print the password.
+        """
+        Redact the password, so a log line, traceback or debugger session never prints it.
+
+        Returns:
+            str: A representation with the password masked as `'***'`.
         """
         return (
             f"ManagerConnection(endpoint={self.endpoint!r}, "
@@ -62,13 +65,23 @@ class ManagerConnection:
 
 
 class CredentialResolver(Protocol):
-    def resolve(self, manager_type: ManagerType) -> ManagerConnection:
-        """Connection details for `manager_type`.
+    """Resolves one manager type's connection details from wherever a deployment keeps them."""
 
-        Raises `ManagerNotConfiguredError` if any of the three values is
-        missing — never returns a partially-populated `ManagerConnection`,
-        because a blank password reaches the vendor as a real login
-        attempt and fails as "bad credentials" rather than as the
-        configuration error it actually is.
+    def resolve(self, manager_type: ManagerType) -> ManagerConnection:
+        """
+        Resolve the connection details for one manager type.
+
+        Args:
+            manager_type (ManagerType): The vendor manager type to connect to.
+
+        Returns:
+            ManagerConnection: The endpoint and login for that manager type.
+
+        Raises:
+            ManagerNotConfiguredError: If any of the three values is missing.
+                Never returns a partially-populated `ManagerConnection`,
+                because a blank password reaches the vendor as a real login
+                attempt and fails as "bad credentials" rather than as the
+                configuration error it actually is.
         """
         ...

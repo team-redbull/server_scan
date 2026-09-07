@@ -1,10 +1,8 @@
-"""`ServerInventoryProvider` for Cisco UCS Central — the only Cisco entry
-point.
+"""`ServerInventoryProvider` for Cisco UCS Central, the only Cisco entry point.
 
 Central is asked which domains are registered and which service-profile
 names live in each; every field of every `ProviderServer` then comes from
 that domain's own UCS Manager via `..ucs_manager.provider.UcsManagerProvider`.
-
 See docs/cisco-collectors.md, "UCS Central domain discovery and pruning".
 """
 
@@ -125,14 +123,12 @@ def domains_to_collect(
     name_pattern: str,
 ) -> tuple[list[DomainTarget], list[DomainTarget]]:
     """
-    Split UCS Central's registered domains into those worth contacting and
-    those that can be skipped.
+    Split UCS Central's registered domains into those worth contacting and those to skip.
 
     Skipping means "do not open a session", never a deletion, and is a pure
     optimisation: `tools.run_collector._NameFilteredProvider` remains the
-    only thing that decides which servers are ingested.
-
-    See docs/cisco-collectors.md, "UCS Central domain discovery and pruning".
+    only thing that decides which servers are ingested. See
+    docs/cisco-collectors.md, "UCS Central domain discovery and pruning".
 
     Args:
         domains (Iterable[Any]): `computeSystem` managed objects from
@@ -178,11 +174,11 @@ def domains_to_collect(
 
 class UcsCentralProvider(ServerInventoryProvider):
     """
-    Collect every registered UCS Manager domain in one run, using UCS
-    Central as a directory and each domain's own UCS Manager as the source
-    of inventory.
+    Collect every registered UCS Manager domain in one run.
 
-    See docs/cisco-collectors.md, "UCS Central domain discovery and pruning".
+    Central is a directory; each domain's own UCS Manager is the source of
+    inventory. See docs/cisco-collectors.md, "UCS Central domain discovery
+    and pruning".
     """
 
     provider_type = _PROVIDER_TYPE
@@ -521,21 +517,11 @@ class UcsCentralProvider(ServerInventoryProvider):
 
     def _log_one_domain(self, mo: Any | None, *, collected: int | None) -> None:
         """
-        Emit one domain's coverage, comparing what UCS Central believes it
-        holds against what that domain's UCS Manager actually returned.
+        Emit one domain's coverage: what UCS Central believes it holds vs. what came back.
 
-        Called once per domain, as soon as that domain's own result is
-        known — for a skipped domain, immediately after planning (nothing
-        about it is going to change); for a collected domain, the moment
-        `list_servers()`'s `asyncio.as_completed` loop yields it — rather
-        than batched at the end of the run the way it used to be. A
-        domain that already logged its own coverage line survives a kill
-        at `activeDeadlineSeconds` the same way its server data now does;
-        before this, the coverage lines were the one thing the streaming
-        fix above (ADR-0014, 2026-09-02) left still batched.
-
-        See docs/cisco-collectors.md, "UCS Central domain discovery and
-        pruning".
+        Called once per domain, as soon as its own result is known — not
+        batched at run end — so a domain that already logged its coverage
+        line survives a kill at `activeDeadlineSeconds` (ADR-0014, 2026-09-02).
 
         Args:
             mo (Any | None): The registered `computeSystem` MO for this

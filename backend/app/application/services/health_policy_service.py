@@ -91,12 +91,15 @@ def _validate_scope_source_coherence(policy: HealthPolicy) -> None:
 
 
 def validate_policy_write(policy: HealthPolicy, *, registry: MetricRegistry) -> None:
-    """Everything the domain model's own `model_validator`s don't already
-    enforce (priority-band, mode validity — see `HealthPolicy`'s
-    docstring): condition safety against the metric registry, template
-    safety against the declared evidence keys, and source/scope
-    coherence. Called by `app.application.services.bootstrap` before
-    seeding or re-syncing a shipped system default.
+    """
+    Validate what `HealthPolicy`'s own model validators don't already enforce.
+
+    Checks condition safety against the metric registry, template safety
+    against the declared evidence keys, and source/scope coherence —
+    beyond the model's own priority-band and mode-validity checks (see
+    `HealthPolicy`'s docstring). Called by
+    `app.application.services.bootstrap` before seeding or re-syncing a
+    shipped system default.
 
     `ConditionValidationError` messages are pattern-matched to decide
     between the three health-policy error codes that already exist for
@@ -104,6 +107,17 @@ def validate_policy_write(policy: HealthPolicy, *, registry: MetricRegistry) -> 
     generic `CONDITION_INVALID`) — the domain layer raises one exception
     type for all of these, so message content is the only signal
     available here without changing that (fixed, read-only) contract.
+
+    Args:
+        policy (HealthPolicy): The fully-merged policy that would be written.
+        registry (MetricRegistry): The known metrics, for condition validation.
+
+    Raises:
+        UnknownMetricError: The condition references a metric that doesn't exist.
+        MetricOperatorMismatchError: An operator doesn't apply to its metric's type.
+        ConditionInvalidError: Any other condition problem.
+        TemplateInvalidError: `message_template` references an undeclared evidence key.
+        ValidationAppError: The source/scope combination is invalid.
     """
     try:
         validate_condition(policy.condition, registry)
@@ -124,9 +138,10 @@ def validate_policy_write(policy: HealthPolicy, *, registry: MetricRegistry) -> 
 
 
 class HealthPolicyService:
-    """The only place `extract_facts` + policy loading + `evaluate_health`
-    are wired together — callers never assemble those three steps
-    themselves.
+    """
+    The only place `extract_facts` + policy loading + `evaluate_health` are wired together.
+
+    Callers never have to assemble those three steps themselves.
     """
 
     def __init__(
@@ -135,18 +150,26 @@ class HealthPolicyService:
         policy_repo: MongoHealthPolicyRepository,
         registry: MetricRegistry,
     ) -> None:
+        """
+        Initialize the service with its policy repository and metric registry.
+
+        Args:
+            policy_repo (MongoHealthPolicyRepository): The health policies collection.
+            registry (MetricRegistry): The known metrics, for fact/condition evaluation.
+        """
         self._policy_repo = policy_repo
         self._registry = registry
 
     async def evaluate_server(self, server: Server) -> HealthState:
-        """Load every stored policy fresh and evaluate against this
-        server's facts — the right choice for a single, standalone
-        evaluation against whatever is current right now (the
+        """
+        Load every stored policy fresh and evaluate against this server's facts.
+
+        The right choice for a single, standalone evaluation against
+        whatever is current right now (the
         `POST /servers/{id}/health/recalculate` route). A caller
         evaluating many servers in one run should call `load_policies`
         once instead and `evaluate_with_policies` per server; see
-        `load_policies`'s docstring for why (P1,
-        `docs/notes/2026-09-audit.md`).
+        `load_policies`'s docstring for why.
 
         Args:
             server (Server): The server to evaluate.
@@ -159,13 +182,14 @@ class HealthPolicyService:
         return self.evaluate_with_policies(server, policies)
 
     async def load_policies(self) -> list[HealthPolicy]:
-        """Every stored policy (scope filtering happens inside
-        `evaluate_health` itself — see its docstring), for a caller that
-        will evaluate many servers against the same snapshot in one run —
-        the ingestion pipeline, never a fresh `evaluate_server` call
-        repeated per server. Before this existed, a 10,000-server run was
-        issuing ~10,000 uncached collection reads for an answer that
-        cannot change during the run.
+        """
+        Every stored policy, for a caller evaluating many servers in one run.
+
+        Scope filtering happens inside `evaluate_health` itself, not here.
+        The ingestion pipeline calls this once and reuses the result,
+        rather than a fresh `evaluate_server` call per server — before
+        this existed, a 10,000-server run issued ~10,000 uncached
+        collection reads for an answer that cannot change during the run.
 
         Returns:
             list[HealthPolicy]: The policies to pass into
@@ -174,14 +198,15 @@ class HealthPolicyService:
         return await self._policy_repo.list_all()
 
     def evaluate_with_policies(self, server: Server, policies: list[HealthPolicy]) -> HealthState:
-        """Evaluate against an already-loaded policy set (`load_policies`)
-        — the ingest-loop counterpart to `evaluate_server`, which loads
-        its own policy set on every call. `manager_type` is always `None`:
-        `Server` carries no `manager_type` field today (only `manager_id`
-        — see `app.domain.models.server.Server`), so any policy scoped to
-        a `manager_type` cannot currently match any server. That's a known
-        gap in the `Server` schema, not something this method can paper
-        over.
+        """
+        Evaluate against an already-loaded policy set (`load_policies`).
+
+        The ingest-loop counterpart to `evaluate_server`, which loads its
+        own policy set on every call. `manager_type` is always passed as
+        `None`: `Server` carries no `manager_type` field today (only
+        `manager_id`), so any policy scoped to a `manager_type` cannot
+        currently match any server — a known gap in the `Server` schema,
+        not something this method papers over.
 
         Args:
             server (Server): The server to evaluate.

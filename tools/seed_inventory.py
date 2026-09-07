@@ -48,6 +48,15 @@ logger = structlog.get_logger(__name__)
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    """
+    Parse this CLI's arguments.
+
+    Args:
+        argv (list[str] | None): Arguments, or None for `sys.argv`.
+
+    Returns:
+        argparse.Namespace: The parsed `--count`/`--seed` values.
+    """
     parser = argparse.ArgumentParser(
         description="Seed the inventory database with deterministic fake data."
     )
@@ -59,6 +68,13 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 async def _run(*, count: int, seed: int) -> None:
+    """
+    Seed default classification rules/health policies, then ingest `count` fake servers.
+
+    Args:
+        count (int): How many fake servers to generate.
+        seed (int): Random seed, for reproducible output across runs.
+    """
     settings = get_settings()
     configure_logging(
         level=settings.log_level,
@@ -176,6 +192,12 @@ async def _seed_openshift(repo: MongoServerRepository) -> int:
 
 
 def main(argv: list[str] | None = None) -> None:
+    """
+    Entry point: parse args and run the seeding pass.
+
+    Args:
+        argv (list[str] | None): Arguments, or None for `sys.argv`.
+    """
     args = _parse_args(argv)
     asyncio.run(_run(count=args.count, seed=args.seed))
 

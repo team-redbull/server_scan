@@ -14,6 +14,8 @@ from pydantic import BaseModel
 
 
 class Maintenance(BaseModel):
+    """The maintenance-mode state embedded on a `Server` document."""
+
     enabled: bool = False
     reason: str | None = None
     ticket: str | None = None

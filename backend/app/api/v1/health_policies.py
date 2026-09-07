@@ -1,5 +1,4 @@
-"""`/api/v1/health-policies`: read-only listing and lookup, and
-`/api/v1/health-metrics`.
+"""`/api/v1/health-policies`: read-only listing and lookup, and `/api/v1/health-metrics`.
 
 Follows the same thin-router pattern as `app.api.v1.servers`: dependency
 providers construct repositories/services from what's already on
@@ -49,12 +48,27 @@ _METRIC_REGISTRY = build_default_registry()
 
 
 async def _metric_registry() -> MetricRegistry:
+    """
+    Return the module-level metric registry built once at import time.
+
+    Returns:
+        MetricRegistry: The shared, immutable registry.
+    """
     return _METRIC_REGISTRY
 
 
 async def _policy_repo(
     mongo: Annotated[MongoClientHolder, Depends(get_mongo_holder)],
 ) -> MongoHealthPolicyRepository:
+    """
+    Build the health policy repository for one request.
+
+    Args:
+        mongo (MongoClientHolder): The shared Mongo client holder.
+
+    Returns:
+        MongoHealthPolicyRepository: A repository bound to that client.
+    """
     return MongoHealthPolicyRepository(mongo)
 
 
@@ -63,6 +77,17 @@ async def list_policies(
     policy_repo: Annotated[MongoHealthPolicyRepository, Depends(_policy_repo)],
     enabled: bool | None = Query(default=None),
 ) -> HealthPolicyListResponse:
+    """
+    List every health policy, optionally filtered by enabled state.
+
+    Args:
+        policy_repo (MongoHealthPolicyRepository): The health policy repository.
+        enabled (bool | None): When set, restrict to enabled or disabled
+            policies only; omit to return every policy.
+
+    Returns:
+        HealthPolicyListResponse: The matching policies.
+    """
     # `bool(enabled)` was wrong and silently so: it collapsed `False` and
     # `None` to the same "no filter", so `?enabled=false` returned every
     # policy including the enabled ones. The classification-rule endpoint
@@ -81,6 +106,19 @@ async def get_policy(
     policy_id: str,
     policy_repo: Annotated[MongoHealthPolicyRepository, Depends(_policy_repo)],
 ) -> HealthPolicyResponse:
+    """
+    Get one health policy by ID.
+
+    Args:
+        policy_id (str): The policy's ID.
+        policy_repo (MongoHealthPolicyRepository): The health policy repository.
+
+    Returns:
+        HealthPolicyResponse: The matching policy.
+
+    Raises:
+        NotFoundError: No policy has that ID.
+    """
     policy = await policy_repo.get_by_id(policy_id)
     if policy is None:
         raise NotFoundError(
@@ -93,6 +131,15 @@ async def get_policy(
 async def list_health_metrics(
     registry: Annotated[MetricRegistry, Depends(_metric_registry)],
 ) -> HealthMetricListResponse:
+    """
+    List every metric definition the health policy engine can evaluate.
+
+    Args:
+        registry (MetricRegistry): The module-level metric registry.
+
+    Returns:
+        HealthMetricListResponse: Every registered metric definition.
+    """
     return HealthMetricListResponse(
         items=[
             HealthMetricResponse(

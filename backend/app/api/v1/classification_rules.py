@@ -35,6 +35,15 @@ router = APIRouter(prefix="/api/v1/classification-rules", tags=["classification-
 async def _rule_repo(
     mongo: Annotated[MongoClientHolder, Depends(get_mongo_holder)],
 ) -> MongoClassificationRuleRepository:
+    """
+    Build the classification rule repository for one request.
+
+    Args:
+        mongo (MongoClientHolder): The shared Mongo client holder.
+
+    Returns:
+        MongoClassificationRuleRepository: A repository bound to that client.
+    """
     return MongoClassificationRuleRepository(mongo)
 
 
@@ -43,6 +52,17 @@ async def list_rules(
     repo: Annotated[MongoClassificationRuleRepository, Depends(_rule_repo)],
     enabled: bool | None = Query(default=None),
 ) -> ClassificationRuleListResponse:
+    """
+    List every classification rule, optionally filtered by enabled state.
+
+    Args:
+        repo (MongoClassificationRuleRepository): The rule repository.
+        enabled (bool | None): When set, restrict to enabled or disabled
+            rules only; omit to return every rule.
+
+    Returns:
+        ClassificationRuleListResponse: The matching rules.
+    """
     if enabled is None:
         rules = await repo.list_all()
     elif enabled:
@@ -59,6 +79,19 @@ async def get_rule(
     rule_id: str,
     repo: Annotated[MongoClassificationRuleRepository, Depends(_rule_repo)],
 ) -> ClassificationRuleResponse:
+    """
+    Get one classification rule by ID.
+
+    Args:
+        rule_id (str): The rule's ID.
+        repo (MongoClassificationRuleRepository): The rule repository.
+
+    Returns:
+        ClassificationRuleResponse: The matching rule.
+
+    Raises:
+        NotFoundError: No rule has that ID.
+    """
     rule = await repo.get_by_id(rule_id)
     if rule is None:
         raise NotFoundError(

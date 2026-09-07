@@ -187,8 +187,35 @@ select = [
     "TRY004",
     "TRY300",
     "TRY400",
+    # Phase 10 of docs/notes/2026-09-refactor-plan.md — convention 8's
+    # "every function, method and class gets a Google-style docstring" was
+    # a should until now; this makes it a gate.
+    "D",
 ]
-ignore = ["S101"]  # allow assert in tests
+ignore = [
+    "S101",  # allow assert in tests
+    # D203 and D211 (blank line before a class docstring) are mutually
+    # exclusive and ruff already warns if both are selected — declared
+    # here anyway, matching how `[tool.ruff.lint.flake8-annotations]`
+    # below writes out every value explicitly rather than trusting a
+    # convention default: an upstream preset change must not be able to
+    # move this gate silently.
+    "D203",
+    # D212 (multi-line summary must start on the *first* line, right
+    # after the opening `"""`) is the opposite of convention 8's own
+    # example, which opens `"""` alone and puts the summary on the next
+    # line (D213's shape). `convention = "google"` below enables D212,
+    # not D213, by default — selecting D213 instead would just swap
+    # which one fires, since the two are mutually exclusive; ignoring
+    # D212 here is what actually makes the gate match the house style.
+    "D212",
+]
+
+[tool.ruff.lint.pydocstyle]
+# Selects the "Args:"/"Returns:"/"Raises:"/"Yields:" section style
+# convention 8 mandates, instead of pydocstyle's default (NumPy-style
+# section underlines, which nothing in this codebase uses).
+convention = "google"
 
 [tool.ruff.lint.flake8-annotations]
 # Set explicitly rather than inherited, for the same reason the ty rule
@@ -206,7 +233,16 @@ suppress-none-returning = false
 # like secrets are almost always fixture data (dev cursor secrets, etc.),
 # not real credentials. S311: `random.Random` in tests is for deterministic
 # shuffling of test fixtures, never for anything security-sensitive.
-"tests/**" = ["S101", "S105", "S106", "S311"]
+#
+# D: convention 8's docstring rule was measured against `tests/` too
+# (2026-09-audit-tools-tests.md, S10) — 579 of 1,059 test functions have
+# none, and their names are already long and declarative
+# ("test_ambiguous_name_with_two_sites_returns_none_rather_than_guessing").
+# Phase 10 of the refactor plan scopes the docstring gate to
+# `backend/app` and `tools` (the phase's own measured counts never
+# include a `tests/` number), so this is a deliberate scope boundary,
+# not an oversight the next sweep should "fix" by deleting this line.
+"tests/**" = ["S101", "S105", "S106", "S311", "D"]
 
 [tool.ty.environment]
 # The floor of `requires-python`, not the CI/production interpreter (3.13).

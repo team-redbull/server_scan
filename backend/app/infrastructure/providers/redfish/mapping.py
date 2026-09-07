@@ -324,19 +324,13 @@ def is_gpu_processor(processor: dict[str, Any]) -> bool:
 
 def has_only_gpu_processors(processors: list[dict[str, Any]] | None) -> bool:
     """
-    Report whether a `ComputerSystem` is a GPU-only baseboard tray rather
-    than an independently bootable host.
+    Report whether a `ComputerSystem` is a GPU-only baseboard tray, not a bootable host.
 
     NVIDIA's DGX/HGX platforms expose the GPU baseboard as its own
-    `ComputerSystem` — confirmed against NVIDIA's own Redfish docs, e.g.
-    `/redfish/v1/Systems/HGX_Baseboard_0` alongside a separate host
-    system such as `/redfish/v1/Systems/DGX`. A tray reports GPUs and
-    nothing that looks like a CPU (`cpu_summary`'s own convention: a
-    `Processor` with no `ProcessorType` defaults to `"CPU"`), so `provider.py`
-    uses this to recognize one and merge its GPUs into its sibling host
-    system instead of ingesting it as a second, CPU-less, often
-    vendor-less "server" for the same physical machine. See
-    docs/adr/0016's dated update.
+    `ComputerSystem` (e.g. `HGX_Baseboard_0` beside a separate `DGX` host);
+    `provider.py` uses this to merge a tray's GPUs into its sibling host
+    instead of ingesting it as a second, CPU-less "server". See ADR-0016's
+    dated update.
 
     Args:
         processors (list[dict[str, Any]] | None): The system's
@@ -750,8 +744,7 @@ def system_to_provider_server(
     extra_gpus: tuple[dict[str, object], ...] = (),
 ) -> ProviderServer:
     """
-    Convert one `ComputerSystem` and its sub-resources into a
-    `ProviderServer`.
+    Convert one `ComputerSystem` and its sub-resources into a `ProviderServer`.
 
     Args:
         system (dict[str, Any]): The `ComputerSystem` resource.

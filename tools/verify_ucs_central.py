@@ -1,9 +1,8 @@
-"""Read-only probe answering the one question `docs/adr/0014` could not
-settle without a live UCS Central: **does Central's `lsServer` include
-each domain's locally-defined service profiles, or only the global ones
-Central itself owns?**
+"""Read-only probe settling the one question `docs/adr/0014` could not.
 
-That question decides whether the UCS Central collector works at all. A
+**Does Central's `lsServer` include each domain's locally-defined service
+profiles, or only the global ones Central itself owns**? That question
+decides whether the UCS Central collector works at all. A
 UCS server's name comes from its service profile — `computeBlade.name` is
 empty in practice (`docs/adr/0009`) — and the name is what carries the
 site token, the classification pattern, and the
@@ -38,6 +37,15 @@ from app.infrastructure.providers.ucs_common import TEMPLATE_TYPES, is_equipped
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    """
+    Parse this CLI's arguments.
+
+    Args:
+        argv (list[str] | None): Arguments, or None for `sys.argv`.
+
+    Returns:
+        argparse.Namespace: The parsed `--show-names` value.
+    """
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawTextHelpFormatter
     )
@@ -52,16 +60,42 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def _p(text: str = "") -> None:
+    """
+    Print one line, flushed immediately.
+
+    Flushed so this script's output interleaves correctly when run inside
+    a container or piped through `tee`.
+
+    Args:
+        text (str): The line to print; defaults to a blank line.
+    """
     print(text, flush=True)
 
 
 def _header(text: str) -> None:
+    """
+    Print a blank line, `text`, and an underline of `=` matching its width.
+
+    Args:
+        text (str): The section heading to print.
+    """
     _p()
     _p(text)
     _p("=" * len(text))
 
 
 async def _run(show_names: int) -> int:
+    """
+    Log into UCS Central, run the read-only probe queries, and print a verdict.
+
+    Args:
+        show_names (int): Print this many resolved server names as a spot
+            check; `0` to disable.
+
+    Returns:
+        int: Exit code — 0 every server resolved a name (GOOD), 1
+            inconclusive/bad/partial, 2 not configured.
+    """
     settings = get_settings()
     try:
         connection = EnvConnectionResolver(settings).resolve(ManagerType.UCS_CENTRAL)
@@ -200,6 +234,15 @@ async def _run(show_names: int) -> int:
 
 
 def main(argv: list[str] | None = None) -> None:
+    """
+    Entry point: parse args, run the probe, and exit with its verdict code.
+
+    Args:
+        argv (list[str] | None): Arguments, or None for `sys.argv`.
+
+    Raises:
+        SystemExit: With `_run`'s exit code.
+    """
     args = _parse_args(argv)
     # Shares the collector's XML dump switch, for when a result needs
     # explaining rather than just reporting.

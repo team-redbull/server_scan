@@ -1,5 +1,4 @@
-"""API request/response schemas for `/api/v1/health-policies` and
-`/api/v1/health-metrics`.
+"""API request/response schemas for `/api/v1/health-policies` and `/api/v1/health-metrics`.
 
 Same rationale as `app.api.v1.schemas` (`ServerSummary`/`ServerDetail`):
 the top-level request/response models here are dedicated, never the
@@ -27,6 +26,8 @@ from app.domain.services.health.metrics import MetricType
 
 
 class HealthPolicyResponse(BaseModel):
+    """The public representation of one health policy."""
+
     id: str
     name: str
     description: str
@@ -52,6 +53,15 @@ class HealthPolicyResponse(BaseModel):
 
     @classmethod
     def from_policy(cls, policy: HealthPolicy) -> HealthPolicyResponse:
+        """
+        Build the response schema from a domain health policy.
+
+        Args:
+            policy (HealthPolicy): The stored policy.
+
+        Returns:
+            HealthPolicyResponse: The response model.
+        """
         return cls(
             id=policy.id,
             name=policy.name,
@@ -79,14 +89,16 @@ class HealthPolicyResponse(BaseModel):
 
 
 class HealthPolicyListResponse(BaseModel):
+    """The full list of health policies."""
+
     items: list[HealthPolicyResponse]
 
 
 class HealthMetricResponse(BaseModel):
-    """One entry in the metric registry, exposed so a future condition
-    builder UI can introspect what's available to reference — same
-    fields `MetricDef` carries (minus `resolver`, which is a Python
-    callable and has no business crossing the API boundary).
+    """One entry in the metric registry, for a future condition-builder UI.
+
+    Carries the same fields `MetricDef` does, minus `resolver`, which is a
+    Python callable and has no business crossing the API boundary.
     """
 
     name: str
@@ -98,4 +110,6 @@ class HealthMetricResponse(BaseModel):
 
 
 class HealthMetricListResponse(BaseModel):
+    """The full list of metric definitions the health engine can evaluate."""
+
     items: list[HealthMetricResponse]

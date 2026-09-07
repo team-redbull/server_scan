@@ -71,9 +71,17 @@ def _drop_sensitive_keys(
 
 
 def configure_logging(*, level: str, service_name: str, environment: str) -> None:
-    """Configure structlog + stdlib logging to share one JSON (or, outside
-    production, console) rendering pipeline. Call once at startup, before
-    any logger is used.
+    """
+    Configure structlog + stdlib logging to share one rendering pipeline.
+
+    Renders JSON in production and a readable console format otherwise.
+    Call once at startup, before any logger is used.
+
+    Args:
+        level (str): The root logger level, e.g. "INFO".
+        service_name (str): Stamped onto every log line as `service`.
+        environment (str): Stamped onto every log line as `environment`;
+            `"production"` selects the JSON renderer.
     """
     is_production = environment == "production"
 

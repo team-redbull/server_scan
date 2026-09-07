@@ -11,6 +11,8 @@ from app.domain.models.audit_event import Actor, EventType
 
 
 class AuditEventResponse(BaseModel):
+    """The public representation of one audit event."""
+
     id: str
     event_type: EventType
     server_id: str | None
@@ -21,11 +23,15 @@ class AuditEventResponse(BaseModel):
 
 
 class EventPageInfo(BaseModel):
+    """Keyset paging metadata for a page of audit events."""
+
     next_cursor: str | None
     has_more: bool
     page_size: int
 
 
 class AuditEventListResponse(BaseModel):
+    """One page of audit events plus its paging metadata."""
+
     items: list[AuditEventResponse]
     page: EventPageInfo

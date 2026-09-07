@@ -13,6 +13,8 @@ from app.domain.enums import MediaType
 
 
 class Cpu(BaseModel):
+    """A server's aggregate CPU configuration."""
+
     sockets: int = 0
     cores: int = 0
     threads: int = 0
@@ -20,6 +22,8 @@ class Cpu(BaseModel):
 
 
 class MemoryModule(BaseModel):
+    """One DIMM reported for a server."""
+
     slot: str | None = None
     size_bytes: int | None = None
     type: str | None = None
@@ -29,11 +33,15 @@ class MemoryModule(BaseModel):
 
 
 class Memory(BaseModel):
+    """A server's aggregate memory configuration and its individual DIMMs."""
+
     total_bytes: int = 0
     modules: list[MemoryModule] = Field(default_factory=list)
 
 
 class StorageDrive(BaseModel):
+    """One storage drive reported for a server."""
+
     id: str
     model: str | None = None
     serial: str | None = None
@@ -47,11 +55,15 @@ class StorageDrive(BaseModel):
 
 
 class Storage(BaseModel):
+    """A server's aggregate storage capacity and its individual drives."""
+
     total_bytes: int = 0
     drives: list[StorageDrive] = Field(default_factory=list)
 
 
 class Gpu(BaseModel):
+    """One GPU reported for a server."""
+
     vendor: str | None = None
     model: str | None = None
     serial: str | None = None
@@ -81,6 +93,8 @@ class Gpu(BaseModel):
 
 
 class Psu(BaseModel):
+    """One power supply unit reported for a server."""
+
     id: str
     model: str | None = None
     serial: str | None = None
@@ -89,10 +103,14 @@ class Psu(BaseModel):
 
 
 class Power(BaseModel):
+    """A server's reported power supplies."""
+
     psus: list[Psu] = Field(default_factory=list)
 
 
 class Hardware(BaseModel):
+    """A server's complete vendor-neutral hardware inventory."""
+
     cpu: Cpu = Field(default_factory=Cpu)
     memory: Memory = Field(default_factory=Memory)
     storage: Storage = Field(default_factory=Storage)

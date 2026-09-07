@@ -20,6 +20,8 @@ from typing import Any
 
 
 class MetricType(StrEnum):
+    """The value shapes a metric can carry, used to validate operator compatibility."""
+
     INT = "INT"
     FLOAT = "FLOAT"
     STRING = "STRING"
@@ -31,6 +33,8 @@ class MetricType(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class MetricDef:
+    """One registered metric: its name, type, and how to resolve it from a facts dict."""
+
     name: str
     type: MetricType
     category: str  # cpu | memory | storage | network | connectivity | power
@@ -41,27 +45,56 @@ class MetricDef:
 
 
 class MetricRegistry:
-    """Not a global singleton — constructed once at app startup
-    (`app.domain.services.health.metrics.build_default_registry()`) and
-    passed explicitly to the evaluator, so tests can build a smaller
-    registry without monkeypatching module state.
+    """
+    The known health metrics, keyed by name.
+
+    Not a global singleton — constructed once at app startup
+    (`build_default_registry()`) and passed explicitly to the evaluator,
+    so tests can build a smaller registry without monkeypatching module
+    state.
     """
 
     def __init__(self) -> None:
+        """Start with an empty registry."""
         self._metrics: dict[str, MetricDef] = {}
 
     def register(self, metric: MetricDef) -> None:
+        """
+        Add a metric definition to the registry.
+
+        Args:
+            metric (MetricDef): The metric to register.
+
+        Raises:
+            ValueError: If a metric with the same name is already registered.
+        """
         if metric.name in self._metrics:
             raise ValueError(f"metric {metric.name!r} is already registered")
         self._metrics[metric.name] = metric
 
     def get(self, name: str) -> MetricDef | None:
+        """
+        Look up a registered metric by name.
+
+        Args:
+            name (str): The metric name.
+
+        Returns:
+            MetricDef | None: The matching definition, or `None` if unregistered.
+        """
         return self._metrics.get(name)
 
     def __contains__(self, name: str) -> bool:
+        """Whether `name` is a registered metric."""
         return name in self._metrics
 
     def all(self) -> list[MetricDef]:
+        """
+        List every registered metric.
+
+        Returns:
+            list[MetricDef]: All registered metrics, sorted by name.
+        """
         return sorted(self._metrics.values(), key=lambda m: m.name)
 
 
@@ -78,6 +111,13 @@ def _get(facts: dict[str, Any], key: str, default: Any) -> Any:
 
 
 def build_default_registry() -> MetricRegistry:
+    """
+    Build the registry of core metrics every deployment ships with.
+
+    Returns:
+        MetricRegistry: A registry with the cpu/memory/storage/network/
+            connectivity/power core metrics registered.
+    """
     registry = MetricRegistry()
 
     registry.register(

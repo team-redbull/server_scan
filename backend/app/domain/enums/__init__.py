@@ -1,3 +1,5 @@
+"""The platform's closed-set domain enumerations. See `core.py`."""
+
 from app.domain.enums.core import (
     HealthSeverity,
     InstallationType,

@@ -92,8 +92,17 @@ SORT_ACCESSORS: dict[str, Callable[[Server], str | datetime]] = {
 
 
 def build_filter_query(filters: dict[str, object]) -> dict[str, object]:
-    """Translate whitelisted filter query-param names to real Mongo field
-    paths. Raises `UnknownFilterError` for any key outside `FILTER_FIELDS`.
+    """
+    Translate whitelisted filter query-param names to real Mongo field paths.
+
+    Args:
+        filters (dict[str, object]): Query-param filter key/value pairs.
+
+    Returns:
+        dict[str, object]: The same values, keyed by their Mongo field path.
+
+    Raises:
+        UnknownFilterError: If a key is outside `FILTER_FIELDS`.
     """
     query: dict[str, object] = {}
     for key, value in filters.items():
@@ -107,8 +116,17 @@ def build_filter_query(filters: dict[str, object]) -> dict[str, object]:
 
 
 def resolve_sort_field(sort: str) -> str:
-    """Translate a whitelisted sort query-param name to its real Mongo
-    field path. Raises `UnknownSortFieldError` for anything else.
+    """
+    Translate a whitelisted sort query-param name to its real Mongo field path.
+
+    Args:
+        sort (str): The API sort query-param name.
+
+    Returns:
+        str: The corresponding Mongo field path.
+
+    Raises:
+        UnknownSortFieldError: If `sort` is outside `SORT_FIELDS`.
     """
     if sort not in SORT_FIELDS:
         raise UnknownSortFieldError(
@@ -119,12 +137,23 @@ def resolve_sort_field(sort: str) -> str:
 
 
 def build_search_query(raw_query: str) -> dict[str, object]:
-    """Validate a raw search string's length and build the safe Mongo
-    filter fragment for it.
+    """
+    Validate a raw search string's length and build its safe Mongo filter fragment.
 
     NEVER build a Mongo `$regex` from unescaped user input — `re.escape`
     is mandatory and this is the single place in the codebase that does
     it for server search, so there is exactly one thing to audit.
+
+    Args:
+        raw_query (str): The raw search string from the API request.
+
+    Returns:
+        dict[str, object]: A `search_tokens` filter fragment matching an
+            escaped, anchored prefix.
+
+    Raises:
+        SearchQueryTooShortError: If `raw_query` is shorter than `MIN_SEARCH_QUERY_LENGTH`.
+        SearchQueryTooLongError: If `raw_query` is longer than `MAX_SEARCH_QUERY_LENGTH`.
     """
     if len(raw_query) < MIN_SEARCH_QUERY_LENGTH:
         raise SearchQueryTooShortError(

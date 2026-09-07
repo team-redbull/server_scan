@@ -1,7 +1,8 @@
-"""CLI: run a real vendor collector against every enabled `Manager` of a
-given type, ingesting whatever it reports through the exact same
-`IngestService` pipeline `tools/seed_inventory.py` exercises with fake
-data (classify -> health-evaluate -> audit -> upsert, in one write).
+"""CLI: run a real vendor collector against every enabled `Manager` of a given type.
+
+Ingests whatever it reports through the exact same `IngestService` pipeline
+`tools/seed_inventory.py` exercises with fake data (classify ->
+health-evaluate -> audit -> upsert, in one write).
 
 This is what a Kubernetes `CronJob` actually invokes — one CronJob per
 manager type (`--manager-type UCS_MANAGER`, etc.), matching how the
@@ -98,8 +99,24 @@ def _openmanage_provider(
     timeout_seconds: float,
     settings: Settings,
 ) -> ServerInventoryProvider:
-    """OME says who exists, each server's iDRAC says what it is — see
-    `PROVIDER_FACTORIES`' comment below.
+    """
+    Build the Dell collector: OME says who exists, each iDRAC says what it is.
+
+    See `PROVIDER_FACTORIES`' comment below.
+
+    Args:
+        manager (Manager): The `Manager` projection for `OPENMANAGE`.
+        credentials (ManagerConnection): The OME appliance login.
+        timeout_seconds (float): Per-call timeout passed to the provider.
+        settings (Settings): Process-wide settings, for the BMC login and
+            Redfish tuning knobs.
+
+    Returns:
+        ServerInventoryProvider: The Dell collector.
+
+    Raises:
+        ManagerNotConfiguredError: When the shared iDRAC login
+            (`INVENTORY_OME_BMC_USERNAME`/`_PASSWORD`) is not set.
     """
     # Raised here, before any connection is attempted, so a half-configured
     # deployment gets the variable names to set rather than a per-BMC 401
@@ -181,8 +198,24 @@ def _ucs_central_provider(
     timeout_seconds: float,
     settings: Settings,
 ) -> ServerInventoryProvider:
-    """Central for the domain list, each domain's own UCS Manager for the
-    servers — see `PROVIDER_FACTORIES`' comment below.
+    """
+    Build the Cisco collector: Central names the domains, each domain's own UCS Manager for servers.
+
+    See `PROVIDER_FACTORIES`' comment below.
+
+    Args:
+        manager (Manager): The `Manager` projection for `UCS_CENTRAL`.
+        credentials (ManagerConnection): The UCS Central login.
+        timeout_seconds (float): Per-call timeout passed to the provider.
+        settings (Settings): Process-wide settings, for the per-domain
+            UCS Manager login and concurrency.
+
+    Returns:
+        ServerInventoryProvider: The UCS Central collector.
+
+    Raises:
+        ManagerNotConfiguredError: When the fleet-wide UCS Manager login
+            (`INVENTORY_UCS_MANAGER_USERNAME`/`_PASSWORD`) is not set.
     """
     # Raised here, before any connection is attempted, so a half-configured
     # deployment gets the variable names to set rather than a per-domain
@@ -391,6 +424,16 @@ PROVIDER_FACTORIES: dict[ManagerType, Callable[..., ServerInventoryProvider]] = 
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    """
+    Parse this CLI's arguments.
+
+    Args:
+        argv (list[str] | None): Arguments, or None for `sys.argv`.
+
+    Returns:
+        argparse.Namespace: The parsed `--manager-type`/`--dry-run`/
+            `--debug-http`/`--debug-xml`/`--limit` values.
+    """
     parser = argparse.ArgumentParser(
         description="Run a real vendor collector against every enabled Manager of one type."
     )
@@ -436,8 +479,8 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def manager_for(manager_type: ManagerType, connection: ManagerConnection) -> Manager:
-    """The `Manager` document representing this deployment's single
-    manager of `manager_type`.
+    """
+    Build the `Manager` document representing this deployment's single manager of `manager_type`.
 
     Derived from configuration rather than read from MongoDB: with one
     endpoint per vendor type, a stored document would be a second copy of
@@ -449,6 +492,13 @@ def manager_for(manager_type: ManagerType, connection: ManagerConnection) -> Man
     It is still written to the `managers` collection on each run — the API
     and UI resolve `Server.manager_id` through it — but as a projection of
     config, never as its source.
+
+    Args:
+        manager_type (ManagerType): Which vendor manager type this is for.
+        connection (ManagerConnection): The resolved endpoint to record.
+
+    Returns:
+        Manager: The projection to write and pass to `IngestService`.
     """
     return Manager(
         id=f"mgr_{manager_type.value.lower()}",
@@ -461,8 +511,10 @@ def manager_for(manager_type: ManagerType, connection: ManagerConnection) -> Man
 
 
 class _NameFilteredProvider(ServerInventoryProvider):
-    """Drops every server whose name doesn't match `pattern` before it
-    reaches the pipeline — `INVENTORY_COLLECTOR_NAME_PATTERN`.
+    """
+    Drop every server whose name doesn't match `pattern` before it reaches the pipeline.
+
+    Implements `INVENTORY_COLLECTOR_NAME_PATTERN`.
 
     A wrapper here rather than a guard inside `IngestService` because
     *which servers to collect* is a collection concern: it belongs to the
@@ -483,6 +535,14 @@ class _NameFilteredProvider(ServerInventoryProvider):
     """
 
     def __init__(self, inner: ServerInventoryProvider, pattern: str) -> None:
+        """
+        Wrap `inner`, keeping only servers whose name matches `pattern`.
+
+        Args:
+            inner (ServerInventoryProvider): The real collector to wrap.
+            pattern (str): A regex; a server is kept when this matches
+                somewhere in its name.
+        """
         super().__init__()
         self._inner = inner
         self._pattern = re.compile(pattern)
@@ -498,9 +558,17 @@ class _NameFilteredProvider(ServerInventoryProvider):
         return self._inner.collection_errors
 
     async def health_check(self) -> None:
+        """Delegate to the wrapped collector's own health check."""
         await self._inner.health_check()
 
     async def _list_servers(self) -> AsyncGenerator[ProviderServer, None]:
+        """
+        Yield only the wrapped collector's servers whose name matches `pattern`.
+
+        Yields:
+            ProviderServer: Each server from `inner` that passed the
+                name filter.
+        """
         kept = skipped = 0
         # `aclosing`, because this wrapper sits in front of *every*
         # collector: a consumer stopping early (`--dry-run --limit`)
@@ -528,6 +596,17 @@ class _NameFilteredProvider(ServerInventoryProvider):
 
 
 def _filtered(provider: ServerInventoryProvider, pattern: str) -> ServerInventoryProvider:
+    """
+    Wrap `provider` in `_NameFilteredProvider`, or return it unwrapped when there is no pattern.
+
+    Args:
+        provider (ServerInventoryProvider): The collector to filter.
+        pattern (str): The name-matching regex; empty means no filtering.
+
+    Returns:
+        ServerInventoryProvider: `provider` itself when `pattern` is
+            empty, otherwise a `_NameFilteredProvider` wrapping it.
+    """
     return _NameFilteredProvider(provider, pattern) if pattern else provider
 
 
@@ -538,9 +617,28 @@ def _build_provider(
     timeout_seconds: float,
     settings: Settings | None = None,
 ) -> ServerInventoryProvider:
-    """`settings` is threaded in rather than read here so a caller (and a
+    """
+    Build the provider for `manager.type` via `PROVIDER_FACTORIES`.
+
+    `settings` is threaded in rather than read here so a caller (and a
     test) can decide which collector variant it is exercising. It defaults
     to the process-wide settings for the callers that have no opinion.
+
+    Args:
+        manager (Manager): The manager to build a provider for.
+        credential_resolver (CredentialResolver): Resolves the login or
+            API key for `manager.type`.
+        timeout_seconds (float): Per-call timeout passed to the provider.
+        settings (Settings | None): Falls back to `get_settings()` when
+            omitted.
+
+    Returns:
+        ServerInventoryProvider: The constructed collector.
+
+    Raises:
+        NotImplementedError: When `manager.type` has no factory in
+            `PROVIDER_FACTORIES` (`UCS_MANAGER` gets its own message
+            explaining it is reached through `UCS_CENTRAL` instead).
     """
     factory = PROVIDER_FACTORIES.get(manager.type)
     if factory is None:
@@ -616,8 +714,7 @@ def _or_unread(value: object) -> str:
 
 def _format_capacity(capacity_bytes: int) -> str:
     """
-    Render a byte count as GiB, or TiB once it is large enough that GiB
-    stops being readable at a glance.
+    Render a byte count as GiB, or TiB once GiB stops being readable at a glance.
 
     Binary (base-1024), and kept for GPU VRAM specifically: Redfish reports
     it in MiB, so a 80 GiB card reads as its nameplate size only in binary
@@ -938,6 +1035,26 @@ async def _run_one_manager(
     name_pattern: str = "",
     settings: Settings | None = None,
 ) -> _RunOutcome | None:
+    """
+    Collect from `manager` and ingest through `ingest_service`, real writes.
+
+    Args:
+        manager (Manager): The manager to collect from.
+        ingest_service (IngestService): The pipeline to write through.
+        credential_resolver (CredentialResolver): Resolves the login or
+            API key for `manager`'s type.
+        timeout_seconds (float): Per-call timeout passed to the provider.
+        name_pattern (str): Only ingest servers whose name matches this
+            regex; empty matches everything.
+        settings (Settings | None): Falls back to `get_settings()` when
+            omitted.
+
+    Returns:
+        _RunOutcome | None: The ingest summary and any collection errors,
+            or `None` when the manager could not be reached at all (the
+            failure is logged, not raised, so one bad manager never
+            aborts the run for the others).
+    """
     try:
         provider = _filtered(
             _build_provider(
@@ -1152,6 +1269,16 @@ async def _run(
 
 
 def main(argv: list[str] | None = None) -> None:
+    """
+    Entry point: parse args, run `_run`, and exit with its status code.
+
+    Args:
+        argv (list[str] | None): Arguments, or None for `sys.argv`.
+
+    Raises:
+        SystemExit: With `_run`'s exit code — 0 complete, 1 total
+            failure, 2 not configured, 3 partial.
+    """
     args = _parse_args(argv)
     if args.debug_xml:
         # Read by `UcsManagerClient`; set here so it covers every provider

@@ -52,6 +52,8 @@ _Document = dict[str, Any]
 
 @dataclass(frozen=True, slots=True)
 class AuditEventPage:
+    """One page of audit events plus the cursor to fetch the next page."""
+
     items: list[AuditEvent]
     next_cursor: str | None
     has_more: bool
@@ -63,9 +65,20 @@ def _encode_cursor(created_at_iso: str, event_id: str) -> str:
 
 
 def _decode_cursor(cursor: str) -> tuple[str, str]:
-    """Returns `(created_at_iso, event_id)` — the ISO string as stored,
-    not a parsed `datetime` (see module docstring on why the query must
-    stay in string form to match the stored BSON type).
+    """
+    Decode and validate an audit-event page cursor.
+
+    Args:
+        cursor (str): The opaque cursor from a previous `list_page` call.
+
+    Returns:
+        tuple[str, str]: `(created_at_iso, event_id)`, the ISO string as
+            stored, not a parsed `datetime` (see the module docstring on
+            why the query must stay in string form).
+
+    Raises:
+        CursorInvalidError: If the cursor is malformed or its timestamp
+            is not a timezone-aware ISO 8601 string.
     """
     try:
         payload = base64.urlsafe_b64decode(cursor.encode("ascii")).decode("utf-8")
@@ -82,7 +95,15 @@ def _decode_cursor(cursor: str) -> tuple[str, str]:
 
 
 class MongoAuditEventRepository:
+    """MongoDB-backed store for immutable audit events."""
+
     def __init__(self, mongo: MongoClientHolder) -> None:
+        """
+        Store the shared Mongo client holder.
+
+        Args:
+            mongo (MongoClientHolder): The connected client holder.
+        """
         self._mongo = mongo
 
     @property
@@ -90,6 +111,15 @@ class MongoAuditEventRepository:
         return self._mongo.db[AUDIT_EVENTS_COLLECTION]
 
     async def record(self, event: AuditEvent) -> AuditEvent:
+        """
+        Insert one audit event.
+
+        Args:
+            event (AuditEvent): The event to persist.
+
+        Returns:
+            AuditEvent: The same event, for chaining.
+        """
         doc = event.model_dump(by_alias=True, mode="json")
         await self._collection.insert_one(doc)
         return event
@@ -103,6 +133,21 @@ class MongoAuditEventRepository:
         cursor: str | None = None,
         page_size: int = 50,
     ) -> AuditEventPage:
+        """
+        List audit events newest-first, optionally filtered and paginated.
+
+        Args:
+            server_id (str | None): If given, only events for this server.
+            event_type (str | None): If given, only events of this type.
+            actor_id (str | None): If given, only events by this actor.
+            cursor (str | None): If given, resume after this page's last
+                item (from a previous call's `next_cursor`).
+            page_size (int): Maximum number of items to return.
+
+        Returns:
+            AuditEventPage: The matching page, its `next_cursor` (`None`
+                if this is the last page), and whether more remain.
+        """
         query: dict[str, object] = {}
         if server_id is not None:
             query["server_id"] = server_id

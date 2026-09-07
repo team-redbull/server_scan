@@ -76,15 +76,13 @@ def _management_ip_addr(
     *, profile: Any | None, server_mo: Any, mgmt_ip_by_parent_dn: dict[str, Any]
 ) -> Any | None:
     """
-    Resolve a server's `vnicIpV4PooledAddr`/`vnicIpV4StaticAddr`, trying
-    both DNs that MO can legitimately hang directly off of.
+    Resolve a server's management IP MO, trying both DNs it can legitimately hang off of.
 
     The service profile's own DN is tried first — confirmed against real
-    UCS Manager hardware to be the one actually populated — and the
-    compute unit's `mgmtController` DN second, which is schema-valid per
-    `ucsmsdk`'s `mo_meta.parents` but was empty on the hardware this was
-    verified against. See docs/cisco-collectors.md, "BMC and management
-    interface selection".
+    UCS Manager hardware to be the one actually populated — then the
+    compute unit's `mgmtController` DN, which is schema-valid but was
+    empty on that hardware. See docs/cisco-collectors.md, "BMC and
+    management interface selection".
 
     Args:
         profile (Any | None): The server's `lsServer` service profile, or
@@ -393,7 +391,7 @@ _NOT_APPLICABLE_TEMP = "not-applicable"
 
 
 def _gpu_temperature_celsius(mo: Any) -> float | None:
-    """
+    r"""
     A GPU's reported temperature.
 
     `GraphicsCard.temperature` is typed `string` in the SDK (every XML

@@ -37,9 +37,7 @@ def _add(tokens: set[str], value: str | None) -> None:
 
 
 def _add_mac(tokens: set[str], mac: str | None) -> None:
-    """Adds both the canonical colon form and the bare-hex form of a
-    (already-normalized) MAC address as searchable tokens.
-    """
+    """Add both the colon form and bare-hex form of an already-normalized MAC address."""
     if not mac:
         return
     tokens.add(mac)
@@ -47,6 +45,15 @@ def _add_mac(tokens: set[str], mac: str | None) -> None:
 
 
 def build_search_tokens(server: Server) -> list[str]:
+    """
+    Build the multikey-indexed `search_tokens` field for one server.
+
+    Args:
+        server (Server): The server to tokenize.
+
+    Returns:
+        list[str]: The sorted, deduplicated token set, capped at `_MAX_TOKENS`.
+    """
     tokens: set[str] = set()
 
     _add(tokens, server.name)

@@ -32,14 +32,17 @@ ALL_OPERATORS = (
 
 
 class ConditionValidationError(Exception):
-    pass
+    """A condition tree is unsafe or meaningless to evaluate."""
 
 
 class Condition(BaseModel):
-    """A single node: exactly one of (`all_of`, `any_of`, `not_`, `metric`)
-    must be set. Pydantic's `model_validator` enforces that shape rather
-    than a discriminated union, since the "one of N mutually exclusive
-    field groups" shape doesn't map cleanly onto a `Literal`-tagged union
+    """
+    A single node in a health-policy condition tree.
+
+    Exactly one of (`all_of`, `any_of`, `not_`, `metric`) must be set.
+    Pydantic's `model_validator` enforces that shape rather than a
+    discriminated union, since the "one of N mutually exclusive field
+    groups" shape doesn't map cleanly onto a `Literal`-tagged union
     without an artificial `kind` field no caller would ever want to type.
     """
 
@@ -75,6 +78,12 @@ class Condition(BaseModel):
         return self
 
     def is_leaf(self) -> bool:
+        """
+        Whether this node is a metric leaf rather than a composite node.
+
+        Returns:
+            bool: `True` if `metric` is set.
+        """
         return self.metric is not None
 
 
@@ -99,12 +108,22 @@ def _node_count(condition: Condition) -> int:
 
 
 def validate_condition(condition: Condition, registry: MetricRegistry) -> None:
-    """Raises `ConditionValidationError` for anything that would be unsafe
-    or meaningless to evaluate: unknown metric, operator/type mismatch, or
-    a tree that's too deep/large. Called when a system-default policy is
-    seeded or re-synced at startup (`app.application.services.bootstrap`,
-    via `validate_policy_write`), never at evaluation time — evaluation
-    trusts a condition that passed this once.
+    """
+    Reject a condition tree that would be unsafe or meaningless to evaluate.
+
+    Called when a system-default policy is seeded or re-synced at startup
+    (`app.application.services.bootstrap`, via `validate_policy_write`),
+    never at evaluation time — evaluation trusts a condition that passed
+    this once.
+
+    Args:
+        condition (Condition): The tree to validate, root node.
+        registry (MetricRegistry): The known metrics to validate against.
+
+    Raises:
+        ConditionValidationError: For an unknown metric, an operator/type
+            mismatch, an invalid enum value, or a tree that's too deep or
+            has too many nodes.
     """
     if _depth(condition) > MAX_CONDITION_DEPTH:
         raise ConditionValidationError(f"condition tree exceeds max depth {MAX_CONDITION_DEPTH}")
@@ -167,6 +186,18 @@ def _eval_scalar(operator: str, actual: Any, value: Any) -> bool:
 
 
 def evaluate_leaf(condition: Condition, facts: dict[str, Any], registry: MetricRegistry) -> bool:
+    """
+    Evaluate one metric leaf against a facts mapping.
+
+    Args:
+        condition (Condition): A leaf node (`metric` and `operator` set).
+        facts (dict[str, Any]): The extracted server facts (see
+            `app.domain.services.health.facts.extract_facts`).
+        registry (MetricRegistry): The registry to resolve `condition.metric` from.
+
+    Returns:
+        bool: Whether the leaf's condition holds against `facts`.
+    """
     if condition.metric is None or condition.operator is None:
         raise AssertionError(
             "leaf condition missing metric/operator"
@@ -209,6 +240,17 @@ def evaluate_leaf(condition: Condition, facts: dict[str, Any], registry: MetricR
 def evaluate_condition(
     condition: Condition, facts: dict[str, Any], registry: MetricRegistry
 ) -> bool:
+    """
+    Evaluate a condition tree (composite or leaf) against a facts mapping.
+
+    Args:
+        condition (Condition): The tree to evaluate, root node.
+        facts (dict[str, Any]): The extracted server facts.
+        registry (MetricRegistry): The registry to resolve each leaf's metric from.
+
+    Returns:
+        bool: Whether the tree's condition holds against `facts`.
+    """
     if condition.all_of is not None:
         return all(evaluate_condition(c, facts, registry) for c in condition.all_of)
     if condition.any_of is not None:
@@ -219,8 +261,16 @@ def evaluate_condition(
 
 
 def leaf_metrics(condition: Condition) -> list[str]:
-    """All metric names referenced anywhere in the tree, for evidence
-    collection (`app.domain.services.health.evaluate`).
+    """
+    Collect every metric name referenced anywhere in a condition tree.
+
+    Used for evidence collection (`app.domain.services.health.evaluate`).
+
+    Args:
+        condition (Condition): The tree to scan, root node.
+
+    Returns:
+        list[str]: Every leaf's `metric` name, in tree order, duplicates included.
     """
     if condition.all_of is not None:
         return [m for c in condition.all_of for m in leaf_metrics(c)]

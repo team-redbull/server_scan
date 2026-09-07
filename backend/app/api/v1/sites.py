@@ -74,12 +74,31 @@ async def _server_repo(
     mongo: Annotated[MongoClientHolder, Depends(get_mongo_holder)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> MongoServerRepository:
+    """
+    Build the server repository for one request.
+
+    Args:
+        mongo (MongoClientHolder): The shared Mongo client holder.
+        settings (Settings): Supplies the cursor-signing secret.
+
+    Returns:
+        MongoServerRepository: A repository bound to that client.
+    """
     return MongoServerRepository(mongo, cursor_secret=settings.cursor_secret)
 
 
 async def _cache(
     redis: Annotated[RedisClientHolder, Depends(get_redis_holder)],
 ) -> CacheClient:
+    """
+    Build the cache-aside client for one request.
+
+    Args:
+        redis (RedisClientHolder): The shared Redis client holder.
+
+    Returns:
+        CacheClient: A cache client bound to that connection.
+    """
     return CacheClient(redis)
 
 
@@ -191,6 +210,18 @@ async def list_sites(
     cache: Annotated[CacheClient, Depends(_cache)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> SiteStatsListResponse:
+    """
+    List every configured site with its per-site and fleet-wide statistics.
+
+    Args:
+        repo (MongoServerRepository): The server repository.
+        cache (CacheClient): Cache-aside for the aggregation.
+        settings (Settings): Supplies the configured site catalog.
+
+    Returns:
+        SiteStatsListResponse: One record per configured site, plus
+            "Unassigned".
+    """
     cached = await cache.get(_STATS_CACHE_KEY)
     if cached is not None:
         return SiteStatsListResponse.model_validate(cached)

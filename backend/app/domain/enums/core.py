@@ -65,14 +65,16 @@ class ManagerType(StrEnum):
 
 
 class InstallationType(StrEnum):
+    """A server's role, as a regex verdict on its hostname (classification)."""
+
     HOSTED_CLUSTER = "HOSTED_CLUSTER"
     UPI = "UPI"
     UNCLASSIFIED = "UNCLASSIFIED"
 
 
 class OpenShiftState(StrEnum):
-    """What OpenShift observed about a server, as opposed to what its name
-    suggests.
+    """
+    What OpenShift observed about a server, as opposed to what its name suggests.
 
     Deliberately parallel to `InstallationType` and deliberately not the
     same thing. `InstallationType` is a regex verdict on a hostname, which
@@ -97,8 +99,11 @@ class OpenShiftState(StrEnum):
 
 
 class HealthSeverity(StrEnum):
-    """Ordering matters and is defined once here (`RANK`) — every
-    aggregation in the health engine sorts by this, never by enum
+    """
+    A server's overall or per-category health, from best to worst.
+
+    Ordering matters and is defined once here (`HEALTH_SEVERITY_RANK`) —
+    every aggregation in the health engine sorts by this, never by enum
     declaration order or alphabetical order.
     """
 
@@ -119,6 +124,8 @@ HEALTH_SEVERITY_RANK: dict[HealthSeverity, int] = {
 
 
 class LinkState(StrEnum):
+    """A network interface's reported link state."""
+
     UP = "UP"
     DOWN = "DOWN"
     UNKNOWN = "UNKNOWN"
@@ -126,6 +133,8 @@ class LinkState(StrEnum):
 
 
 class MediaType(StrEnum):
+    """A storage drive's reported media type."""
+
     HDD = "HDD"
     SSD = "SSD"
     NVME = "NVME"

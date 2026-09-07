@@ -72,11 +72,20 @@ _inflight: dict[str, asyncio.Task[object]] = {}
 
 
 async def coalesce[T](key: str, compute: Callable[[], Awaitable[T]]) -> T:
-    """Run `compute()` for `key`, sharing the result with any concurrent
-    caller that requests the same `key` while it's in flight. A caller
-    that arrives after the computation has already finished (or before
-    anyone has started it) runs its own fresh call — this only dedupes
-    overlap, it is not a cache.
+    """
+    Run `compute()` for `key`, sharing the result with concurrent callers.
+
+    A caller that arrives after the computation has already finished (or
+    before anyone has started it) runs its own fresh call — this only
+    dedupes overlap, it is not a cache.
+
+    Args:
+        key (str): Identifies the computation to share.
+        compute (Callable[[], Awaitable[T]]): Runs once per key while no
+            call for it is in flight.
+
+    Returns:
+        T: `compute()`'s result, whether this caller ran it or shared it.
     """
     task = _inflight.get(key)
     if task is None:
@@ -98,13 +107,13 @@ async def coalesce[T](key: str, compute: Callable[[], Awaitable[T]]) -> T:
 
 
 async def _run[T](compute: Callable[[], Awaitable[T]]) -> T:
+    """Run `compute()` in its own task, isolated from any caller's cancellation."""
     return await compute()
 
 
 def _cleanup(key: str, task: asyncio.Task[object]) -> None:
     """
-    Remove `key`'s entry once its task has settled, and surface a
-    result nobody was left to observe.
+    Remove `key`'s entry, and surface a result nobody was left to observe.
 
     Args:
         key (str): The `_inflight` key this task was registered under.

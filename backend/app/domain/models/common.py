@@ -19,6 +19,8 @@ from app.utils.timeutil import utcnow
 
 
 class AuditFields(BaseModel):
+    """The optimistic-concurrency revision counter and timestamps composed into a document."""
+
     model_config = ConfigDict(frozen=False)
 
     revision: int = 1
@@ -27,5 +29,11 @@ class AuditFields(BaseModel):
 
     @classmethod
     def new(cls) -> AuditFields:
+        """
+        Build a fresh `AuditFields` for a document being created now.
+
+        Returns:
+            AuditFields: Revision 1, with `created_at` and `updated_at` both set to now.
+        """
         now = utcnow()
         return cls(revision=1, created_at=now, updated_at=now)

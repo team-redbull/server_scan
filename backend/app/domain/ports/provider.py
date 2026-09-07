@@ -27,6 +27,8 @@ from dataclasses import dataclass, field
 
 @dataclass(frozen=True, slots=True)
 class ProviderAttachment:
+    """Provider-neutral DTO for one fabric/uplink connection a server reports."""
+
     type: str
     provider: str | None
     fabric: str | None
@@ -78,11 +80,13 @@ class ProviderNic:
 
 @dataclass(frozen=True, slots=True)
 class ProviderServer:
-    """Provider-neutral DTO for one server as reported by a collector
-    (real or fake). All identity/MAC/BMC-address values are already
-    normalized by the provider before this DTO is constructed — the
-    provider boundary is where vendor-specific parsing happens; nothing
-    downstream re-parses vendor formats.
+    """
+    Provider-neutral DTO for one server as reported by a collector (real or fake).
+
+    All identity/MAC/BMC-address values are already normalized by the
+    provider before this DTO is constructed — the provider boundary is
+    where vendor-specific parsing happens; nothing downstream re-parses
+    vendor formats.
     """
 
     external_id: str

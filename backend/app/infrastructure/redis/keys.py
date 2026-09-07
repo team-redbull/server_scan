@@ -18,10 +18,31 @@ _NAMESPACE_VERSION = 1
 
 
 def server_key(server_id: str, revision: int) -> str:
+    """
+    The cache key for one server document at one revision.
+
+    Args:
+        server_id (str): The server's id.
+        revision (int): The server's current revision.
+
+    Returns:
+        str: The key.
+    """
     return f"si:{_NAMESPACE_VERSION}:srv:{server_id}:r{revision}"
 
 
 def list_key(filter_hash: str, cursor_hash: str) -> str:
+    """
+    The cache key for one page of a filtered/sorted server list.
+
+    Args:
+        filter_hash (str): A stable hash of the filters, search string,
+            sort field and direction.
+        cursor_hash (str): A stable hash of the pagination cursor.
+
+    Returns:
+        str: The key.
+    """
     return f"si:{_NAMESPACE_VERSION}:list:{filter_hash}:{cursor_hash}"
 
 

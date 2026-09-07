@@ -1,5 +1,7 @@
-"""Idempotent seeding of system-default classification rules and health
-policies, validated the same way a hand-authored write would be.
+"""
+Idempotent seeding of system-default classification rules and health policies.
+
+Validated the same way a hand-authored write would be.
 
 Both `default_system_rules()` and `default_system_policies()` generate a
 fresh random id on every call, so re-running them and unconditionally
@@ -96,10 +98,12 @@ def _definition_of(rule: ClassificationRule) -> dict[str, object]:
 async def ensure_default_classification_rules(
     repo: MongoClassificationRuleRepository, sites: SiteCatalog, *, engine: RegexEngine
 ) -> int:
-    """Seed the system-default rules, and re-sync any whose definition has
-    drifted from what code now generates. Every rule that would be written
-    is validated first (`validate_rule_write`) — a malformed shipped
-    default fails the startup, not the first classification that hits it.
+    """
+    Seed the system-default rules, re-syncing any whose definition has drifted.
+
+    Every rule that would be written is validated first
+    (`validate_rule_write`) — a malformed shipped default fails the
+    startup, not the first classification that hits it.
 
     Args:
         repo (MongoClassificationRuleRepository): The rules collection.
@@ -168,11 +172,13 @@ def _definition_of_policy(policy: HealthPolicy) -> dict[str, object]:
 async def ensure_default_health_policies(
     repo: MongoHealthPolicyRepository, *, registry: MetricRegistry
 ) -> int:
-    """Seed the system-default health policies, and re-sync any whose
-    definition has drifted from what code now generates — the same policy
-    as `ensure_default_classification_rules`, since there is no editor UI
-    left to notice or correct a drifted default by hand. Every policy that
-    would be written is validated first (`validate_policy_write`).
+    """
+    Seed the system-default health policies, re-syncing any whose definition has drifted.
+
+    The same policy as `ensure_default_classification_rules`, since there
+    is no editor UI left to notice or correct a drifted default by hand.
+    Every policy that would be written is validated first
+    (`validate_policy_write`).
 
     Args:
         repo (MongoHealthPolicyRepository): The health policies collection.

@@ -11,10 +11,18 @@ from __future__ import annotations
 
 
 def normalize_text(value: str | None) -> str:
-    """Lowercase and collapse internal whitespace. Used for the
-    `*_normalized` sort/filter fields — deliberately simpler than
-    `build_search_tokens` (no splitting into tokens), since these fields
-    are compared/sorted as whole strings, not searched.
+    """
+    Lowercase and collapse internal whitespace, for a `*_normalized` sort/filter field.
+
+    Deliberately simpler than `build_search_tokens` (no splitting into
+    tokens), since these fields are compared/sorted as whole strings, not
+    searched.
+
+    Args:
+        value (str | None): The raw text, or `None`.
+
+    Returns:
+        str: The normalized text, or `""` for `None`/empty input.
     """
     if not value:
         return ""

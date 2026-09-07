@@ -34,7 +34,15 @@ _Document = dict[str, Any]
 
 
 class MongoClassificationRuleRepository:
+    """MongoDB-backed store for classification rules."""
+
     def __init__(self, mongo: MongoClientHolder) -> None:
+        """
+        Store the shared Mongo client holder.
+
+        Args:
+            mongo (MongoClientHolder): The connected client holder.
+        """
         self._mongo = mongo
 
     @property
@@ -42,28 +50,65 @@ class MongoClassificationRuleRepository:
         return self._mongo.db[CLASSIFICATION_RULES_COLLECTION]
 
     async def upsert(self, rule: ClassificationRule) -> ClassificationRule:
-        """Replace-or-insert by `_id`. Raises `pymongo.errors.
-        DuplicateKeyError` (uncaught) on a `name` collision with another
-        rule — the API layer is what turns that into a 409, this
-        repository just surfaces the driver's own error.
+        """
+        Replace-or-insert a rule by `_id`.
+
+        Args:
+            rule (ClassificationRule): The rule to persist.
+
+        Returns:
+            ClassificationRule: The same rule, for chaining.
+
+        Raises:
+            pymongo.errors.DuplicateKeyError: On a `name` collision with
+                another rule — uncaught; the API layer turns it into a
+                409, this repository just surfaces the driver's own error.
         """
         doc = rule.model_dump(by_alias=True, mode="json")
         await self._collection.replace_one({"_id": rule.id}, doc, upsert=True)
         return rule
 
     async def get_by_id(self, rule_id: str) -> ClassificationRule | None:
+        """
+        Look up one rule by its id.
+
+        Args:
+            rule_id (str): The rule's id.
+
+        Returns:
+            ClassificationRule | None: The rule, or None if not found.
+        """
         doc = await self._collection.find_one({"_id": rule_id})
         if doc is None:
             return None
         return ClassificationRule.model_validate(doc)
 
     async def get_by_name(self, name: str) -> ClassificationRule | None:
+        """
+        Look up one rule by its unique name.
+
+        Args:
+            name (str): The rule's name.
+
+        Returns:
+            ClassificationRule | None: The rule, or None if not found.
+        """
         doc = await self._collection.find_one({"name": name})
         if doc is None:
             return None
         return ClassificationRule.model_validate(doc)
 
     async def list_all(self, *, enabled_only: bool = False) -> list[ClassificationRule]:
+        """
+        List every rule, sorted by `(priority DESC, order ASC, _id ASC)`.
+
+        Args:
+            enabled_only (bool): If True, only return enabled rules.
+
+        Returns:
+            list[ClassificationRule]: All matching rules, in resolution
+                order.
+        """
         query: dict[str, object] = {"enabled": True} if enabled_only else {}
         docs = await (
             self._collection.find(query)
@@ -73,6 +118,15 @@ class MongoClassificationRuleRepository:
         return [ClassificationRule.model_validate(doc) for doc in docs]
 
     async def delete(self, rule_id: str) -> bool:
+        """
+        Delete one rule by its id.
+
+        Args:
+            rule_id (str): The rule's id.
+
+        Returns:
+            bool: True if a rule was deleted, False if none matched.
+        """
         result = await self._collection.delete_one({"_id": rule_id})
         return result.deleted_count > 0
 
@@ -95,9 +149,11 @@ _UPI_TEMPLATE = r"^ocp4-([a-z]+-)?({sites})-(compute|control-plane|infra)-\d+$"
 
 
 def default_system_rules(sites: SiteCatalog) -> list[ClassificationRule]:
-    """The three unscoped SYSTEM_DEFAULT rules that cover this estate's
-    real hostname conventions, as ready-to-persist `ClassificationRule`s:
-    two shapes of hosted cluster and one of UPI.
+    """
+    The three unscoped SYSTEM_DEFAULT rules, as ready-to-persist rules.
+
+    Covers this estate's real hostname conventions: two shapes of hosted
+    cluster and one of UPI.
 
     All three are `system=True` (locked to enabled-only edits after
     creation) because they encode a naming convention that holds fleet-

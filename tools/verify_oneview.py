@@ -1,5 +1,4 @@
-"""Read-only probe answering the questions `docs/adr/0022` could not
-settle without a live HPE OneView appliance.
+"""Read-only probe answering questions `docs/adr/0022` could not settle without live HPE OneView.
 
 No OneView call has ever been made against this code. There is no HPE
 equivalent of Cisco's UCS Platform Emulator — the 60-day OneView trial is

@@ -39,8 +39,7 @@ class RedfishCredential:
 
     def __repr__(self) -> str:
         """
-        Redacted, so a stray log line, traceback frame or debugger session
-        can never print the password.
+        Redact the password, so no log line, traceback or debugger can print it.
 
         Returns:
             str: The credential with its password masked.
@@ -98,8 +97,7 @@ class InventoryError(ManagerNotConfiguredError):
 
 def _normalize_host(raw: object, *, source: str) -> str:
     """
-    Reduce an operator-written address to the bare host this collector
-    connects to.
+    Reduce an operator-written address to the bare host this collector connects to.
 
     Args:
         raw (object): The `host` value as written.

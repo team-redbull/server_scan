@@ -31,11 +31,21 @@ _Document = dict[str, Any]
 def _cursor_position_clause(
     *, sort_field: str, direction: int, position: CursorPosition
 ) -> dict[str, object]:
-    """`$or` clause selecting documents strictly past `position` in sort
-    order: either the sort field is strictly beyond the cursor's value, or
-    it's tied and `_id` breaks the tie in the same direction. Both legs
-    must agree with the query's own `.sort()` direction or the page would
-    skip or repeat rows.
+    """
+    Build the `$or` clause selecting documents strictly past `position`.
+
+    Either the sort field is strictly beyond the cursor's value, or it's
+    tied and `_id` breaks the tie in the same direction. Both legs must
+    agree with the query's own `.sort()` direction or the page would skip
+    or repeat rows.
+
+    Args:
+        sort_field (str): The field being sorted on.
+        direction (int): `1` for ascending, `-1` for descending.
+        position (CursorPosition): The decoded cursor position.
+
+    Returns:
+        dict[str, object]: A Mongo filter clause to `$and` onto the query.
     """
     op = "$gt" if direction == 1 else "$lt"
     return {
@@ -69,13 +79,23 @@ class FacetRow:
 
 
 class MongoServerRepository:
-    """Implements `app.domain.ports.repository.ServerRepository` against
-    the `servers` collection. Structural typing (the Protocol has no
-    `register()`/ABC to inherit from) means this class satisfies the port
-    by matching its method signatures, not by subclassing it.
+    """
+    Implements `app.domain.ports.repository.ServerRepository`.
+
+    Structural typing (the Protocol has no `register()`/ABC to inherit
+    from) means this class satisfies the port by matching its method
+    signatures, not by subclassing it.
     """
 
     def __init__(self, mongo: MongoClientHolder, *, cursor_secret: str) -> None:
+        """
+        Store the shared Mongo client holder and the cursor-signing secret.
+
+        Args:
+            mongo (MongoClientHolder): The connected client holder.
+            cursor_secret (str): HMAC secret used to sign/verify pagination
+                cursors (see `app.domain.services.cursor`).
+        """
         self._mongo = mongo
         self._cursor_secret = cursor_secret
 
@@ -84,26 +104,50 @@ class MongoServerRepository:
         return self._mongo.db[SERVERS_COLLECTION]
 
     async def upsert(self, server: Server) -> Server:
-        """Replace-or-insert by `_id`. Raises `pymongo.errors.
-        DuplicateKeyError` (uncaught) if the document collides with an
-        *other* document on a secondary unique index
-        (`identity.system_uuid` or `(identity.vendor,
-        identity.serial_normalized)`) — that is expected and is
-        `app.application.services.ingest`'s job to catch and resolve via
-        lookup+update, not this repository's.
+        """
+        Replace-or-insert a server by `_id`.
+
+        Args:
+            server (Server): The server to persist.
+
+        Returns:
+            Server: The same server, for chaining.
+
+        Raises:
+            pymongo.errors.DuplicateKeyError: If the document collides with
+                an *other* document on a secondary unique index
+                (`identity.system_uuid` or `(identity.vendor,
+                identity.serial_normalized)`) — uncaught; that is expected
+                and is `app.application.services.ingest`'s job to catch and
+                resolve via lookup+update, not this repository's.
         """
         doc = server.model_dump(by_alias=True, mode="json")
         await self._collection.replace_one({"_id": server.id}, doc, upsert=True)
         return server
 
     async def upsert_with_revision_check(self, server: Server, *, expected_revision: int) -> Server:
-        """Compare-and-set on `revision`: the filter only matches the
-        document a caller actually read (`_id` *and* the revision it saw),
-        so a concurrent writer that already advanced the revision loses
-        the race here instead of silently clobbering the other's write.
-        No `upsert=True` — this never creates a document, so a filter that
-        matches nothing is unconditionally a conflict, distinguished below
-        by whether the document exists at all.
+        """
+        Compare-and-set a server on its `revision`.
+
+        The filter only matches the document a caller actually read
+        (`_id` *and* the revision it saw), so a concurrent writer that
+        already advanced the revision loses the race here instead of
+        silently clobbering the other's write. No `upsert=True` — this
+        never creates a document, so a filter that matches nothing is
+        unconditionally a conflict, distinguished below by whether the
+        document exists at all.
+
+        Args:
+            server (Server): The server to persist, as read plus changes.
+            expected_revision (int): The revision the caller last read.
+
+        Returns:
+            Server: The same server, for chaining.
+
+        Raises:
+            NotFoundError: If no document with this `_id` exists at all.
+            RevisionConflictError: If the document exists but its stored
+                revision no longer matches `expected_revision`.
         """
         doc = server.model_dump(by_alias=True, mode="json")
         result = await self._collection.replace_one(
@@ -125,6 +169,15 @@ class MongoServerRepository:
         return server
 
     async def get_by_id(self, server_id: str) -> Server | None:
+        """
+        Look up one server by its id.
+
+        Args:
+            server_id (str): The server's id.
+
+        Returns:
+            Server | None: The server, or None if not found.
+        """
         doc = await self._collection.find_one({"_id": server_id})
         if doc is None:
             return None
@@ -141,6 +194,27 @@ class MongoServerRepository:
         page_size: int,
         with_count: bool,
     ) -> Page:
+        """
+        List one keyset page of servers matching filters/search.
+
+        Args:
+            filters (dict[str, object]): A Mongo filter document (already
+                whitelisted by `app.domain.services.search.FILTER_FIELDS`).
+            search (str | None): Free-text search string, or None.
+            sort (str): The sort field name to resolve via
+                `resolve_sort_field`.
+            sort_desc (bool): Whether to sort descending.
+            cursor (str | None): An opaque cursor from a previous page's
+                `next_cursor`, or None for the first page.
+            page_size (int): Maximum number of items to return.
+            with_count (bool): Whether to also compute `total_count`
+                (a separate `count_documents` round trip).
+
+        Returns:
+            Page: The matching items, the next cursor (`None` if this is
+                the last page), whether more remain, and the total count
+                if requested.
+        """
         sort_field = resolve_sort_field(sort)
         direction = -1 if sort_desc else 1
 
@@ -197,14 +271,22 @@ class MongoServerRepository:
         )
 
     async def count(self, filters: dict[str, object]) -> int:
+        """
+        Count servers matching a Mongo filter document.
+
+        Args:
+            filters (dict[str, object]): The Mongo filter to count against.
+
+        Returns:
+            int: The number of matching servers.
+        """
         return await self._collection.count_documents(dict(filters))
 
     async def facet_breakdown(
         self, *, filters: dict[str, object], search: str | None
     ) -> list[FacetRow]:
         """
-        Per-combination server counts for one filtered view, in one round
-        trip.
+        Per-combination server counts for one filtered view, in one round trip.
 
         A single `$group` over a composite key rather than a `$facet` with
         one sub-pipeline per dimension, for the same reason
@@ -269,10 +351,11 @@ class MongoServerRepository:
         return rows
 
     async def site_breakdown(self) -> list[SiteBreakdownRow]:
-        """Per (site, vendor, health, maintenance, installation type)
-        server counts for the whole estate, in one round trip.
+        """
+        Per-(site, vendor, health, maintenance, installation type) counts.
 
-        A single `$group` over every server rather than one count query
+        Server counts for the whole estate, in one round trip. A single
+        `$group` over every server rather than one count query
         per cell: the grouping key has a bounded cardinality (sites x 4
         vendors x 5 severities x 2 maintenance states x 3 installation
         types), so the four shipped sites plus the unassigned bucket give

@@ -17,6 +17,8 @@ from app.domain.enums import InstallationType
 
 
 class Classification(BaseModel):
+    """The classification outcome embedded on a `Server` document."""
+
     installation_type: InstallationType = InstallationType.UNCLASSIFIED
     matched_rule_id: str | None = None
     matched_pattern: str | None = None

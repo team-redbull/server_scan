@@ -39,10 +39,24 @@ class MongoClientHolder:
     """Owns the single `AsyncMongoClient` for this process."""
 
     def __init__(self, settings: Settings) -> None:
+        """
+        Store settings; connect() creates the actual client.
+
+        Args:
+            settings (Settings): Provides the Mongo URI, pool sizes and
+                timeouts used by `connect`.
+        """
         self._settings = settings
         self._client: _MongoClient | None = None
 
     async def connect(self) -> None:
+        """
+        Create the process-wide `AsyncMongoClient` and verify connectivity.
+
+        Idempotent — a second call is a no-op if a client already exists.
+        Pings Mongo once so a misconfigured or unreachable server fails
+        startup rather than the first request.
+        """
         if self._client is not None:
             return
         self._client = _MongoClient(
@@ -60,6 +74,7 @@ class MongoClientHolder:
         logger.info("mongo.connected", database=self._settings.mongo_db)
 
     async def close(self) -> None:
+        """Close the client and release its connection pool, if connected."""
         if self._client is not None:
             await self._client.close()
             self._client = None
@@ -67,13 +82,28 @@ class MongoClientHolder:
 
     @property
     def db(self) -> _MongoDatabase:
+        """
+        The configured database.
+
+        Returns:
+            _MongoDatabase: The database handle.
+
+        Raises:
+            RuntimeError: If `connect()` has not been called yet.
+        """
         if self._client is None:
             raise RuntimeError("MongoClientHolder.connect() was not called")
         return self._client[self._settings.mongo_db]
 
     async def ping(self) -> bool:
-        """Used by the readiness probe. Never raises — returns False on any
-        failure so `/health/ready` can report 503 without itself crashing.
+        """
+        Check Mongo connectivity for the readiness probe.
+
+        Never raises — returns False on any failure so `/health/ready` can
+        report 503 without itself crashing.
+
+        Returns:
+            bool: True if the ping succeeded, False otherwise.
         """
         if self._client is None:
             return False

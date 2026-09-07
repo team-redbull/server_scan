@@ -25,13 +25,24 @@ _ALLOWED_FORMAT_SPECS = re.compile(r"^$|^\.\d{1,2}f$|^d$|^,d$")
 
 
 class TemplateValidationError(Exception):
-    pass
+    """A message template contains something unsafe to render."""
 
 
 def validate_template(template: str, allowed_fields: set[str]) -> None:
-    """Raises `TemplateValidationError` for anything that isn't a plain
-    `{field}` reference to a name in `allowed_fields` (the policy's
-    declared `evidence` keys). Called at policy write time.
+    """
+    Reject a message template unless every field is a plain, declared reference.
+
+    Called at policy write time.
+
+    Args:
+        template (str): The message template to validate.
+        allowed_fields (set[str]): The policy's declared `evidence` keys —
+            the only names `template` may reference.
+
+    Raises:
+        TemplateValidationError: If `template` is too long, has too many
+            fields, references a name outside `allowed_fields`, or uses a
+            conversion specifier or a disallowed format spec.
     """
     if len(template) > MAX_TEMPLATE_LENGTH:
         raise TemplateValidationError(f"template exceeds {MAX_TEMPLATE_LENGTH} characters")
@@ -69,11 +80,21 @@ def _coerce(value: object, format_spec: str) -> str:
 
 
 def render_template(template: str, evidence: dict[str, object]) -> str:
-    """Explicit substitution, never `str.format(**evidence)` /
-    `format_map` — those would resolve attribute/index access syntax in
-    the template even though `validate_template` already rejected it at
-    write time; not calling them at all is the actual enforcement, not a
-    belt-and-suspenders duplicate of validation.
+    """
+    Render a validated message template by explicit field substitution.
+
+    Never `str.format(**evidence)` / `format_map` — those would resolve
+    attribute/index access syntax in the template even though
+    `validate_template` already rejected it at write time; not calling
+    them at all is the actual enforcement, not a belt-and-suspenders
+    duplicate of validation.
+
+    Args:
+        template (str): The template, already passed through `validate_template`.
+        evidence (dict[str, object]): The values to substitute, keyed by field name.
+
+    Returns:
+        str: The rendered message, truncated to `MAX_RENDERED_LENGTH`.
     """
     parts: list[str] = []
     for literal, field_name, format_spec, _conversion in Formatter().parse(template):

@@ -1,5 +1,5 @@
-"""`AuditService`: the one path through which an audit event is ever
-recorded.
+"""
+The one path through which an audit event is ever recorded.
 
 No other code in this codebase constructs an `AuditEvent` or calls
 `MongoAuditEventRepository.record()` directly — every mutation that needs
@@ -21,7 +21,15 @@ from app.utils.timeutil import utcnow
 
 
 class AuditService:
+    """Records audit events through the one repository that persists them."""
+
     def __init__(self, *, repo: MongoAuditEventRepository) -> None:
+        """
+        Initialize the service with its audit event repository.
+
+        Args:
+            repo (MongoAuditEventRepository): The repository events are recorded to.
+        """
         self._repo = repo
 
     async def record(
@@ -33,6 +41,19 @@ class AuditService:
         request_id: str | None = None,
         data: dict[str, Any] | None = None,
     ) -> AuditEvent:
+        """
+        Build and persist an audit event.
+
+        Args:
+            event_type (EventType): What kind of event occurred.
+            actor (Actor): Who or what caused it.
+            server_id (str | None): The server it concerns, if any.
+            request_id (str | None): The originating API request id, if any.
+            data (dict[str, Any] | None): Event-specific payload; defaults to `{}`.
+
+        Returns:
+            AuditEvent: The persisted event, as returned by the repository.
+        """
         event = AuditEvent(
             id=new_id("event"),
             event_type=event_type,

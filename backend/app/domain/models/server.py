@@ -28,6 +28,8 @@ from app.domain.models.openshift import OpenShiftLifecycle
 
 
 class Identity(BaseModel):
+    """The identity fields a server is correlated on across collector runs."""
+
     # Required, no default: the vendor is a property of which collector
     # produced the record, so it is always known by construction. See
     # `Vendor`'s docstring on why there is no `UNKNOWN` to fall back to.
@@ -40,10 +42,11 @@ class Identity(BaseModel):
 
 
 class ProfileTemplate(BaseModel):
-    """The reusable configuration/deployment template this server's
-    profile was provisioned from — vendor-neutral, but the underlying
-    concept exists (under different names) in every hardware manager this
-    platform will eventually integrate with:
+    """The reusable configuration/deployment template this server's profile was provisioned from.
+
+    Vendor-neutral, but the underlying concept exists (under different
+    names) in every hardware manager this platform will eventually
+    integrate with:
 
     - Cisco UCS Manager: a service profile (`lsServer`) instantiated from
       a **Service Profile Template**, referenced by name via that
@@ -77,6 +80,8 @@ class ProfileTemplate(BaseModel):
 
 
 class Server(BaseModel):
+    """One document in the `servers` collection — one physical machine's full record."""
+
     id: str = Field(alias="_id")
     schema_version: int = 1
 

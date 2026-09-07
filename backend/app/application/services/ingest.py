@@ -1,5 +1,5 @@
-"""Ingestion pipeline: `ProviderServer` -> domain `Server`, upserted via
-`ServerRepository`.
+"""
+Ingestion pipeline: `ProviderServer` -> domain `Server`, upserted via `ServerRepository`.
 
 Correlation simplification (slice 1 scope, documented here since it's the
 one deliberate shortcut in this module): a `ProviderServer` is matched
@@ -89,21 +89,47 @@ logger = structlog.get_logger(__name__)
 
 
 class SiteRepositoryPort(Protocol):
-    """The one method `IngestService` needs from a site repository.
+    """
+    The one method `IngestService` needs from a site repository.
+
     Defined here (application layer) rather than in `app.domain.ports`
     because it's this service's own dependency, not a cross-cutting
     domain contract — `MongoSiteRepository` satisfies it structurally.
     """
 
-    async def upsert(self, site: Site) -> Site: ...
+    async def upsert(self, site: Site) -> Site:
+        """
+        Create or update a site document.
+
+        Args:
+            site (Site): The site to persist.
+
+        Returns:
+            Site: The persisted site.
+        """
+        ...
 
 
 class ManagerRepositoryPort(Protocol):
-    async def upsert(self, manager: Manager) -> Manager: ...
+    """The one method `IngestService` needs from a manager repository."""
+
+    async def upsert(self, manager: Manager) -> Manager:
+        """
+        Create or update a manager document.
+
+        Args:
+            manager (Manager): The manager to persist.
+
+        Returns:
+            Manager: The persisted manager.
+        """
+        ...
 
 
 @dataclass(slots=True)
 class IngestSummary:
+    """Per-run counters returned by `IngestService.ingest`."""
+
     fetched: int = 0
     created: int = 0
     updated: int = 0
@@ -266,8 +292,11 @@ _DEFAULT_GPU_CATALOG = GpuCatalog.from_spec("")
 
 
 class IngestService:
-    """Runs a full provider ingest: upsert referenced sites/managers, then
-    normalize/correlate/upsert every `ProviderServer` the provider yields.
+    """
+    Runs a full provider ingest.
+
+    Upserts referenced sites/managers, then normalizes, correlates and
+    upserts every `ProviderServer` the provider yields.
     """
 
     def __init__(
@@ -282,6 +311,25 @@ class IngestService:
         health_service: HealthPolicyService | None = None,
         audit: AuditService | None = None,
     ) -> None:
+        """
+        Initialize the service with its repositories and optional engines.
+
+        Args:
+            server_repo (ServerRepository): The servers collection.
+            site_repo (SiteRepositoryPort): Upserts the sites a run references.
+            manager_repo (ManagerRepositoryPort): Upserts the managers a run references.
+            sites (SiteCatalog): The configured site catalog, used to parse
+                each server's site from its name.
+            gpu_catalog (GpuCatalog): Fills in GPU VRAM the provider itself
+                doesn't report; defaults to the built-in catalog with no
+                configured overrides.
+            classification_service (ClassificationService | None): When
+                given, classifies each server as part of its ingest.
+            health_service (HealthPolicyService | None): When given,
+                health-evaluates each server as part of its ingest.
+            audit (AuditService | None): When given, records
+                creation/classification/health transition events.
+        """
         self._server_repo = server_repo
         self._sites = sites
         self._gpu_catalog = gpu_catalog
@@ -298,6 +346,26 @@ class IngestService:
         sites: Sequence[Site] = (),
         managers: Sequence[Manager] = (),
     ) -> IngestSummary:
+        """
+        Run one full ingest: upsert sites/managers, then every collected server.
+
+        The ruleset and health-policy set are each loaded once for the
+        whole run rather than per server (see `ClassificationService.
+        load_ruleset` and `HealthPolicyService.load_policies`). A field a
+        provider could not read this run (`None` on `ProviderServer`) is
+        carried forward from the stored document rather than overwritten
+        with a zero value, and recorded on `Server.unread_fields`; a
+        server-level failure is logged and counted in
+        `IngestSummary.errors` rather than aborting the run.
+
+        Args:
+            provider (ServerInventoryProvider): The vendor provider to collect from.
+            sites (Sequence[Site]): Sites to upsert before collecting, idempotently.
+            managers (Sequence[Manager]): Managers to upsert before collecting, idempotently.
+
+        Returns:
+            IngestSummary: How many servers were fetched, created, updated, and errored.
+        """
         summary = IngestSummary()
 
         # Idempotent — safe to upsert the same fixed site/manager set on
@@ -380,8 +448,8 @@ class IngestService:
         ruleset: list[ClassificationRule],
         policies: list[HealthPolicy],
     ) -> bool:
-        """Returns True if a new server document was created, False if an
-        existing one was updated.
+        """
+        Normalize, correlate and upsert one provider record.
 
         Args:
             ps (ProviderServer): The provider's raw record for one server.
@@ -392,6 +460,10 @@ class IngestService:
             policies (list[HealthPolicy]): This run's policy set, loaded
                 once by `ingest()` — see `HealthPolicyService.
                 load_policies`'s docstring for why.
+
+        Returns:
+            bool: True if a new server document was created, False if an
+                existing one was updated.
         """
         # No fallback vendor. Every server arrives through a
         # vendor-specific collector, so an unrecognized value means that
@@ -457,15 +529,21 @@ class IngestService:
         return existing is None
 
     async def _emit_transition_events(self, existing: Server | None, server: Server) -> None:
-        """Ingestion runs continuously and touches `last_seen_at` on every
+        """
+        Audit only the ingestion transitions worth an entry.
+
+        Ingestion runs continuously and touches `last_seen_at` on every
         server on every run, so a generic SERVER_UPDATED event would be
-        pure noise — the only ingestion-driven transitions worth an audit
-        entry are "this server is new" and "the engines' verdict about
-        this server actually changed", which is exactly what
+        pure noise. The only transitions worth an audit entry are "this
+        server is new" and "the engines' verdict about this server
+        actually changed" — the same selectivity
         `POST /servers/{id}/reclassify` and `.../health/recalculate`
-        (`app.api.v1.servers`) already audit for an explicit, operator-
-        triggered re-evaluation — this mirrors that same selectivity for
-        the automatic path.
+        already apply for an explicit, operator-triggered re-evaluation.
+
+        Args:
+            existing (Server | None): The server as it was before this
+                upsert, or `None` if it was just created.
+            server (Server): The server as it now stands, already upserted.
         """
         if self._audit is None:
             return
@@ -510,9 +588,25 @@ class IngestService:
         ruleset: list[ClassificationRule],
         policies: list[HealthPolicy],
     ) -> Server:
-        """`ruleset`/`policies` are this run's snapshot, loaded once by
-        `ingest()` — see `ClassificationService.load_ruleset` and
-        `HealthPolicyService.load_policies` for why.
+        """
+        Build the `Server` document for one provider record, without persisting it.
+
+        Args:
+            ps (ProviderServer): The provider's raw record for one server.
+            vendor (Vendor): `ps.vendor`, already validated and parsed.
+            serial_normalized (str): `ps.serial`, normalized for correlation.
+            existing (Server | None): The matching stored document, if any.
+            provider_type (str): The collector's `ManagerType` value.
+            ruleset (list[ClassificationRule]): This run's snapshot, loaded
+                once by `ingest()` — see `ClassificationService.
+                load_ruleset` for why.
+            policies (list[HealthPolicy]): This run's snapshot, loaded once
+                by `ingest()` — see `HealthPolicyService.load_policies`
+                for why.
+
+        Returns:
+            Server: The built document, classified and health-evaluated
+                when the corresponding engine was supplied.
         """
         now = utcnow()
         server_id = existing.id if existing is not None else new_id("server")

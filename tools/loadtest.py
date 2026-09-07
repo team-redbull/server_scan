@@ -34,6 +34,15 @@ import httpx
 
 @dataclass(slots=True)
 class Scenario:
+    """One request shape to benchmark: a name, an HTTP method/path, and query params.
+
+    Attributes:
+        name (str): Printed label for this scenario's result line.
+        method (str): The HTTP method, e.g. `"GET"`.
+        path (str): The request path.
+        params (dict[str, str]): Query parameters sent with every request.
+    """
+
     name: str
     method: str
     path: str
@@ -41,6 +50,13 @@ class Scenario:
 
 
 def _scenarios() -> list[Scenario]:
+    """
+    Build the fixed set of request shapes this benchmark measures.
+
+    Returns:
+        list[Scenario]: One entry per `/api/v1/servers` filter/sort/search
+            shape the API actually serves.
+    """
     return [
         Scenario("list: no filter, default sort", "GET", "/api/v1/servers"),
         Scenario(
@@ -81,11 +97,26 @@ def _scenarios() -> list[Scenario]:
 async def _run_scenario(
     client: httpx.AsyncClient, scenario: Scenario, *, concurrency: int, total_requests: int
 ) -> tuple[str, list[float], int, float]:
+    """
+    Fire `total_requests` requests for one scenario, `concurrency` at a time.
+
+    Args:
+        client (httpx.AsyncClient): The shared client to issue requests on.
+        scenario (Scenario): The request shape to repeat.
+        concurrency (int): Maximum number of in-flight requests.
+        total_requests (int): Total requests to send for this scenario.
+
+    Returns:
+        tuple[str, list[float], int, float]: The scenario's name, every
+            request's latency in milliseconds, the non-2xx count, and the
+            batch's wall-clock duration in seconds.
+    """
     latencies: list[float] = []
     errors = 0
     semaphore = asyncio.Semaphore(concurrency)
 
     async def one_request() -> None:
+        """Issue one request under the shared semaphore and record its latency."""
         nonlocal errors
         async with semaphore:
             start = time.perf_counter()
@@ -102,6 +133,16 @@ async def _run_scenario(
 
 
 def _percentile(sorted_values: list[float], pct: float) -> float:
+    """
+    Read one percentile off an already-sorted sample.
+
+    Args:
+        sorted_values (list[float]): Latencies, ascending.
+        pct (float): The percentile to read, as a fraction (e.g. `0.95`).
+
+    Returns:
+        float: The value at that percentile, or `0.0` for an empty sample.
+    """
     if not sorted_values:
         return 0.0
     index = min(len(sorted_values) - 1, int(len(sorted_values) * pct))
@@ -109,6 +150,13 @@ def _percentile(sorted_values: list[float], pct: float) -> float:
 
 
 async def main() -> None:
+    """
+    Run every scenario against `--base-url` and print p50/p95/p99/max latency and req/s.
+
+    Raises:
+        SystemExit: When any request across all scenarios returned a
+            non-2xx status.
+    """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base-url", default="http://localhost:8080")
     parser.add_argument("--concurrency", type=int, default=20)

@@ -29,11 +29,19 @@ PolicyMode = str  # "EVALUATE" | "SUPPRESS"
 
 
 class PolicyScope(BaseModel):
+    """The site/vendor/manager-type dimensions a health policy is scoped to."""
+
     site_id: str | None = None
     vendor: str | None = None
     manager_type: str | None = None
 
     def specificity(self) -> int:
+        """
+        Score how specific this scope is, for resolving `policy_key` families.
+
+        Returns:
+            int: A specificity score; higher means more specific.
+        """
         return (
             (4 if self.site_id is not None else 0)
             + (2 if self.manager_type is not None else 0)
@@ -41,6 +49,17 @@ class PolicyScope(BaseModel):
         )
 
     def matches(self, *, vendor: str, manager_type: str | None, site_id: str | None) -> bool:
+        """
+        Check whether a server's dimensions satisfy this scope.
+
+        Args:
+            vendor (str): The server's vendor.
+            manager_type (str | None): The server's manager type, if any.
+            site_id (str | None): The server's site id, if any.
+
+        Returns:
+            bool: True if every dimension set on this scope matches.
+        """
         if self.vendor is not None and self.vendor != vendor:
             return False
         if self.manager_type is not None and self.manager_type != manager_type:
@@ -49,11 +68,15 @@ class PolicyScope(BaseModel):
 
 
 class EvidenceField(BaseModel):
+    """One metric a fired policy cites as evidence, keyed for the message template."""
+
     key: str
     metric: str
 
 
 class PolicyStats(BaseModel):
+    """Runtime statistics tracked for a health policy's evaluations."""
+
     fire_count: int = 0
     last_fired_at: datetime | None = None
     error_count: int = 0
@@ -61,6 +84,8 @@ class PolicyStats(BaseModel):
 
 
 class HealthPolicy(BaseModel):
+    """One document in the `health_policies` collection."""
+
     id: str = Field(alias="_id")
     name: str
     description: str = ""

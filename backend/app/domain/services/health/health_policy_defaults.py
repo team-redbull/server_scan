@@ -26,6 +26,14 @@ from app.utils.timeutil import utcnow
 
 
 def default_system_policies() -> list[HealthPolicy]:
+    """
+    Build the seeded system-default health policies, unsaved.
+
+    Returns:
+        list[HealthPolicy]: The two UCS fabric-path policies and the
+            generic failed-drive policy, each a fresh `HealthPolicy` with
+            a new id — building, not persisting, is this function's job.
+    """
     now = utcnow()
 
     # `id=` (the field name), not `_id=` (its Mongo alias): both are valid

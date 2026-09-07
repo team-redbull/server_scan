@@ -1,16 +1,7 @@
-"""`ServerInventoryProvider` implementation backed by deterministic fake
-data (`app.infrastructure.providers.fake.generator`).
+"""`ServerInventoryProvider` implementation backed by deterministic fake data.
 
-Exists so the ingestion pipeline (`app.application.services.ingest`) is
-exercised end-to-end — normalize -> correlate -> upsert — against the
-exact same `ServerInventoryProvider`/`ProviderServer` seam the real
-collectors implement.
-
-One instance stands in for one collector: `provider_type` both names what
-`Server.source_provider` is stamped with and selects the fake servers that
-collector would own, so a seeded fleet carries the same `source_provider`
-values a really-collected one does. `fake_providers()` builds the full
-set.
+Exercises the ingestion pipeline against the same seam every real collector
+implements. One instance stands in for one collector, via `provider_type`.
 """
 
 from __future__ import annotations
@@ -27,10 +18,10 @@ from app.infrastructure.providers.fake.generator import (
 
 
 class FakeProvider(ServerInventoryProvider):
-    """`ServerInventoryProvider` for deterministic fake data. `seed`,
-    `count` and `provider_type` are fixed at construction time —
-    `collect()` yields the same servers, generated from the same
-    `seed`, every time it is called on a given instance.
+    """`ServerInventoryProvider` for deterministic fake data.
+
+    `seed`, `count` and `provider_type` are fixed at construction, so
+    `collect()` yields the same servers every call on a given instance.
     """
 
     def __init__(
@@ -41,7 +32,8 @@ class FakeProvider(ServerInventoryProvider):
         provider_type: str,
         sites: SiteCatalog | None = None,
     ) -> None:
-        """
+        """Store the parameters that determine which fake servers this instance yields.
+
         Args:
             seed (int): The generator seed.
             count (int): How many servers the whole fake fleet holds — not
@@ -63,7 +55,8 @@ class FakeProvider(ServerInventoryProvider):
         return
 
     async def _list_servers(self) -> AsyncGenerator[ProviderServer, None]:
-        """
+        """Yield this collector's share of the fake fleet.
+
         Yields:
             ProviderServer: Each fake server this collector would own.
         """
