@@ -206,7 +206,18 @@ assumption. See ADR-0009's "Update (2026-09-07)" for the full write-up,
 including why the OS-visible (`free`/OpenShift) figure being *lower*
 than the collector's number is expected and not a units bug.
 
-What's still worth running if UCS Central is reachable:
+**The disk/interface `health`/`oper=UNKNOWN` question is also SETTLED,
+same day** — sections 4 and 5 below found two real gaps (now fixed:
+`offline`/`self-test-failed` disk states, five `AdaptorExtEthIf` values)
+and two non-gaps (`NA`/`unknown`/`indeterminate` genuinely mean "doesn't
+apply"/"no verdict"/"can't tell" in Cisco's own terms, and a vNIC's
+`oper_state` turned out to be a different, equipment-health field, not a
+link-state one — reading `"unknown"` on almost every vNIC is expected).
+See ADR-0009's second "Update (2026-09-07)" section for the full
+reasoning behind each one.
+
+What's still worth running if UCS Central is reachable — the **fabric
+interconnect name preview (section 6)** is the one open question left:
 
 ```bash
 uv run python -m tools.verify_ucs_central --show-names 15 | tee ucs-central-verify.txt
@@ -214,14 +225,11 @@ uv run python -m tools.run_collector --manager-type UCS_CENTRAL \
   --dry-run --limit 3 | tee ucs-dryrun.txt
 ```
 
-`verify_ucs_central` now has two vocabulary-check sections (**4**, "DISK
-HEALTH VOCABULARY", and **5**, "OperState VOCABULARY") added 2026-09-07
-after a live dry run showed some drives/vNICs reading
-`health`/`oper=UNKNOWN` — the same shape of gap that turned out to be a
-real, fixable spelling gap for Intersight's `"OK"` string, twice. Send
-back both sections' output; a raw value there that isn't `(empty)` and
-still maps to UNKNOWN is a real fix, an `(empty)` one is likely just an
-unequipped slot or inactive interface.
+Section 6 shows what `topSystem.name` (the domain's shared cluster name —
+UCS Manager has no per-FI hostname) actually looks like on this fleet,
+next to what Central already calls the same domain. Nothing is wired
+into the real collector yet; this is purely to judge whether the value
+is worth showing on every fabric attachment line before building it.
 
 ---
 

@@ -364,6 +364,64 @@ class TestComputeUnitToProviderServer:
             ("VNIC", "eth0"),
         ]
 
+    @pytest.mark.parametrize(
+        ("oper_state", "expected"),
+        [
+            ("error-disabled", "DOWN"),
+            ("hardware-failure", "DOWN"),
+            ("no-license", "DISABLED"),
+            ("software-failure", "DOWN"),
+            ("udld-aggr-down", "DOWN"),
+        ],
+    )
+    def test_physical_oper_state_recognizes_the_full_ucsmsdk_enum(
+        self, oper_state: str, expected: str
+    ) -> None:
+        """`AdaptorExtEthIf.OPER_STATE_*` has 13 values; only 8 were ever
+        mapped before a live UCS Central dry run (2026-09-07) confirmed
+        the full enum against the installed SDK. See ADR-0009's
+        "Update (2026-09-07)".
+        """
+        result = compute_unit_to_provider_server(
+            _blade(),
+            manager_id="mgr_1",
+            profile_by_dn={},
+            template_dn_by_name={},
+            mgmt_if=None,
+            mgmt_ip_by_parent_dn={},
+            switches_by_id={},
+            ext_eth_ifs=[_adapter_if(oper_state=oper_state)],
+            host_eth_ifs=[],
+            cpu_units=[],
+            disk_units=[],
+        )
+        [attachment] = result.attachments
+        assert attachment.oper_state == expected
+
+    def test_indeterminate_oper_state_stays_unknown_on_purpose(self) -> None:
+        """Confirmed live 2026-09-07: `"indeterminate"` was 24% of one
+        fleet's physical interfaces — common, not an edge case — and is
+        Cisco's own name for "cannot be determined", the literal
+        definition of this platform's UNKNOWN. Deliberately not mapped;
+        this pins the current, correct behavior against a future change
+        that might otherwise guess a tier for it.
+        """
+        result = compute_unit_to_provider_server(
+            _blade(),
+            manager_id="mgr_1",
+            profile_by_dn={},
+            template_dn_by_name={},
+            mgmt_if=None,
+            mgmt_ip_by_parent_dn={},
+            switches_by_id={},
+            ext_eth_ifs=[_adapter_if(oper_state="indeterminate")],
+            host_eth_ifs=[],
+            cpu_units=[],
+            disk_units=[],
+        )
+        [attachment] = result.attachments
+        assert attachment.oper_state == "UNKNOWN"
+
     def test_fabric_model_and_serial_come_from_the_matching_network_element(self) -> None:
         switch_a = SimpleNamespace(id="A", model="UCS-FI-6454", serial="FCH2222A")
         result = compute_unit_to_provider_server(
@@ -677,10 +735,22 @@ class TestCpuAndStorage:
             ("good", "HEALTHY"),
             ("predictive-failure", "WARNING"),
             ("rebuilding", "WARNING"),
+            ("zeroing", "WARNING"),
             ("failed", "CRITICAL"),
             ("bad", "CRITICAL"),
+            ("offline", "CRITICAL"),
+            ("self-test-failed", "CRITICAL"),
             ("something-unmapped", "UNKNOWN"),
             ("", "UNKNOWN"),
+            # Confirmed live 2026-09-07 (18117 sampled disks): both real
+            # StorageLocalDiskConsts.DISK_STATE_* values, deliberately
+            # left unmapped. "unknown" is Cisco's own "no verdict" state
+            # -- the fallback already answers it correctly. "NA" means
+            # "this field doesn't apply to this disk", not "unread" or
+            # "bad" -- guessing a tier would be a confident wrong answer.
+            # See ADR-0009's "Update (2026-09-07)".
+            ("unknown", "UNKNOWN"),
+            ("na", "UNKNOWN"),
         ],
     )
     def test_disk_health_mapping(self, disk_state: str, expected: str) -> None:

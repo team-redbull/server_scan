@@ -895,23 +895,35 @@ all** — it reuses the Redfish mapping wholesale, so it inherits
 `--manager-type OPENMANAGE --dry-run` against a real OME appliance plus
 iDRAC. The natural next steps:
 
-1. **UCS's own leftovers — largely settled 2026-09-07 by a live UCS
-   Central dry run**, see ADR-0009's "Update (2026-09-07)". **Settled:**
+1. **UCS's own leftovers — settled 2026-09-07 by a live UCS Central dry
+   run**, see ADR-0009's two "Update (2026-09-07)" sections. **Settled:**
    `total_memory`'s MB assumption is correct (confirmed against the UCS
    UI's own figure, and this also backs Intersight's identical
    assumption); `cpu_model` and per-drive storage detail are confirmed
    populated on real hardware, not just present in the mapping code;
    fabric `fabric_model`/`fabric_serial` are confirmed populated too
    (this was already implemented, just never recorded in the ADR until
-   now). **Still open:** a fully *associated* service profile (nothing
-   tested has gone past `config-failure` for want of a boot policy,
-   vNICs and a UUID pool); `fabric_name`/`fabric_id` genuinely stay
-   `None` — UCS Manager has no per-FI hostname, only a domain-shared
-   cluster name, so wiring that in is a real, doable, but not-yet-built
-   enhancement; and some drives/vNICs read `health`/`oper=UNKNOWN` on
-   the tested fleet, root cause not yet determined — `verify_ucs_central`
-   gained two new vocabulary-check sections (4, 5) for exactly this,
-   mirroring the ones that found Intersight's `"OK"` gaps, not yet run.
+   now); and the `health`/`oper=UNKNOWN` question is fully settled —
+   `_DISK_HEALTH_MAP` was missing two real failure states (`offline`,
+   `self-test-failed`, both now CRITICAL) and `_OPER_STATE_MAP` was
+   missing five real `AdaptorExtEthIf` values, both closed against the
+   installed `ucsmsdk`'s authoritative enums rather than only what this
+   fleet happened to show. Three more raw values were confirmed to be
+   correct as UNKNOWN, not gaps: disk `NA`/`unknown` genuinely mean
+   "doesn't apply"/"no verdict" in Cisco's own terms, and interface
+   `indeterminate` (24% of this fleet's physical ports — common) is
+   Cisco's own name for "cannot be determined". A fourth finding wasn't a
+   bug at all: `AdaptorHostEthIf.oper_state` (vNICs) turned out to be a
+   generic equipment-operability enum, not a link-state one, so reading
+   `"unknown"` on 99.75% of vNICs is expected given what the field
+   actually measures — no fix exists to make there. **Still open:** a
+   fully *associated* service profile (nothing tested has gone past
+   `config-failure` for want of a boot policy, vNICs and a UUID pool);
+   and `fabric_name`/`fabric_id` genuinely stay `None` — UCS Manager has
+   no per-FI hostname, only a domain-shared cluster name
+   (`topSystem.name`), previewed but not yet wired in by
+   `verify_ucs_central`'s section 6, awaiting the user's call on whether
+   it's worth building.
 
 2. **The Dell iDRAC GPU VRAM check** (`docs/field-test-checklist.md`
    part 3) — one `curl`, opportunistic, only if a Dell server with a GPU

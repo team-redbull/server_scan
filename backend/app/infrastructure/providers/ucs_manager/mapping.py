@@ -285,6 +285,26 @@ _MEDIA_TYPE_MAP = {"hdd": "HDD", "ssd": "SSD", "nvme": "NVME"}
 
 # `StorageLocalDiskConsts.DISK_STATE_*` mapped onto `HealthSeverity`.
 # See docs/cisco-collectors.md, "CPU, memory and storage".
+#
+# Confirmed complete against the installed `ucsmsdk`'s own
+# `StorageLocalDiskConsts` (`DISK_STATE_*`, 20 values) after a live
+# UCS Central dry run, 2026-09-07, found `offline` and
+# `self-test-failed` reading UNKNOWN on real hardware — both real
+# failure states, not spelling variants of ones already mapped.
+# `disabled-for-removal` was already CRITICAL; `offline` now matches it
+# and Intersight's own `psus_from_supplies`-style CRITICAL set, which
+# already treats "offline" the same way. `zeroing` (a background wipe,
+# not observed live but present in the enum) joins `rebuilding`/
+# `copyback` as WARNING — a transitional RAID operation, not a fault.
+#
+# Two more values from that same run were confirmed NOT to belong here:
+# `unknown` is Cisco's own literal "no verdict" state, and the fallback
+# already answers UNKNOWN for it correctly. `NA` ("not applicable", the
+# single most common unmapped value at 725 of 18117 sampled disks) is
+# `StorageLocalDiskConsts.DISK_STATE_NA` — Cisco's own term for "this
+# field doesn't apply to this disk" rather than "unread" or "bad";
+# guessing a tier for it would be exactly the kind of confident wrong
+# answer this platform's `None`-means-unread contract exists to avoid.
 _DISK_HEALTH_MAP = {
     "good": "HEALTHY",
     "online": "HEALTHY",
@@ -297,10 +317,13 @@ _DISK_HEALTH_MAP = {
     "copyback": "WARNING",
     "foreign-configuration": "WARNING",
     "locked-foreign-configuration": "WARNING",
+    "zeroing": "WARNING",
     "bad": "CRITICAL",
     "failed": "CRITICAL",
     "unconfigured-bad": "CRITICAL",
     "disabled-for-removal": "CRITICAL",
+    "offline": "CRITICAL",
+    "self-test-failed": "CRITICAL",
 }
 
 

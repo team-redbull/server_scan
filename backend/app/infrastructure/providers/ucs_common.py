@@ -35,6 +35,30 @@ _NON_BMC_ACCESS = frozenset({"in-band", "internal", "virtual"})
 # added here — the existing UCS-XML failure strings below are carried
 # forward as a best guess for Intersight too, not as something this has
 # actually observed failing.
+# Confirmed complete against `AdaptorExtEthIf.OPER_STATE_*` (the installed
+# `ucsmsdk`'s own enum, 13 values) after a live UCS Central dry run,
+# 2026-09-07: `error-disabled`, `hardware-failure`, `no-license`,
+# `software-failure` and `udld-aggr-down` are five real values this map
+# had no entry for, none of which happened to appear on that fleet — a
+# gap closed from the authoritative enum rather than only from what one
+# run observed, unlike the live-observed additions above and below it.
+#
+# `indeterminate` (24% of that fleet's physical interfaces — common, not
+# an edge case) is **deliberately not mapped**. It is Cisco's own name
+# for "cannot be determined" — the literal definition of UNKNOWN in this
+# platform's vocabulary — so leaving it unmapped is the correct answer,
+# not a gap. See ADR-0009's "Update (2026-09-07)".
+#
+# `AdaptorHostEthIf.OPER_STATE_*` (a vNIC) is a **different, much larger
+# enum than `AdaptorExtEthIf`'s** (`accessibility-problem`,
+# `chassis-intrusion`, `dimm-disabled`, `thermal-problem`, ... — a
+# generic equipment-operability vocabulary, the same shape
+# `equipmentPsu.oper_state` uses) — not a link-state vocabulary at all.
+# On that same live fleet, 12551 of 12583 vNICs read `"unknown"` and only
+# 32 read `"operable"`: expected, not a bug, since almost none of those
+# equipment-fault conditions apply to a virtual interface with no DIMMs
+# or thermal sensors of its own. Nothing from that enum belongs in this
+# map on the strength of it being a link/oper vocabulary — it isn't one.
 _OPER_STATE_MAP = {
     "operable": "UP",
     "ok": "UP",
@@ -42,11 +66,16 @@ _OPER_STATE_MAP = {
     "link-up": "UP",
     "admin-down": "DISABLED",
     "disabled": "DISABLED",
+    "no-license": "DISABLED",
     "inoperable": "DOWN",
     "down": "DOWN",
     "link-down": "DOWN",
     "failed": "DOWN",
     "sfp-not-present": "DOWN",
+    "error-disabled": "DOWN",
+    "hardware-failure": "DOWN",
+    "software-failure": "DOWN",
+    "udld-aggr-down": "DOWN",
 }
 
 _ADMIN_STATE_MAP = {"enabled": "ENABLED", "disabled": "DISABLED"}

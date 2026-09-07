@@ -493,19 +493,10 @@ server and an SSH `free` on its OpenShift node.
   not yet built, since it needs a new domain-local query and touches
   `ucs_manager/provider.py` and `mapping.py` together, not a comment-only
   fix. Track it against this ADR if built.
-- **Some drives read `health=UNKNOWN` and some vNICs read
-  `oper=UNKNOWN`** on the tested fleet. Root cause not yet determined —
-  `_DISK_HEALTH_MAP`/`_OPER_STATE_MAP` are both real Cisco XML
-  vocabularies but neither is provably complete against what this
-  fleet's actual firmware emits, the same shape of gap
-  `docs/adr/0017`'s "second field pass" found and fixed twice for
-  Intersight's `"OK"` string. `tools/verify_ucs_central.py` gained two
-  new sections for exactly this — **4, "DISK HEALTH VOCABULARY"** and
-  **5, "OperState VOCABULARY"** — which group every raw `disk_state`/
-  `oper_state` value this fleet's disks and interfaces report against
-  what the current mapping does with each. Not yet run; the next rerun
-  settles whether this is a real spelling gap (fix it) or genuinely
-  unequipped/inactive hardware (nothing to fix).
+- ~~Some drives read `health=UNKNOWN` and some vNICs read
+  `oper=UNKNOWN`~~ — **SETTLED 2026-09-07**, see the section below. Two
+  real gaps fixed, and two more findings that turned out not to be bugs
+  at all.
 - **The `[PHYSICAL]`-only fabric printout is confirmed working as
   designed, not a display gap.** `tools/run_collector.py`'s dry-run only
   prints `FI model/serial=...` for `PHYSICAL` attachments, never for a
@@ -514,3 +505,72 @@ server and an SSH `free` on its OpenShift node.
   matters") and the code comment already explaining why (a vNIC
   structurally never carries a fabric relationship at all). No change
   needed.
+
+## Update (2026-09-07): the health/oper vocabulary gaps, settled by sections 4 and 5
+
+`tools/verify_ucs_central.py`'s new sections 4/5 (added the same day, see
+above) run against the same live domain: 18117 sampled disks, 15459
+physical adapter interfaces, 12583 vNICs. Two real gaps, two non-gaps.
+
+**Fixed: `_DISK_HEALTH_MAP` (`ucs_manager/mapping.py`) was missing two
+real failure states.** `offline` (1 disk) and `self-test-failed` (1
+disk) both read `health=UNKNOWN`; both are unambiguous failure states —
+`offline` now matches Intersight's own `"offline"` -> CRITICAL, and a
+failed self-test needs no interpretation. Checked the map against the
+installed `ucsmsdk`'s full `StorageLocalDiskConsts.DISK_STATE_*` (20
+values, confirmed directly in `StorageLocalDisk.py`) rather than
+patching only what this one fleet showed: `zeroing` — a background wipe,
+not observed live but a real enum value — joins `rebuilding`/`copyback`
+as WARNING (transitional, not a fault), closing the map completely
+against the authoritative enum rather than leaving four more silent gaps
+for the next fleet.
+
+**Not a gap: `NA` (725 of 18117 disks — the single most common unmapped
+value) and `unknown` (316).** Both are genuine `DISK_STATE_*` enum
+values, not spelling variants. `unknown` is Cisco's own "no verdict"
+state — the UNKNOWN fallback already answers it correctly. `NA` means
+"this field doesn't apply to this disk" per Cisco's own naming, not
+"unread" or "bad" — mapping it to any tier would be exactly the kind of
+confident wrong answer this platform's `None`-means-unread contract
+exists to avoid elsewhere. Left unmapped, deliberately, with tests
+pinning that as the correct behavior rather than an oversight.
+
+**Fixed: `_OPER_STATE_MAP` (`ucs_common.py`) was missing five real
+`AdaptorExtEthIf.OPER_STATE_*` values** — confirmed against the
+installed `ucsmsdk`'s full 13-value enum (`AdaptorExtEthIf.py`), not
+only against what this fleet's 15459 physical interfaces happened to
+show (only `indeterminate` of these five actually appeared live —
+`error-disabled`, `hardware-failure`, `no-license`, `software-failure`
+and `udld-aggr-down` are added from the authoritative enum, the same
+"close it completely" approach as the disk map above): `error-disabled`,
+`hardware-failure`, `software-failure` and `udld-aggr-down` -> DOWN,
+`no-license` -> DISABLED (an administrative restriction, not a hardware
+fault — closer in kind to `admin-down` than to a failure).
+
+**Not a gap: `indeterminate` (3751 of 15459 physical interfaces — 24%,
+common, not an edge case).** It is Cisco's own name for "cannot be
+determined" — the literal definition of this platform's UNKNOWN — so
+leaving it unmapped is the *correct* answer, not a spelling gap. Mapping
+it to UP or DOWN would be guessing at a state Cisco itself says it
+cannot determine.
+
+**Not a gap, and a genuinely different finding: `AdaptorHostEthIf`'s
+`oper_state` (vNICs) is not a link-state field at all.** 12551 of 12583
+vNICs (99.75%) read `oper_state="unknown"`, only 32 read `"operable"`.
+Checking `AdaptorHostEthIf.py`'s own `OPER_STATE_*` enum explains why:
+it is a completely different, much larger vocabulary than
+`AdaptorExtEthIf`'s — `accessibility-problem`, `chassis-intrusion`,
+`dimm-disabled`, `thermal-problem`, `voltage-problem`, ... — a generic
+*equipment-operability* enum, the same shape `equipmentPsu.oper_state`
+already uses for PSU health, not a link-up/link-down vocabulary. A vNIC
+is a virtual construct with no DIMMs, no thermal sensors, no chassis of
+its own, so almost none of those conditions can ever apply to it — 99.75%
+reading `"unknown"` is the *expected* steady state given what the field
+actually measures, not a bug to chase. **No fix made or needed**: there
+is no evidence a better per-vNIC connectivity signal exists in this MO at
+all; a vNIC's real connectivity is a function of its parent physical
+port's link state, which `AdaptorExtEthIf.oper_state` already reports
+correctly. `_attachments` reading the same `oper_state` field off both
+MO kinds is therefore not a design defect either — it is simply that one
+of the two fields it reads carries far less signal than the other, for
+reasons outside this collector's control.
