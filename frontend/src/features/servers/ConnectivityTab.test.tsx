@@ -20,6 +20,7 @@ function makeAttachment(overrides: Partial<ConnectivityAttachment> = {}): Connec
     oper_state: "UP",
     speed_mbps: 25000,
     last_seen: "2026-08-12T10:00:00Z",
+    interface_kind: "PHYSICAL",
     ...overrides,
   };
 }
@@ -99,5 +100,31 @@ describe("ConnectivityTab", () => {
     expect(screen.getAllByTestId("fabric-group")).toHaveLength(2);
     expect(screen.getByText("Fabric A")).toBeInTheDocument();
     expect(screen.getByText("Fabric Other")).toBeInTheDocument();
+  });
+
+  it("shows only the physical uplink, not the vNICs riding the same fabric", () => {
+    render(
+      <ConnectivityTab
+        connectivity={makeDetail([
+          makeAttachment({ fabric: "A", server_interface: "eth0", interface_kind: "PHYSICAL" }),
+          makeAttachment({ fabric: "A", server_interface: "vnic0", interface_kind: "VNIC" }),
+          makeAttachment({ fabric: "A", server_interface: "vnic1", interface_kind: "VNIC" }),
+        ])}
+      />,
+    );
+    expect(screen.getAllByTestId("fabric-group")).toHaveLength(1);
+    expect(screen.getByText("eth0")).toBeInTheDocument();
+    expect(screen.queryByText("vnic0")).not.toBeInTheDocument();
+    expect(screen.queryByText("vnic1")).not.toBeInTheDocument();
+  });
+
+  it("shows a distinct empty state for a server with only vNIC attachments", () => {
+    render(
+      <ConnectivityTab
+        connectivity={makeDetail([makeAttachment({ fabric: "A", interface_kind: "VNIC" })])}
+      />,
+    );
+    expect(screen.getByText("No physical fabric connections reported.")).toBeInTheDocument();
+    expect(screen.queryAllByTestId("fabric-group")).toHaveLength(0);
   });
 });

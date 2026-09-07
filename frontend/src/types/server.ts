@@ -250,6 +250,14 @@ export interface ConnectivityAttachment {
   oper_state: LinkState;
   speed_mbps: number | null;
   last_seen: string | null;
+  /**
+   * "PHYSICAL" for a cabled uplink, "VNIC" for the OS-facing logical
+   * carve-out UCS Manager virtualizes on top of it — the two can report
+   * the identical `fabric`, so this is what tells a real cable apart
+   * from the vNICs riding on it. Collected for every attachment; the UI
+   * only ever shows "PHYSICAL" ones (see ConnectivityTab).
+   */
+  interface_kind: string;
 }
 
 export interface ConnectivityDetail {

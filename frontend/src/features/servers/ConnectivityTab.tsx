@@ -51,7 +51,17 @@ export function ConnectivityTab({ connectivity }: { connectivity: ConnectivityDe
     return <p className="text-gray-500">No connectivity data.</p>;
   }
 
-  const groups = groupByFabric(attachments);
+  // Only the cabled uplinks matter here — a physical port and the vNIC(s)
+  // UCS Manager carves out of it can report the identical `fabric`, so
+  // showing both would list several logical rows per real cable. vNIC data
+  // is still collected and stored, just not surfaced on this tab.
+  const physical = attachments.filter((a) => a.interface_kind === "PHYSICAL");
+
+  if (physical.length === 0) {
+    return <p className="text-gray-500">No physical fabric connections reported.</p>;
+  }
+
+  const groups = groupByFabric(physical);
 
   return (
     <div className="space-y-6">
