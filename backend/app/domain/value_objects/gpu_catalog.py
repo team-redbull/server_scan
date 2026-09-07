@@ -63,6 +63,16 @@ _TRAILING_NOISE = frozenset(
     }
 )
 
+# A trailing TDP figure, e.g. NVIDIA's own product name for the T4:
+# "NVIDIA T4 16GB 70W" — confirmed live in Intersight's `graphics.Card.
+# Model`, 2026-09-07 (Cisco echoes NVIDIA's marketing string verbatim,
+# the same way HPE's `_TRAILING_NOISE` words do). Unlike a form-factor
+# word, no known card needs its wattage to stay part of the match key —
+# there is no case in this table of the same model+capacity shipping at
+# two different TDPs — so this is stripped unconditionally, not only as
+# a lookup fallback.
+_TRAILING_WATTAGE = re.compile(r"\d+W")
+
 
 def _normalize(identifier: str) -> str:
     """
@@ -91,7 +101,8 @@ def _words(identifier: str) -> list[str]:
     Split an identifier into its meaningful words.
 
     Uppercases, splits on every separator, then drops leading vendor and
-    brand words and trailing marketing nouns. Kept separate from
+    brand words and trailing marketing nouns — a noise word (`ACCELERATOR`)
+    or a trailing TDP figure (`70W`) alike. Kept separate from
     `_normalize` because `GpuCatalog._for_identifier` needs the words
     themselves: `"T4 16GB"` and `"T416GB"` join to the same string, and
     only the word list can tell `T4` + `16GB` from `T` + `416GB`.
@@ -105,15 +116,18 @@ def _words(identifier: str) -> list[str]:
     words = [word for word in _SEPARATORS.split(identifier.upper()) if word]
     while words and words[0] in _VENDOR_PREFIXES:
         words.pop(0)
-    while words and words[-1] in _TRAILING_NOISE:
+    while words and (words[-1] in _TRAILING_NOISE or _TRAILING_WATTAGE.fullmatch(words[-1])):
         words.pop()
     return words
 
 
-# Bus/form-factor words that trail a rebranded SKU string. Dropped only
-# as a *lookup* fallback, never from a table key: `"H100 PCIe"` is a real
-# table key and must keep matching that exact spelling, while HPE's
-# `"H100 80GB PCIe"` has to fall back to the table's `"H100 80GB"`.
+# Bus/form-factor words in a rebranded SKU string, wherever they fall —
+# trailing on HPE's `"H100 80GB PCIe"`, but ahead of the capacity on
+# Intersight's `"NVIDIA T4 PCIe 16GB"`. Dropped only as a *lookup*
+# fallback, never from a table key: `"H100 PCIe"` is a real table key and
+# must keep matching that exact spelling before the stripped form is ever
+# tried, while HPE's and Intersight's shapes above have to fall back to
+# the table's `"H100 80GB"`/`"T4 16GB"`.
 _FORM_FACTOR_WORDS = frozenset({"PCIE", "SXM", "SXM2", "SXM4", "SXM5", "OAM"})
 
 # A trailing capacity word, e.g. the `48GB` of `L40S 48GB PCIe`. HPE
@@ -327,13 +341,16 @@ class GpuCatalog:
         Look up one PID or model string.
 
         Tried in order: the normalized string itself; the same string
-        with a trailing bus/form-factor word removed; and finally a
-        `<model><N>GB` spelling against a row keyed on the bare model,
-        which is accepted only when N GB equals that row's known VRAM.
-        The three exist because a vendor's own product name is not the
-        chip's model string — HPE reports
+        with every bus/form-factor word removed, wherever in the string
+        it falls; and finally a `<model><N>GB` spelling against a row
+        keyed on the bare model, which is accepted only when N GB equals
+        that row's known VRAM. The three exist because a vendor's own
+        product name is not the chip's model string — HPE reports
         `"HPE NVIDIA L40S 48GB PCIe Accelerator"` where a BMC reports
-        `"NVIDIA L40S"`. See docs/hpe-collectors.md, "GPUs".
+        `"NVIDIA L40S"`, and Intersight reports `"NVIDIA T4 PCIe 16GB"`
+        where the bus word sits *before* the capacity rather than after
+        it (confirmed live 2026-09-07) — so the form-factor word is
+        stripped positionally, not just off the end.
 
         Args:
             identifier (str): The PID or model as a provider reported it.
@@ -346,10 +363,10 @@ class GpuCatalog:
         words = _words(identifier)
         if not words:
             return None
+        stripped = [word for word in words if word not in _FORM_FACTOR_WORDS]
         candidates = ["".join(words)]
-        if words[-1] in _FORM_FACTOR_WORDS:
-            words = words[:-1]
-            candidates.append("".join(words))
+        if stripped != words:
+            candidates.append("".join(stripped))
         for candidate in candidates:
             for definition in self.definitions:
                 if candidate in definition.keys:
@@ -360,11 +377,12 @@ class GpuCatalog:
         # when N GB is that row's own VRAM, so a mismatched capacity
         # (HPE's 64GB A16 card, which this table models as four 16GB
         # GPUs) correctly finds nothing instead of reporting a wrong
-        # number.
-        capacity = _CAPACITY_WORD.fullmatch(words[-1]) if words else None
+        # number. Uses the form-factor-stripped words too, so a bus word
+        # ahead of the capacity doesn't end up baked into `base`.
+        capacity = _CAPACITY_WORD.fullmatch(stripped[-1]) if stripped else None
         if capacity is None:
             return None
-        base = "".join(words[:-1])
+        base = "".join(stripped[:-1])
         if not base:
             return None
         wanted = int(capacity.group(1)) * 1024**3

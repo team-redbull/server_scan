@@ -212,6 +212,10 @@ class TestEnrich:
             ("NVIDIA A100 40GB", "NVIDIA A100 40GB", 40),
             ("A100 80GB", "NVIDIA A100 80GB", 80),
             ("H100 NVL 94GB", "NVIDIA H100 NVL 94GB", 94),
+            # Intersight's own `graphics.Card.Model`: the bus word sits
+            # *before* the capacity, not after it like every spelling
+            # above — confirmed live 2026-09-07 against a real tenant.
+            ("NVIDIA T4 PCIe 16GB", "NVIDIA T4 16GB", 16),
         ],
     )
     def test_model_string_spellings_a_vendor_actually_reports(
@@ -241,6 +245,34 @@ class TestEnrich:
         assert catalog.enrich({"model": "NVIDIA L40", "memory_bytes": None})["memory_bytes"] == (
             48 * 1024**3
         )
+
+    def test_a_form_factor_word_before_the_capacity_still_matches(self) -> None:
+        """`_FORM_FACTOR_WORDS` was only ever stripped as a *trailing*
+        word (HPE's `"H100 80GB PCIe"` shape). Intersight's
+        `graphics.Card.Model` puts the bus word between the model and the
+        capacity instead — `"NVIDIA T4 PCIe 16GB"`, confirmed live against
+        a real tenant 2026-09-07 — which used to match nothing at all and
+        silently left VRAM `None` on every Intersight-collected T4.
+        """
+        catalog = GpuCatalog.from_spec("")
+
+        enriched = catalog.enrich({"model": "NVIDIA T4 PCIe 16GB", "memory_bytes": None})
+
+        assert enriched["model"] == "NVIDIA T4 16GB"
+        assert enriched["memory_bytes"] == 16 * 1024**3
+
+    def test_a_trailing_wattage_figure_is_stripped_like_marketing_noise(self) -> None:
+        """The Intersight UI's own "Model" column, confirmed live
+        2026-09-07: `"NVIDIA T4 PCIe 16GB 70W"`, NVIDIA's real product
+        name for the T4 with its TDP baked in — a *second* trailing word
+        on top of the mid-string form-factor word covered above.
+        """
+        catalog = GpuCatalog.from_spec("")
+
+        enriched = catalog.enrich({"model": "NVIDIA T4 PCIe 16GB 70W", "memory_bytes": None})
+
+        assert enriched["model"] == "NVIDIA T4 16GB"
+        assert enriched["memory_bytes"] == 16 * 1024**3
 
     def test_a_bare_model_name_that_shipped_in_two_capacities_matches_nothing(self) -> None:
         """`A100` alone names a 40GB card and an 80GB card. Guessing
