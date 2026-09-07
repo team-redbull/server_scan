@@ -137,6 +137,8 @@ async def _run(show_names: int) -> int:
         disk_units = await client.query_classid("storageLocalDisk")
         ext_eth_ifs = await client.query_classid("adaptorExtEthIf")
         host_eth_ifs = await client.query_classid("adaptorHostEthIf")
+        # Section 6 below — a preview only, nothing reads this yet.
+        top_systems = await client.query_classid("topSystem")
     finally:
         await client.logout()
 
@@ -167,6 +169,9 @@ async def _run(show_names: int) -> int:
             _p(f"{'':<8} last inventory update: {getattr(sync, 'latest_update_time', '—')}")
     _p()
     _p(f"{len(domains)} domain(s), {len(servers)} equipped server(s) collected across all of them.")
+    domain_name_by_id = {
+        str(getattr(d, "id", "") or ""): str(getattr(d, "name", "") or "—") for d in domains
+    }
 
     _header("2. THE DECISIVE QUESTION — are local service profiles present?")
     ownership = Counter(str(getattr(m, "ownership_state", "") or "?") for m in sp_meta)
@@ -219,6 +224,7 @@ async def _run(show_names: int) -> int:
 
     _report_disk_health_vocabulary(disk_units)
     _report_operstate_vocabulary(ext_eth_ifs, host_eth_ifs)
+    _report_fabric_name_candidate(top_systems, domain_name_by_id)
 
     _header("VERDICT")
     localized = ownership.get("localized", 0)
@@ -368,6 +374,56 @@ def _report_operstate_vocabulary(ext_eth_ifs: list[Any], host_eth_ifs: list[Any]
         _p("it to `ucs_common._OPER_STATE_MAP` with the UP/DOWN/DISABLED it actually means.")
     else:
         _p("Every raw oper_state value observed maps to something other than UNKNOWN.")
+
+
+def _report_fabric_name_candidate(
+    top_systems: list[Any], domain_name_by_id: dict[str, str]
+) -> None:
+    """
+    Preview what `ProviderAttachment.fabric_name` could show, without wiring anything in.
+
+    `_attachments` (`ucs_manager/mapping.py`) leaves `fabric_name` `None`
+    on purpose: UCS Manager exposes no per-FI hostname, only
+    `topSystem.name` — the domain's own cluster name, shared by both FIs
+    of a pair. This section is diagnostic only, prompted by a live
+    question about whether that shared name is worth showing at all
+    before building the real (`ucs_manager/provider.py` +
+    `mapping.py`) plumbing for it. Nothing here changes what the
+    collector reports.
+
+    Args:
+        top_systems (list[Any]): Every `topSystem` MO returned by the
+            domain-wide query — one per registered domain.
+        domain_name_by_id (dict[str, str]): Domain id -> the name
+            Central already shows for it in section 1
+            (`computeSystem.name`), for comparison.
+    """
+    _header("6. WHAT A FABRIC INTERCONNECT NAME COULD SHOW — topSystem.name, not yet wired in")
+
+    if not top_systems:
+        _p("no topSystem MOs returned — cannot preview a fabric_name value.")
+        return
+
+    _p("fabric_name is None today because UCS Manager has no per-FI hostname — only the")
+    _p("domain's own shared cluster name (topSystem.name), identical for FI-A and FI-B of")
+    _p("one domain. This is what that value actually looks like on this fleet, next to what")
+    _p("Central already calls the same domain in section 1 (computeSystem.name) — compare")
+    _p("the two before deciding whether it's worth wiring into every fabric attachment line.")
+    _p()
+    _p(f"{'domain':<10}{'topSystem.name':<28}{'topSystem.address':<18}{'Central calls it':<26}")
+    for mo in sorted(top_systems, key=lambda m: str(getattr(m, "name", ""))):
+        did = domain_id_from_dn(getattr(mo, "dn", "")) or "?"
+        name = str(getattr(mo, "name", "") or "—")
+        address = str(getattr(mo, "address", "") or "—")
+        central_name = domain_name_by_id.get(did, "—")
+        _p(f"{did:<10}{name:<28}{address:<18}{central_name:<26}")
+
+    _p()
+    _p("If topSystem.name above is empty, generic, or identical to what Central already")
+    _p("calls the domain, wiring it in adds little a multi-domain fleet run doesn't already")
+    _p("get from the manager header line. If it's a real, distinct, human-recognizable name")
+    _p("for each domain, it's worth building — every fabric attachment line for that domain")
+    _p("would carry it (`fabric A (that name)` in place of the bare `fabric A` today).")
 
 
 def main(argv: list[str] | None = None) -> None:
