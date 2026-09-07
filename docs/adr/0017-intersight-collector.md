@@ -759,6 +759,70 @@ rather than assumed. GPUs were not separately confirmed (this tenant
 appears to have no GPU hardware at all — `0` there is expected, not
 evidence either way for `graphics.Card`'s own fallback).
 
+### A second field pass (2026-09-07, same tenant): GPU catalog matching, and an OperState vocabulary gap
+
+This run did have GPU hardware — a T4 — which the earlier pass's tenant
+did not, and turned up two more real findings.
+
+**Fixed: the GPU catalog never matched Intersight's own product name.**
+`graphics.Card.Model` on this tenant reads, confirmed against the
+Intersight UI's own "Model" field: `"NVIDIA T4 PCIe 16GB 70W"` — NVIDIA's
+real marketing name for the part, TDP included. `GpuCatalog._for_identifier`
+matched neither the full string nor its capacity-fallback path, for two
+independent reasons layered on top of each other:
+
+1. Every existing example of a bus/form-factor word (`PCIe`, `SXM`, ...)
+   in `gpu_catalog.py`'s test suite and its own docstring trails the
+   capacity (HPE's `"H100 80GB PCIe"`) — `_FORM_FACTOR_WORDS` was only
+   ever stripped from the *end* of the word list. Intersight puts it
+   *before* the capacity instead (`T4 PCIe 16GB`), which the trailing-only
+   strip never reached.
+2. `70W` is a marketing suffix `_TRAILING_NOISE` had no entry for — no
+   word in that set is a *number*, since every existing case is a fixed
+   noun. Left in place, it broke the base+capacity fallback too: that
+   path requires the *last* word to be the capacity, and `70W` sat after
+   `16GB`.
+
+Both are fixed in `gpu_catalog.py`: `_FORM_FACTOR_WORDS` is now stripped
+positionally rather than only trailing, and a new `_TRAILING_WATTAGE`
+pattern (`\d+W`) is stripped alongside `_TRAILING_NOISE` in `_words()`.
+`"NVIDIA T4 PCIe 16GB 70W"` now resolves to the built-in `NVIDIA T4 16GB`
+row. See `tests/unit/domain/test_gpu_catalog.py`'s
+`test_a_form_factor_word_before_the_capacity_still_matches` and
+`test_a_trailing_wattage_figure_is_stripped_like_marketing_noise` — both
+confirmed to fail on the pre-fix code.
+
+**Found, not yet fixed: `normalize_oper_state` may not recognize
+Intersight's own `OperState` vocabulary at all.** The PSU section above
+(2026-09-01) asserted `psu()`'s `health` uses "the same vocabulary
+`gpu()` already uses for the identical OperState-sourced pattern" — true
+as a statement about the code, but that assumption was never checked
+against a live tenant. A UI check on this tenant's server showed
+`OperState: OK` for both PSUs. `ucs_common._OPER_STATE_MAP` was written
+for UCS Manager's XML vocabulary (`"operable"`, `"inoperable"`,
+`"link-up"`, ...) and has no `"ok"` entry, so `normalize_oper_state("OK")`
+falls through to `UNKNOWN` — silently, the same failure mode ADR-0017's
+own PSU section describes for the *health engine's* now-fixed literal-
+`"OK"` bug, just one layer lower, in the field this collector reports
+rather than in the fact that reads it. This affects three call sites
+identically: `psu()`, `gpu()`, and `attachment()`'s `oper_state`
+(`intersight/mapping.py`).
+
+Cisco's Intersight API reference and its generated Python/Go SDKs do not
+enumerate `OperState`'s allowed values at all (confirmed: the field is a
+plain `string`, `OperReason` has a documented enum, `OperState` does
+not) — there is no contract to read this from, only a live tenant.
+`tools/verify_intersight.py` gained a new **section 7, "OperState
+VOCABULARY"**, which reads `equipment/Psus`, `graphics/Cards`,
+`adapter/HostEthInterfaces` and `adapter/ExtEthInterfaces` directly and
+prints every distinct raw `OperState` value each reports, alongside what
+`normalize_oper_state` currently does with it — so the next run against
+this tenant settles it with data instead of a UI screenshot. **This is
+now the fix's own outstanding action**: rerun `verify_intersight`, read
+section 7, and add whatever `_OPER_STATE_MAP` is missing (`"ok"` at
+minimum) with the failure-state values a genuinely down PSU/GPU/NIC
+reports — which this tenant may not have one of to show.
+
 ---
 
 ## Corrections made during implementation

@@ -42,6 +42,7 @@ from app.infrastructure.providers.intersight.client import (
     IntersightUnreachableError,
 )
 from app.infrastructure.providers.intersight.signing import IntersightKeyError
+from app.infrastructure.providers.ucs_common import normalize_oper_state
 
 # Matches `intersight.mapping._BYTES_PER_MB` — a `storage.PhysicalDisk`'s
 # `Size` is documented "in MB" and this collector assumes 2**20 bytes,
@@ -274,6 +275,7 @@ async def _inspect(client: IntersightClient, *, show_names: int, sample: int) ->
     controller_owner = await _storage_controller_owner_map(client)
     await _check_boot_optimized_storage(client, collected, controller_owner)
     await _check_disk_capacity(client, collected, controller_owner)
+    await _check_operstate_vocabulary(client)
 
     _header("VERDICT")
     if not matching:
@@ -488,8 +490,10 @@ async def _storage_controller_owner_map(client: IntersightClient) -> dict[str, s
     _p(f"storage.Controller rows: {direct} joined via ComputeBlade/ComputeRackUnit directly")
     if via_board:
         _p(
-            f"                         {via_board} joined ONLY via ComputeBoard — the"
-            " collector's CURRENT storage/Controllers join misses these today"
+            f"                         {via_board} joined ONLY via ComputeBoard — expected on"
+            " this hardware generation. IntersightProvider._owning_server's board_owner"
+            " fallback (added 2026-09-01 for this exact finding) already covers it; this"
+            " count is informational, not a warning."
         )
     if unresolved:
         _p(f"                         {unresolved} joined via neither — genuinely unowned")
@@ -694,6 +698,80 @@ async def _check_disk_capacity(
         _p("a difference there (e.g. an NVMe drive alongside sized SAS/SATA ones) points")
         _p("at a protocol-specific field this collector does not read yet. Report the raw")
         _p("values above; ADR-0017's storage section is where the fix would land.")
+
+
+async def _operstate_values(client: IntersightClient, resource: str) -> Counter[str]:
+    """
+    Every distinct raw `OperState` string one MO class reports, with counts.
+
+    Args:
+        client (IntersightClient): A connected client.
+        resource (str): Path under `/api/v1`, e.g. `"equipment/Psus"`.
+
+    Returns:
+        Counter[str]: Raw `OperState` value -> how many rows reported it.
+            Empty if the class does not exist on this Intersight version.
+    """
+    counts: Counter[str] = Counter()
+    try:
+        async for row in client.list_all(resource, select="Moid,OperState"):
+            counts[str(row.get("OperState"))] += 1
+    except IntersightError as exc:
+        _p(f"  {resource}: not available — {exc}")
+    return counts
+
+
+async def _check_operstate_vocabulary(client: IntersightClient) -> None:
+    """
+    Cross-check every raw `OperState` value this tenant reports against `normalize_oper_state`.
+
+    `normalize_oper_state` (`..ucs_common`) was written for UCS Manager's
+    vocabulary (`"operable"`, `"inoperable"`, ...) and reused verbatim for
+    `psu()`, `gpu()` and `attachment()`'s `OperState`-sourced fields —
+    ADR-0017 assumed Intersight reports the same strings without ever
+    checking a live tenant. A UI check on one server found
+    `OperState: OK`, a value the map does not recognize (Intersight's own
+    API docs and generated SDK do not enumerate `OperState`'s allowed
+    values either — see ADR-0017's PSU section), which would silently
+    report every healthy PSU/GPU/NIC as UNKNOWN rather than UP. This
+    prints the raw truth instead of guessing at it from the UI.
+
+    Args:
+        client (IntersightClient): A connected client.
+    """
+    _header("7. OperState VOCABULARY — does normalize_oper_state recognize what this tenant sends?")
+
+    classes = {
+        "equipment/Psus": "PSU health",
+        "graphics/Cards": "GPU health",
+        "adapter/HostEthInterfaces": "vNIC oper_state",
+        "adapter/ExtEthInterfaces": "physical port oper_state",
+    }
+    any_unrecognized = False
+    for resource, used_for in classes.items():
+        counts = await _operstate_values(client, resource)
+        if not counts:
+            continue
+        _p(f"\n{resource}  ({used_for}):")
+        for raw, n in counts.most_common():
+            mapped = normalize_oper_state(raw)
+            flag = "  <- not recognized" if mapped == "UNKNOWN" else ""
+            _p(f"  {raw!r:<20} x{n:<6} -> {mapped}{flag}")
+            if flag:
+                any_unrecognized = True
+
+    _p()
+    if any_unrecognized:
+        _p("ACTION: at least one raw OperState value above maps to UNKNOWN. Add it to")
+        _p("        ucs_common._OPER_STATE_MAP with the UP/DOWN/DISABLED it actually means —")
+        _p("        check the same server in the Intersight UI to know which. A value with")
+        _p("        no failed hardware to compare against should still be added as UP if the")
+        _p("        UI shows the server healthy; DOWN/DISABLED values may need a fault to")
+        _p("        surface at all, so their absence here is not proof they're covered.")
+    else:
+        _p("Every raw OperState value observed maps to something other than UNKNOWN.")
+        _p("This does not prove DOWN/DISABLED are correctly recognized too, only that")
+        _p("nothing seen on this tenant was silently dropped to UNKNOWN.")
 
 
 def main(argv: list[str] | None = None) -> None:

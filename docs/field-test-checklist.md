@@ -40,6 +40,16 @@ uv run python -m tools.verify_intersight --show-names 15 | tee intersight-verify
 Send back `intersight-verify.txt`. That is the whole errand, and it is
 safe to run repeatedly.
 
+**Output section 7, "OperState VOCABULARY", added 2026-09-07, is the
+other open question a rerun settles.** A UI check on this tenant showed
+`OperState: OK` for a PSU, a value `normalize_oper_state` does not
+recognize — see ADR-0017, "A second field pass (2026-09-07)". Section 7
+prints every raw `OperState` value `equipment.Psu`, `graphics.Card` and
+both adapter-interface classes report and flags any this collector would
+silently read as UNKNOWN. If nothing is flagged, that only proves this
+tenant reported no failed hardware to compare against — say so rather
+than reading a clean section 7 as proof DOWN/DISABLED are covered too.
+
 If the probe passes and you want to see the actual server records it
 would ingest — still writing nothing — add:
 
