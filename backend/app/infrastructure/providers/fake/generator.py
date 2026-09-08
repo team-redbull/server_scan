@@ -522,31 +522,48 @@ def _fake_ip(site_index: int, host_index: int) -> str:
 # UCS Manager Service Profile Templates. Only Cisco gets one: the Redfish
 # collector reads a BMC, which knows nothing about profiles, and the OME/
 # OneView collectors that would report their own templates do not exist.
-_TEMPLATE_NAMES: tuple[str, ...] = (
-    "SPT-OCP-Worker-B200",
-    "SPT-OCP-Master-C240",
-    "SPT-UPI-Generic",
-)
+# Every collector whose real mapping populates `profile_template_name`/
+# `_external_id` (see docs/architecture.md's "Server.profile_template"
+# entry) gets a plausible set here. A template's name is an operator's
+# own choice, not a vendor-fixed vocabulary, so these are illustrative,
+# not researched facts the way a vendor enum value would have to be.
+# REDFISH_STANDALONE is deliberately absent: a bare BMC has no template
+# concept, and `OverviewTab`'s `PROFILE_TEMPLATE_LABELS` omits its row
+# entirely for exactly that reason — this fixture must not paper over it.
+_TEMPLATE_NAMES: dict[ManagerType, tuple[str, ...]] = {
+    ManagerType.UCS_CENTRAL: ("SPT-OCP-Worker-B200", "SPT-OCP-Master-C240", "SPT-UPI-Generic"),
+    ManagerType.INTERSIGHT: ("IMM-Worker-Template", "IMM-Master-Template", "UCS-X-Standard"),
+    ManagerType.ONEVIEW: (
+        "OneView-Gen10-Worker",
+        "OneView-Gen11-Master",
+        "OneView-Standard-Compute",
+    ),
+    ManagerType.OPENMANAGE: ("OME-Deploy-Worker", "OME-Deploy-Master", "OME-Standard-Template"),
+}
 
 
-def _profile_template(rng: random.Random, vendor: str) -> tuple[str | None, str | None]:
+def _profile_template(rng: random.Random, collector: ManagerType) -> tuple[str | None, str | None]:
     """
-    The service profile template this server was deployed from.
+    The deployment/profile template this server was provisioned from.
 
-    ~10% of Cisco servers get none — a service profile applied ad hoc
-    rather than from a template is a real, common state.
+    ~10% of servers from a collector that has this concept get none — a
+    profile applied ad hoc rather than from a template is a real, common
+    state, same as in production.
 
     Args:
         rng (random.Random): The seeded generator.
-        vendor (str): The server's vendor.
+        collector (ManagerType): The collector this server came from.
 
     Returns:
-        tuple[str | None, str | None]: `(name, external_id)`; UCS Manager
-            references a template by name, so both are the same string.
+        tuple[str | None, str | None]: `(name, external_id)` — every
+            supported collector references its template by name here, so
+            both are the same string; `None, None` for a collector with
+            no template concept at all (`REDFISH_STANDALONE`).
     """
-    if vendor != "cisco" or rng.random() < 0.1:
+    names = _TEMPLATE_NAMES.get(collector)
+    if names is None or rng.random() < 0.1:
         return None, None
-    name = rng.choice(_TEMPLATE_NAMES)
+    name = rng.choice(names)
     return name, name
 
 
@@ -1093,7 +1110,7 @@ def generate_servers(
         # `connectivity.fabric_paths_down` policies from evaluating against
         # fiction.
         attachments = _build_attachments(rng, site_code=site_code) if vendor == "cisco" else ()
-        template_name, template_external_id = _profile_template(rng, vendor)
+        template_name, template_external_id = _profile_template(rng, collector)
 
         yield ProviderServer(
             external_id=_external_id(collector, index=index, site_index=site_index, bmc_ip=bmc_ip),

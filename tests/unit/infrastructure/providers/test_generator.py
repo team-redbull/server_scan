@@ -451,18 +451,37 @@ def test_profile_template_name_and_external_id_are_both_set_or_both_none() -> No
         assert (s.profile_template_name is None) == (s.profile_template_external_id is None)
 
 
-def test_only_cisco_reports_a_profile_template() -> None:
-    """Of the two implemented collectors only UCS reads a profile template:
-    a BMC has none, and the OME/OneView collectors that would report their
-    own do not exist.
+def test_every_collector_with_a_template_concept_can_report_one() -> None:
+    """Updated 2026-09-08 alongside the frontend first showing this field
+    (`OverviewTab`'s `PROFILE_TEMPLATE_LABELS`): every real collector
+    whose mapping populates `profile_template_name` — UCS Central,
+    Intersight, OneView, OpenManage — must be exercised here too, or the
+    seeded fleet would never show the new UI field for 3 of the 4 vendors
+    that actually have one. `REDFISH_STANDALONE` never does: a bare BMC
+    has no template concept to report.
     """
+    with_templates = {
+        ManagerType.UCS_CENTRAL.value,
+        ManagerType.INTERSIGHT.value,
+        ManagerType.ONEVIEW.value,
+        ManagerType.OPENMANAGE.value,
+    }
+    seen_with_template: set[str] = set()
     for s in generate_servers(seed=42, count=300):
-        if s.vendor != "cisco":
+        collector = provider_type_for(s)
+        if collector == ManagerType.REDFISH_STANDALONE.value:
             assert s.profile_template_name is None
             continue
         if s.profile_template_name is not None:
-            # UCS Manager references its Service Profile Template by name.
+            seen_with_template.add(collector)
+            # Every fake-provider collector references its template by
+            # name, unlike production Intersight/OneView, where
+            # external_id is usually a separate opaque moid/uri.
             assert s.profile_template_external_id == s.profile_template_name
+
+    # Every collector that can report one does, somewhere in 300 servers —
+    # not just the one that happened to be implemented first.
+    assert seen_with_template == with_templates
 
 
 def test_hpe_servers_come_from_oneview_and_span_ilo_generations() -> None:
