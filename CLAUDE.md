@@ -228,6 +228,24 @@ is a real mistake, not a style preference.
    - The body is still worth writing. It does not reach the release
      notes, but it is what the next session reads from `git log`.
 
+10. **Changing domain logic or a stored field's meaning means checking
+    `app.infrastructure.providers.fake` too — it is not exempt just
+    because it is synthetic.** Added 2026-09-08, after shipping the
+    Overview tab's new profile-template field and only checking that the
+    fake provider populated it *at all*, not that it did so for every
+    vendor the new UI actually labels: `_profile_template()` had only
+    ever covered Cisco, a leftover from when UCS Manager was the only
+    real collector, so the seeded fleet silently never showed a template
+    for Dell or HPE servers even after OpenManage and OneView shipped —
+    caught by the user, not by review. The fake provider is what every
+    dev environment, demo and screenshot runs against; a gap in it is
+    invisible in code review and only surfaces as "the UI looks broken"
+    against seeded data. When you touch classification rules, a domain
+    model field's semantics, or which vendors/collectors populate
+    something, check whether `fake/generator.py` (and `fake/openshift.py`
+    for anything OpenShift-observation-shaped) needs the same update —
+    don't assume it already covers the new case.
+
 ## Current status
 
 Phase 1 slices 0–7 are done (see `docs/architecture.md`'s "What's
