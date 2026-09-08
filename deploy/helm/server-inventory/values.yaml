@@ -92,9 +92,17 @@ mongodb:
   # `bitnamilegacy/*`, frozen at August 2025. Pin one explicitly for
   # anything that has to be reproducible or mirrored into an air-gapped
   # registry — the chart version above pins the templates, not the image.
+  #
+  # A real version gap, confirmed 2026-09-08 by reading this vendored
+  # chart's own Chart.yaml: chart 19.1.16 (above) was built against
+  # MongoDB 8.3.4, which the frozen legacy catalog does not carry —
+  # `bitnamilegacy/mongodb` tops out at 8.0.13. There is no exact match
+  # available; 8.0.13 is the newest the free catalog has and is offered
+  # here as the practical choice, not a confirmed-compatible one — smoke
+  # test before trusting it in production.
   # image:
   #   repository: bitnamilegacy/mongodb
-  #   tag: 8.0.12-debian-12-r0
+  #   tag: 8.0.13-debian-12-r0
 
   # Fixed, because the connection string is built from it
   # (templates/bundled-db-secret.yaml).
@@ -157,10 +165,14 @@ redis:
   # correctness one, and persistence is off for the same reason.
   enabled: false
 
-  # Same `:latest` trap as MongoDB above — see there.
+  # Same `:latest` trap as MongoDB above — see there. Same version gap
+  # too: chart 28.0.15 (above) was built against Redis 8.10.1, which the
+  # frozen legacy catalog does not carry — `bitnamilegacy/redis` tops out
+  # at 8.2.1. Offered as the practical choice, not a confirmed-compatible
+  # one.
   # image:
   #   repository: bitnamilegacy/redis
-  #   tag: 8.0.3-debian-12-r0
+  #   tag: 8.2.1-debian-12-r0
 
   fullnameOverride: server-inventory-redis
   architecture: standalone

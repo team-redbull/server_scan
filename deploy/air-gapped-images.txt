@@ -60,5 +60,14 @@ docker.io/library/redis:8-alpine       # local dev only — same
 # (values.yaml shows how) BEFORE syncing, or the mirror holds a moving
 # target. Version tags for the free catalog live under `bitnamilegacy/*`,
 # frozen at August 2025.
-docker.io/bitnamilegacy/mongodb:<pin a tag>   # only with mongodb.enabled
-docker.io/bitnamilegacy/redis:<pin a tag>     # only with redis.enabled
+#
+# Confirmed 2026-09-08 against the actual vendored charts: 19.1.16
+# (mongodb) and 28.0.15 (redis) were built against MongoDB 8.3.4 / Redis
+# 8.10.1, neither of which the frozen legacy catalog carries — it tops
+# out at 8.0.13 / 8.2.1. The tags below are the newest the free catalog
+# has, offered as the practical choice, not a confirmed-compatible one —
+# smoke test before trusting this pairing in production. Re-check
+# hub.docker.com/r/bitnamilegacy/{mongodb,redis}/tags before mirroring in
+# case a newer legacy tag has since appeared.
+docker.io/bitnamilegacy/mongodb:8.0.13-debian-12-r0   # only with mongodb.enabled
+docker.io/bitnamilegacy/redis:8.2.1-debian-12-r0      # only with redis.enabled
