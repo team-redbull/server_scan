@@ -101,11 +101,29 @@ on `collection_errors`, which `tools.run_collector` reads to report the run
 as **PARTIAL** (exit 3) rather than a silently-complete success.
 
 Correlation keys on `(vendor, serial)`
-(`app.application.services.ingest`). iDRAC reports the service tag as
-`SerialNumber` — the same value OME reports as `DeviceServiceTag` — so
-servers ingested by the older OME-only collector update in place rather
-than duplicating. **This is the highest-consequence unverified assumption
-in the design; confirm it on real hardware before a production run.**
+(`app.application.services.ingest`).
+
+**Settled against real hardware, 2026-09-08 — and the original assumption
+was wrong.** The Service Tag OME shows as `DeviceServiceTag`, and the one
+printed on the chassis and in the iDRAC UI, is **not**
+`ComputerSystem.SerialNumber`. Confirmed against several live iDRAC9
+servers: `SerialNumber` is a manufacturing/board serial, while the real
+Service Tag is `Oem.Dell.DellSystem.NodeID` — Dell's own OEM extension to
+the `ComputerSystem` resource. `mapping._dell_serial` reads it, preferring
+it over `SerialNumber` whenever the OEM block is present (i.e. always, on
+Dell hardware); every other vendor's `ComputerSystem` carries no `Oem.Dell`
+block at all, so `REDFISH_STANDALONE`/HPE/whitebox servers are unaffected.
+
+Had this shipped as originally assumed, every Dell server's serial would
+have been a real but wrong value — not absent, not a placeholder, so
+nothing in `IngestService` would have caught it — and correlation across
+runs would have kept working (the wrong value is at least stable per
+server), but it would never have matched anything OME-only tooling reports
+by Service Tag, and a future switch to reading the OEM field would have
+duplicated every already-ingested Dell server rather than updating it in
+place. Confirm `Oem.Dell.DellSystem.NodeID`'s presence on any Dell
+generation this platform hasn't tested yet (this was iDRAC9) before
+trusting it there.
 
 The BMC address stored is OME's `idrac-virtualmedia://` form, not the
 `https://<host>` origin the Redfish collector reports for a standalone BMC:

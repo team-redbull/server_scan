@@ -133,6 +133,22 @@ class TestHealthyHost:
         # seeded connectivity policies must have nothing to evaluate.
         assert server.attachments == ()
 
+    async def test_a_dells_serial_is_its_oem_node_id_not_serialnumber(self) -> None:
+        """Confirmed against several live iDRAC9 servers, 2026-09-08: the
+        Service Tag shown in OME and the iDRAC UI is `Oem.Dell.DellSystem.
+        NodeID`, not the top-level `SerialNumber` this platform read
+        until then — that field is a manufacturing/board serial instead.
+        See docs/dell-collectors.md.
+        """
+        resources = minimal_service()
+        system = dict(resources["/redfish/v1/Systems/1"])
+        system["Oem"] = {"Dell": {"DellSystem": {"NodeID": "ABC1234"}}}
+        resources["/redfish/v1/Systems/1"] = system
+        with RedfishFixture(resources=resources) as fixture:
+            servers = await _collect(_provider(fixture.port))
+
+        assert servers[0].serial == "ABC1234"
+
     async def test_an_nvme_drive_is_not_reported_as_an_ssd(self) -> None:
         """Redfish's `MediaType` enum has no NVMe member — it is expressed
         through `Protocol`. Reading `MediaType` alone reports every NVMe

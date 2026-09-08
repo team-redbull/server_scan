@@ -111,6 +111,27 @@ def _clean_serial(raw: object) -> str | None:
     return None if text.lower() in _PLACEHOLDER_SERIALS else text
 
 
+def _dell_serial(system: dict[str, Any]) -> str | None:
+    """
+    A Dell server's Service Tag, from the `DellSystem` OEM extension.
+
+    Args:
+        system (dict[str, Any]): The `ComputerSystem` resource.
+
+    Returns:
+        str | None: `Oem.Dell.DellSystem.NodeID`, or None when the system
+            carries no Dell OEM block at all (every non-Dell vendor).
+            Confirmed against several live iDRAC9 servers, 2026-09-08: the
+            top-level `SerialNumber` this platform read until then is a
+            manufacturing/board serial, not the Service Tag OME and the
+            iDRAC UI show — `NodeID` is. See docs/dell-collectors.md.
+    """
+    oem = system.get("Oem")
+    dell = oem.get("Dell") if isinstance(oem, dict) else None
+    dell_system = dell.get("DellSystem") if isinstance(dell, dict) else None
+    return _clean_serial(dell_system.get("NodeID")) if isinstance(dell_system, dict) else None
+
+
 def _as_int(value: object) -> int | None:
     """
     Coerce a Redfish numeric property to `int`.
@@ -868,7 +889,7 @@ def system_to_provider_server(
         vendor=vendor.value,
         name=override_name or _server_name(system),
         model=system.get("Model") or None,
-        serial=_clean_serial(system.get("SerialNumber")),
+        serial=_dell_serial(system) or _clean_serial(system.get("SerialNumber")),
         system_uuid=system.get("UUID") or None,
         nic_macs=macs_from_interfaces(interfaces),
         nics=nics_from_interfaces(interfaces),

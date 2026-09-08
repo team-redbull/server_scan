@@ -119,23 +119,31 @@ every per-host failure the Redfish pass records, both land in
 `collection_errors`, so `tools.run_collector` reports PARTIAL rather than a
 complete success over a fleet it only half reached.
 
-**Correlation is unchanged.** `IngestService` correlates on
-`(vendor, serial_normalized)`. iDRAC reports the service tag as
-`SerialNumber`, the same value OME reports as `DeviceServiceTag`, so
-servers already ingested by the previous collector are updated in place
-rather than duplicated. `vendor_from_manufacturer` maps `"Dell Inc."` to
-`Vendor.DELL`, so they do not land as `STANDALONE`.
+**Correlation is unchanged in mechanism, wrong in its field, and now
+fixed.** `IngestService` correlates on `(vendor, serial_normalized)`.
+`vendor_from_manufacturer` maps `"Dell Inc."` to `Vendor.DELL`, so Dell
+servers do not land as `STANDALONE`. The serial itself was the wrong
+field until 2026-09-08 — see "Status of verification" below.
 
 ## Status of verification
 
-**Unverified against real hardware.** This is a design change made against
-the Redfish collector's contract and OME's known discovery fields; no live
-OME appliance or iDRAC has been collected through the new path. Before
-trusting it in production, confirm on real hardware:
+**Item 1 settled, 2026-09-08, against several live iDRAC9 servers — and
+the original assumption was wrong.** iDRAC's top-level
+`ComputerSystem.SerialNumber` is **not** the Service Tag OME reports as
+`DeviceServiceTag`; it is a manufacturing/board serial. The real Service
+Tag is `Oem.Dell.DellSystem.NodeID`, Dell's own OEM extension to
+`ComputerSystem`, and matched OME's Service Tag on every server checked.
+`mapping._dell_serial` now reads it, preferring it over `SerialNumber`
+whenever present — which is only on Dell hardware, since no other vendor
+populates an `Oem.Dell` block. See `docs/dell-collectors.md`'s "Collection
+flow" for the full writeup of what would have gone wrong (a stable but
+wrong serial, not a caught error) had this shipped as first assumed.
+**Unconfirmed on any Dell generation older than iDRAC9** — this generation
+is what was checked; iDRAC7/8 may shape the OEM block differently.
 
-1. That iDRAC's `SerialNumber` is the service tag, exactly matching OME's
-   `DeviceServiceTag`. If it is not, servers will duplicate rather than
-   update, and that is the highest-consequence assumption here.
+Before trusting the rest of this design in production, still confirm on
+real hardware:
+
 2. That one read-only iDRAC account authenticates fleet-wide — the Redfish
    auth guard disables a credential after 3 hosts reject it and aborts the
    run after 10 failures, so a partially-deployed account fails loudly.

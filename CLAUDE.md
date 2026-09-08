@@ -421,6 +421,20 @@ account — and it refuses to start without both, naming the variables.
 See `docs/adr/0020-dell-identity-from-ome-hardware-from-redfish.md` and
 `docs/dell-collectors.md`.
 
+**Validated against a live OME appliance and several iDRAC9 servers on
+2026-09-08**, and it found the same shape of defect every other
+collector's first live pass has found: a field that looked right against
+the contract and was wrong against real hardware. `ComputerSystem.
+SerialNumber` — assumed since ADR-0020 to be Dell's Service Tag, and
+flagged there as "the highest-consequence unverified assumption in the
+design" — is a manufacturing/board serial, not the Service Tag OME shows
+as `DeviceServiceTag`. The real one is `Oem.Dell.DellSystem.NodeID`, a
+Dell OEM extension `mapping._dell_serial` now reads in preference to
+`SerialNumber`. Fixed the same day; see ADR-0020's "Status of
+verification" and `docs/dell-collectors.md`'s "Collection flow" for the
+full writeup and what a wrong-but-stable serial would have done to
+correlation if it had shipped unfixed.
+
 **`ONEVIEW` (HPE) deliberately does *not* copy that split, and this is
 the thing a future session is most likely to get wrong.** The estate runs
 iLO 4, 5 and 6 in the same racks, and iLO 4 predates useful Redfish
@@ -476,24 +490,29 @@ for the full write-up and the two open questions it could not settle
    MongoDB's `last_seen_at` (written on every ingest, currently read by
    nothing). Until that lands, staleness is the manual query in
    `docs/test-redfish-standalone-collector.md` §6.
-1. **Live-hardware validation — `OPENMANAGE` is now the one collector
-   with no pass of its own.** Every other one has had a real run:
-   `UCS_MANAGER`/`UCS_CENTRAL` against UCSPE and, as of 2026-09-07, a
-   real air-gapped domain too (ADR-0009's dated "Update" sections);
-   `ONEVIEW` against a live appliance (ADR-0022's "Results,
-   2026-09-07" — a real storage-mapping bug found and fixed the same
-   day); `INTERSIGHT` against the user's on-prem Private Virtual
-   Appliance, also 2026-09-07 (ADR-0017's "second field pass" — five
-   real defects found and fixed, from a `ComputeBoard` join gap to
-   `"OK"` reading UNKNOWN across PSU/GPU/drive health). `OPENMANAGE`
-   reuses the Redfish mapping for hardware, so it inherits
-   `REDFISH_STANDALONE`'s own validation for that half, but nothing has
-   run `--manager-type OPENMANAGE --dry-run` against a real OME
-   appliance plus iDRAC — that's the one gap left here. Narrower open
-   items on the already-validated collectors: Intersight's DOWN/CRITICAL
-   `OperState`/`Health` vocabulary (needs a genuinely failed component
-   to check against, not a rerun) and UCS's fully-*associated* service
-   profile (nothing tested has gone past `config-failure`).
+1. ~~Live-hardware validation~~ — **done for all five collectors as of
+   2026-09-08**, kept here as a standing note rather than deleted, the
+   same as the seeded-shape item at the bottom of this file.
+   `UCS_MANAGER`/`UCS_CENTRAL` against UCSPE and, as of 2026-09-07, a real
+   air-gapped domain too (ADR-0009's dated "Update" sections); `ONEVIEW`
+   against a live appliance (ADR-0022's "Results, 2026-09-07" — a real
+   storage-mapping bug found and fixed the same day); `INTERSIGHT`
+   against the user's on-prem Private Virtual Appliance, also 2026-09-07
+   (ADR-0017's "second field pass" — five real defects found and fixed,
+   from a `ComputeBoard` join gap to `"OK"` reading UNKNOWN across
+   PSU/GPU/drive health); and, closing the list, `OPENMANAGE` against a
+   live OME appliance and several iDRAC9 servers on 2026-09-08 (ADR-0020's
+   "Status of verification" — the Service Tag correlation-key assumption
+   the ADR itself flagged as highest-consequence was wrong, found and
+   fixed the same day: real Service Tag is `Oem.Dell.DellSystem.NodeID`,
+   not `ComputerSystem.SerialNumber`). Every one of the five found at
+   least one real defect a live run alone could surface — that pattern is
+   now five-for-five. Narrower open items remain, none blocking:
+   Intersight's DOWN/CRITICAL `OperState`/`Health` vocabulary (needs a
+   genuinely failed component to check against, not a rerun), UCS's
+   fully-*associated* service profile (nothing tested has gone past
+   `config-failure`), and OpenManage's Dell OEM serial fix being confirmed
+   only on iDRAC9 (iDRAC7/8 may shape the OEM block differently).
 
    **The research bar for any future vendor work is unchanged**, so it
    is kept here rather than deleted with the item it belonged to:
@@ -944,21 +963,22 @@ quarterly, or before any release you care about:
 
 The most recent user direction was: real vendor collectors first,
 deployment/CD gaps and auth deliberately parked. **Every planned vendor
-collector now exists, and as of 2026-09-07 every one of them has had a
-live field pass against real hardware** — `UCS_MANAGER`/`UCS_CENTRAL`
-against UCSPE, `ONEVIEW` against a live appliance (ADR-0022's "Results,
-2026-09-07"), and `INTERSIGHT` against the user's on-prem Private Virtual
-Appliance, both `verify_intersight` and `--dry-run` itself (ADR-0017's
-"second field pass" section — auth, name resolution, `TotalMemory`'s MiB
-unit, and five real defects found and fixed: the `ComputeBoard`-only join
-gap, a GPU catalog matcher that couldn't recognize Intersight's own
-product-name spelling, and `"OK"` reading UNKNOWN instead of
-UP/HEALTHY across PSU health, GPU/NIC `oper_state`, and drive health).
-**`OPENMANAGE` is the one collector with no live pass of its own at
-all** — it reuses the Redfish mapping wholesale, so it inherits
-`REDFISH_STANDALONE`'s own validation, but nothing has run
-`--manager-type OPENMANAGE --dry-run` against a real OME appliance plus
-iDRAC. The natural next steps:
+collector now exists, and as of 2026-09-08 every one of them has had a
+live field pass against real hardware, every one finding at least one
+real defect** — `UCS_MANAGER`/`UCS_CENTRAL` against UCSPE, `ONEVIEW`
+against a live appliance (ADR-0022's "Results, 2026-09-07"), `INTERSIGHT`
+against the user's on-prem Private Virtual Appliance, both
+`verify_intersight` and `--dry-run` itself (ADR-0017's "second field pass"
+section — auth, name resolution, `TotalMemory`'s MiB unit, and five real
+defects found and fixed: the `ComputeBoard`-only join gap, a GPU catalog
+matcher that couldn't recognize Intersight's own product-name spelling,
+and `"OK"` reading UNKNOWN instead of UP/HEALTHY across PSU health,
+GPU/NIC `oper_state`, and drive health), and, last to close, `OPENMANAGE`
+against a live OME appliance and several iDRAC9 servers on 2026-09-08
+(ADR-0020's own flagged "highest-consequence unverified assumption" —
+that iDRAC's `SerialNumber` is the Service Tag OME correlates on — turned
+out wrong; the real one is `Oem.Dell.DellSystem.NodeID`, fixed the same
+day). The natural next steps:
 
 1. **UCS's own leftovers — settled 2026-09-07 by a live UCS Central dry
    run**, see ADR-0009's two "Update (2026-09-07)" sections. **Settled:**
@@ -993,13 +1013,20 @@ iDRAC. The natural next steps:
    and a fully *associated* service profile (nothing tested has gone past
    `config-failure` for want of a boot policy, vNICs and a UUID pool).
 
-2. **The Dell iDRAC GPU VRAM check** (`docs/field-test-checklist.md`
+2. **OpenManage's own remaining narrow item**: `Oem.Dell.DellSystem.
+   NodeID` is confirmed only on iDRAC9. Worth a quick check on any iDRAC7/8
+   hardware this estate still runs — those generations may not carry the
+   OEM block the same way, and `mapping._dell_serial` falling through to
+   `SerialNumber` there would silently reintroduce the wrong serial for
+   that generation only.
+
+3. **The Dell iDRAC GPU VRAM check** (`docs/field-test-checklist.md`
    part 3) — one `curl`, opportunistic, only if a Dell server with a GPU
    fitted is ever to hand. Settles whether the built-in GPU catalog needs
    to carry Dell's own spellings or Redfish's `MemorySummary` already
    covers it.
 
-3. **Intersight's own remaining narrow items**, none blocking: the
+4. **Intersight's own remaining narrow items**, none blocking: the
    DOWN/CRITICAL counterpart to Intersight's `"OK"` vocabulary
    (`normalize_oper_state` and `_drive_health` both), unconfirmed because
    nothing on the tested tenant has actually failed; boot-optimized
@@ -1008,7 +1035,7 @@ iDRAC. The natural next steps:
    address precedence, clock skew, account region). Worth another
    `verify_intersight` pass opportunistically, not a scheduled action.
 
-4. **Then the deployment/CD and auth gaps above**, which are the rest of
+5. **Then the deployment/CD and auth gaps above**, which are the rest of
    what "production and really run" means for this platform — staleness
    detection first, since it is item 0 of the not-done list and nothing
    else answers "40 hosts have been failing for two weeks". Ask the user
