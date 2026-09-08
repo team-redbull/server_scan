@@ -328,6 +328,13 @@ and exposed via reclassify/recalculate endpoints.
   Server Profile Template, or a Dell OME Deployment Template. Vendor-
   neutral (`name` + opaque `external_id`), landed alongside slice 4
   because it touches the same `ProviderServer` → `Server` ingestion path.
+  Returned by the API from the start; **shown on the server detail
+  Overview tab as of 2026-09-08**, labeled in each collector's own
+  vendor terminology (`OverviewTab.tsx`'s `PROFILE_TEMPLATE_LABELS`) and
+  omitted entirely for `REDFISH_STANDALONE`, which has no template
+  concept to show. The same pass added carry-forward for both fields —
+  they used to be the one optional pair in the whole ingest pipeline a
+  provider's transient read failure could silently blank.
 
 1084 backend tests (unit/integration/api) and the full frontend
 lint/typecheck/test/build pipeline pass.

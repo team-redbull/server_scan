@@ -9,6 +9,7 @@ function makeServer(overrides: Partial<ServerDetail> = {}): ServerDetail {
     id: "srv_1",
     name: "ocp-dell-worker-000",
     model: "PowerEdge R6515",
+    profile_template: { name: null, external_id: null },
     identity: { vendor: "dell", serial: "SN123", system_uuid: null, nic_macs: [] },
     hardware: {
       cpu: { sockets: 2, cores: 32, threads: 64, model: "Xeon Gold 6338" },
@@ -188,5 +189,58 @@ describe("OverviewTab OpenShift membership", () => {
 
     expect(screen.getByText("UNCLASSIFIED")).toBeInTheDocument();
     expect(screen.getByText("Hosted cluster node")).toBeInTheDocument();
+  });
+});
+
+describe("OverviewTab profile template", () => {
+  it("labels it in the collector's own vendor terminology", () => {
+    const cases: [string, string][] = [
+      ["UCS_CENTRAL", "Service profile template"],
+      ["INTERSIGHT", "Server profile template"],
+      ["ONEVIEW", "Server profile template"],
+      ["OPENMANAGE", "Deployment template"],
+    ];
+    for (const [sourceProvider, label] of cases) {
+      const server = makeServer({
+        source_provider: sourceProvider,
+        profile_template: { name: "worker-profile-tmpl", external_id: "tmpl-001" },
+      });
+
+      const { unmount } = render(<OverviewTab server={server} />);
+
+      expect(screen.getByText(label)).toBeInTheDocument();
+      expect(screen.getByText("worker-profile-tmpl")).toBeInTheDocument();
+      unmount();
+    }
+  });
+
+  it("shows a dash rather than hiding the row when the vendor supports templates but none was read", () => {
+    const server = makeServer({
+      source_provider: "OPENMANAGE",
+      profile_template: { name: null, external_id: null },
+    });
+
+    render(<OverviewTab server={server} />);
+
+    expect(screen.getByText("Deployment template")).toBeInTheDocument();
+  });
+
+  it("omits the row entirely for a standalone server — a bare BMC has no template concept", () => {
+    const server = makeServer({
+      source_provider: "REDFISH_STANDALONE",
+      profile_template: { name: null, external_id: null },
+    });
+
+    render(<OverviewTab server={server} />);
+
+    expect(screen.queryByText(/profile template|deployment template/i)).not.toBeInTheDocument();
+  });
+
+  it("omits the row when the server has no source provider at all", () => {
+    const server = makeServer({ source_provider: null });
+
+    render(<OverviewTab server={server} />);
+
+    expect(screen.queryByText(/profile template|deployment template/i)).not.toBeInTheDocument();
   });
 });

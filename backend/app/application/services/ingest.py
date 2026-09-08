@@ -667,8 +667,22 @@ class IngestService:
             nic_macs=nic_macs,
             external_ids={ps.manager_id: ps.external_id} if ps.manager_id else {},
         )
+        existing_profile_template = existing.profile_template if existing is not None else None
         profile_template = ProfileTemplate(
-            name=ps.profile_template_name, external_id=ps.profile_template_external_id
+            name=_carry_forward(
+                ps.profile_template_name,
+                existing_profile_template.name if existing_profile_template else None,
+                default=None,
+                unread=unread,
+                name="profile_template.name",
+            ),
+            external_id=_carry_forward(
+                ps.profile_template_external_id,
+                existing_profile_template.external_id if existing_profile_template else None,
+                default=None,
+                unread=unread,
+                name="profile_template.external_id",
+            ),
         )
 
         network = NetworkInfo(

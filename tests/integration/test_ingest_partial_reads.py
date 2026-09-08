@@ -188,6 +188,53 @@ async def test_a_sub_resource_that_could_not_be_read_does_not_erase_stored_hardw
     assert [p.health_detail for p in server.hardware.power.psus] == ["inoperable"]
 
 
+async def test_a_profile_template_that_could_not_be_read_survives(
+    mongo_holder: MongoClientHolder,
+) -> None:
+    """Added 2026-09-08, alongside the frontend first surfacing this
+    field: `profile_template_name`/`_external_id` used to be written
+    straight into `ProfileTemplate` with no carry-forward at all, unlike
+    every other optional field in this pipeline — a transient failure of
+    a vendor's own template lookup (OME's `/ProfileService/Profiles`,
+    Intersight's `server/ProfileTemplates` join, ...) would have silently
+    blanked an already-known template rather than preserving it.
+    """
+    service = _service(mongo_holder)
+
+    await service.ingest(
+        _OneShotProvider(
+            _fully_read(
+                profile_template_name="worker-profile-tmpl",
+                profile_template_external_id="tmpl-001",
+            )
+        )
+    )
+
+    # Same host, next run: the template lookup failed this time.
+    summary = await service.ingest(
+        _OneShotProvider(_fully_read(profile_template_name=None, profile_template_external_id=None))
+    )
+    assert summary.errors == 0
+    assert summary.updated == 1
+
+    repo = MongoServerRepository(mongo_holder, cursor_secret=_CURSOR_SECRET)
+    page = await repo.list_page(
+        filters={"identity.serial_normalized": "sn-partial-1"},
+        search=None,
+        sort="name",
+        sort_desc=False,
+        cursor=None,
+        page_size=1,
+        with_count=False,
+    )
+    server = page.items[0]
+
+    assert server.profile_template.name == "worker-profile-tmpl"
+    assert server.profile_template.external_id == "tmpl-001"
+    assert "profile_template.name" in server.unread_fields
+    assert "profile_template.external_id" in server.unread_fields
+
+
 async def test_gpu_health_detail_survives_the_full_ingest_pipeline(
     mongo_holder: MongoClientHolder,
 ) -> None:
@@ -376,10 +423,25 @@ async def test_the_document_records_which_fields_this_run_could_not_read(
         "hardware.storage.drives",
         "hardware.storage.total_bytes",
         "identity.nic_macs",
+        # `_fully_read()`'s base never sets these (added 2026-09-08) —
+        # a provider that reports nothing for them, same as any other
+        # optional field, shows up here rather than silently reading None.
+        "profile_template.external_id",
+        "profile_template.name",
     ]
 
     # Same host, next run, everything read. `gpus=()` is a real answer —
-    # "there are none installed" — so it must clear the flag too.
-    await service.ingest(_OneShotProvider(_fully_read(serial="SN-UNREAD-1", gpus=())))
+    # "there are none installed" — so it must clear the flag too, same as
+    # a real template name/id clears the profile_template flags.
+    await service.ingest(
+        _OneShotProvider(
+            _fully_read(
+                serial="SN-UNREAD-1",
+                gpus=(),
+                profile_template_name="worker-profile-tmpl",
+                profile_template_external_id="tmpl-001",
+            )
+        )
+    )
 
     assert await stored() == []

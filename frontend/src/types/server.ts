@@ -51,6 +51,17 @@ export interface Classification {
   matched_rule_id: string | null;
 }
 
+/** The reusable deployment template this server's own profile was
+ * provisioned from — a UCS Manager/Central Service Profile Template, an
+ * Intersight or HPE OneView Server Profile Template, or a Dell OpenManage
+ * Deployment Template. Both fields are null for a standalone server (a
+ * bare BMC has no template concept at all) or for a vendor whose
+ * collector could not read it this run. */
+export interface ProfileTemplate {
+  name: string | null;
+  external_id: string | null;
+}
+
 /** Every category is written on every evaluation (`Health` defaults each
  * to `UNKNOWN`), so none of these is ever absent or null — `UNKNOWN` is
  * the "no policy has said anything yet" value. */
@@ -270,6 +281,7 @@ export interface ServerDetail {
   id: string;
   name: string;
   model: string | null;
+  profile_template: ProfileTemplate;
   identity: ServerIdentity;
   hardware: HardwareInfo;
   network: NetworkInfo;

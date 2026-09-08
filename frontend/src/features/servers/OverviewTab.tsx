@@ -23,6 +23,21 @@ interface OverviewTabProps {
   maintenanceError?: unknown;
 }
 
+/** What each collector's own vendor calls this concept — Cisco UCS's
+ * "Service Profile Template" is not HPE's or Cisco Intersight's "Server
+ * Profile Template" is not Dell's "Deployment Template", even though
+ * `ProfileTemplate` stores all three the same way. `REDFISH_STANDALONE`
+ * is deliberately absent: a bare BMC has no template concept to name, so
+ * that row simply does not render for a standalone server rather than
+ * showing a label for a thing that was never possible to have.
+ */
+const PROFILE_TEMPLATE_LABELS: Record<string, string> = {
+  UCS_CENTRAL: "Service profile template",
+  INTERSIGHT: "Server profile template",
+  ONEVIEW: "Server profile template",
+  OPENMANAGE: "Deployment template",
+};
+
 function maintenanceErrorMessage(error: unknown): string {
   if (error instanceof ApiError) {
     return error.problem.detail;
@@ -38,6 +53,9 @@ export function OverviewTab({
   maintenanceError,
 }: OverviewTabProps) {
   const [reason, setReason] = useState("");
+  const profileTemplateLabel = server.source_provider
+    ? PROFILE_TEMPLATE_LABELS[server.source_provider]
+    : undefined;
 
   function handleEnable(e: FormEvent) {
     e.preventDefault();
@@ -50,6 +68,9 @@ export function OverviewTab({
       <Field label="Name" value={server.name} />
       <Field label="Vendor" value={server.identity?.vendor ?? "unknown"} />
       <Field label="Model" value={server.model ?? "—"} />
+      {profileTemplateLabel && (
+        <Field label={profileTemplateLabel} value={server.profile_template.name ?? "—"} />
+      )}
       <Field label="Serial" value={server.identity?.serial ?? "—"} />
       <Field label="Site" value={server.site_id ?? "—"} />
       <Field label="Manager" value={server.manager_id ?? "—"} />
