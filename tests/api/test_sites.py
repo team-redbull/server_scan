@@ -133,6 +133,7 @@ async def test_every_site_reports_every_installation_type(
     for item in body["items"]:
         assert set(item["by_installation_type"]) == {
             "HOSTED_CLUSTER",
+            "MCE",
             "UPI",
             "UNCLASSIFIED",
         }
@@ -143,6 +144,7 @@ async def test_every_site_reports_every_installation_type(
     assert body["fleet"]["total"] == 0
     assert set(body["fleet"]["by_installation_type"]) == {
         "HOSTED_CLUSTER",
+        "MCE",
         "UPI",
         "UNCLASSIFIED",
     }

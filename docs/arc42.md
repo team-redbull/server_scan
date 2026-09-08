@@ -205,13 +205,13 @@ Table, Tailwind 4, Vite. Pages: sites overview (landing), inventory,
 server detail (overview/hardware/network/connectivity tabs),
 classification rules, health policies, and an audit history panel.
 
-The sites overview leads with three fleet-wide cards — everything, UPI,
-and Hosted cluster — above the per-site cards, each linking into the
+The sites overview leads with fleet-wide cards — everything, UPI, MCE, and
+Hosted cluster — above the per-site cards, each linking into the
 pre-filtered server list (`/servers?installation_type=UPI`). They are a
 sum over `GET /api/v1/sites`, which carries a `by_installation_type`
-object per site row (`HOSTED_CLUSTER`/`UPI`/`UNCLASSIFIED`, each with the
-same total/health/vendor/maintenance counts a site has) rather than a
-second endpoint.
+object per site row (`HOSTED_CLUSTER`/`MCE`/`UPI`/`UNCLASSIFIED`, each
+with the same total/health/vendor/maintenance counts a site has) rather
+than a second endpoint.
 
 It holds **no** copy of the site list — it reads that from
 `GET /api/v1/sites`, which is what let ADR-0018 change the site model
@@ -309,7 +309,7 @@ OpenShift namespace
 
 | Concept | Where it lives | The one-line version |
 |---|---|---|
-| **Domain model** | `domain/models` | `Server` composed of `identity`, `profile_template`, `hardware`, `network`, `connectivity`, `classification`, `health`, `maintenance`, `openshift`; plus `Site`, `Manager`, `ClassificationRule`, `HealthPolicy`, `AuditEvent`. `Vendor` is `dell`/`cisco`/`hp`/`standalone`; `InstallationType` is `HOSTED_CLUSTER`/`UPI`/`UNCLASSIFIED` |
+| **Domain model** | `domain/models` | `Server` composed of `identity`, `profile_template`, `hardware`, `network`, `connectivity`, `classification`, `health`, `maintenance`, `openshift`; plus `Site`, `Manager`, `ClassificationRule`, `HealthPolicy`, `AuditEvent`. `Vendor` is `dell`/`cisco`/`hp`/`standalone`; `InstallationType` is `HOSTED_CLUSTER`/`MCE`/`UPI`/`UNCLASSIFIED` |
 | **Error handling** | `exception_handlers` | RFC 9457 Problem Details, extended with a stable `code`, `request_id` and structured `details` (ADR-0002) |
 | **Persistence rules** | `infrastructure/mongodb` | Datetimes stored as ISO 8601 **strings**; range/cursor queries must compare against that type (ADR-0006 — this caused a real silent-wrong-results bug) |
 | **Search** | `domain/services/search_tokens` | Anchored, escaped prefix match over a multikey-indexed token array; structurally incapable of ReDoS or an unanchored scan (ADR-0004) |
@@ -457,7 +457,7 @@ go stale — treat its date as load-bearing.
 | **Manager type** | How a server is reached (`UCS_CENTRAL`, `INTERSIGHT`, `REDFISH_STANDALONE`, …). Distinct from **vendor**, which is who built it. |
 | **`source_provider`** | Which collector found a given server. Filterable in the UI. |
 | **Site** | A location, identified by a short code embedded in server hostnames (`ocp4-prod-**tlv**-infra-01`). Configured via `INVENTORY_SITES`. |
-| **Classification** | Deciding what a server *is* (`HOSTED_CLUSTER`, `UPI`, `UNCLASSIFIED`) from declarative rules. |
+| **Classification** | Deciding what a server *is* (`HOSTED_CLUSTER`, `MCE`, `UPI`, `UNCLASSIFIED`) from declarative rules. |
 | **`policy_key` family** | A set of health policies competing for one winner, so a scoped policy can *replace* a global default rather than firing alongside it. |
 | **Specificity** | Scope precision as powers of two (`site:4 + manager:2 + vendor:1`), so a more specific scope strictly outranks a less specific one. |
 | **Service profile** | UCS's logical server definition. **The source of a UCS server's real name** — `computeBlade.name` is empty in practice. |

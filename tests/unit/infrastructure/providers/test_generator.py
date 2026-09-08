@@ -49,7 +49,7 @@ def _installation_type(name: str) -> str:
         str: An `InstallationType` value.
     """
     for installation_type, pattern in _RULES:
-        if pattern.match(name):
+        if pattern.search(name):
             return installation_type
     return "UNCLASSIFIED"
 
@@ -506,15 +506,15 @@ def test_an_ilo4_server_reports_identity_with_unread_hardware() -> None:
     assert any(s.storage_drives for s in gen11)
 
 
-def test_installation_types_are_a_visible_three_way_split() -> None:
+def test_installation_types_are_a_visible_four_way_split() -> None:
     """The sites overview shows one card per installation type. Two of
     them landing on the same count reads as a bug in the page rather than
     a property of the fleet, and an empty one shows nothing at all.
     """
     counts = Counter(_installation_type(s.name) for s in generate_servers(seed=42, count=1000))
-    assert set(counts) == {"HOSTED_CLUSTER", "UPI", "UNCLASSIFIED"}
+    assert set(counts) == {"HOSTED_CLUSTER", "MCE", "UPI", "UNCLASSIFIED"}
     assert all(count > 50 for count in counts.values())
-    assert len(set(counts.values())) == 3
+    assert len(set(counts.values())) == 4
 
 
 def test_every_readable_server_reports_power_supplies() -> None:

@@ -90,7 +90,11 @@ def openshift_for(server: Server) -> OpenShiftLifecycle:
             reported_by_agent_id=mce,
         )
 
-    if server.classification.installation_type is InstallationType.UPI:
+    # MCE's own hub nodes are themselves UPI-installed (the classification
+    # rule that names them exists precisely to pull them out of the UPI
+    # bucket for reporting, not because they run differently) — so they
+    # get the same simulated UPI_NODE lifecycle as any other UPI server.
+    if server.classification.installation_type in (InstallationType.UPI, InstallationType.MCE):
         cluster = f"upi-{server.site_id or 'unassigned'}"
         return OpenShiftLifecycle(
             lifecycle_state=OpenShiftState.UPI_NODE,

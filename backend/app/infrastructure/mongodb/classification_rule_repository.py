@@ -131,31 +131,32 @@ class MongoClassificationRuleRepository:
         return result.deleted_count > 0
 
 
-# Each pattern is fully anchored and names the exact shape it accepts,
-# rather than a loose prefix. That matters because HOSTED_CLUSTER and UPI
-# hostnames share the `ocp4-` prefix — only a later token tells them
-# apart — so a prefix rule like the old `^ocp-.*` would match both and
-# leave the outcome depending on rule ordering. Anchored, mutually
-# exclusive patterns make the classification independent of order.
-#
-# The site token is interpolated from the configured `SiteCatalog` rather
-# than hardcoded, so reconfiguring the sites cannot leave these patterns
-# behind. `app.application.services.bootstrap` re-syncs a seeded system
-# rule whose definition has drifted, which is what makes a site change
-# reach a database that was seeded before it.
-_HYPERSHIFT_TEMPLATE = r"^ocp4-hypershift(-data)?-({sites})-\d+$"
-_HARDWARE_SPEC_TEMPLATE = r"^ocp-[a-z]+-[a-z0-9]+-({sites})-\d+c-\d+gb-.+$"
-_UPI_TEMPLATE = r"^ocp4-([a-z]+-)?({sites})-(compute|control-plane|infra)-\d+$"
+# All four are broad prefix/substring catch-alls, none site-validated
+# (2026-09-08, at the operator's request — this used to be four narrower,
+# mutually-exclusive, site-anchored shapes; see git history for those).
+# `^ocp-` and `^ocp4-hypershift` both also start with characters `^ocp4`
+# matches, and `mce` can appear inside any of them — so this makes
+# classification genuinely ORDER-DEPENDENT: `order` below (0/1/2/3) is
+# what keeps a name from being swallowed by a broader catch-all it also
+# happens to match — HOSTED_CLUSTER and MCE must both sort ahead of UPI,
+# not just have distinct patterns. See `classify()`'s `_sort_key` for how
+# `order` breaks a same-priority tie.
+_HOSTED_CLUSTER_HYPERSHIFT_PATTERN = r"^ocp4-hypershift"
+_HOSTED_CLUSTER_HARDWARE_PATTERN = r"^ocp-"
+_MCE_PATTERN = "mce"
+_UPI_PATTERN = r"^ocp4"
 
 
 def default_system_rules(sites: SiteCatalog) -> list[ClassificationRule]:
     """
-    The three unscoped SYSTEM_DEFAULT rules, as ready-to-persist rules.
+    The four unscoped SYSTEM_DEFAULT rules, as ready-to-persist rules.
 
-    Covers this estate's real hostname conventions: two shapes of hosted
-    cluster and one of UPI.
+    Covers this estate's real hostname conventions: two prefix shapes of
+    hosted cluster, one substring match for an MCE hub's own nodes, and
+    one UPI catch-all. Order matters here — see the comment above
+    `_UPI_PATTERN`.
 
-    All three are `system=True` (locked to enabled-only edits after
+    All four are `system=True` (locked to enabled-only edits after
     creation) because they encode a naming convention that holds fleet-
     wide, not a per-vendor preference. Vendor-scoped rules are exactly the
     kind of thing an operator adds on top through the UI, at a higher
@@ -171,29 +172,26 @@ def default_system_rules(sites: SiteCatalog) -> list[ClassificationRule]:
     the intended "call this exactly once" contract.
 
     Args:
-        sites (SiteCatalog): The configured sites. Their codes are
-            interpolated into every pattern, so reconfiguring
-            `INVENTORY_SITES` changes what these rules match.
+        sites (SiteCatalog): The configured sites. Kept for signature
+            stability with existing callers, but unused: since 2026-09-08
+            every default pattern is a plain prefix/substring match with
+            no site token to interpolate.
 
     Returns:
-        list[ClassificationRule]: The three seeded rules.
+        list[ClassificationRule]: The four seeded rules.
     """
-    alternation = sites.alternation()
     now = utcnow()
     return [
         ClassificationRule(
             id=new_id("classification_rule"),
             name="system-default-hypershift-hosted-cluster",
-            description=(
-                "Hosted control planes: ocp4-hypershift-<site>-NN and "
-                "ocp4-hypershift-data-<site>-NN."
-            ),
+            description='Hosted control planes: any name starting with "ocp4-hypershift".',
             enabled=True,
             system=True,
             installation_type=InstallationType.HOSTED_CLUSTER,
             scope=RuleScope(),
             field="name",
-            pattern=_HYPERSHIFT_TEMPLATE.format(sites=alternation),
+            pattern=_HOSTED_CLUSTER_HYPERSHIFT_PATTERN,
             source="SYSTEM_DEFAULT",
             priority=100,
             order=0,
@@ -205,14 +203,14 @@ def default_system_rules(sites: SiteCatalog) -> list[ClassificationRule]:
             name="system-default-hardware-hosted-cluster",
             description=(
                 "Hosted-cluster nodes named after their hardware spec: "
-                "ocp-<vendor>-<model>-<site>-<cores>c-<memory>gb-<serial>."
+                'any name starting with "ocp-".'
             ),
             enabled=True,
             system=True,
             installation_type=InstallationType.HOSTED_CLUSTER,
             scope=RuleScope(),
             field="name",
-            pattern=_HARDWARE_SPEC_TEMPLATE.format(sites=alternation),
+            pattern=_HOSTED_CLUSTER_HARDWARE_PATTERN,
             source="SYSTEM_DEFAULT",
             priority=100,
             order=1,
@@ -221,20 +219,41 @@ def default_system_rules(sites: SiteCatalog) -> list[ClassificationRule]:
         ),
         ClassificationRule(
             id=new_id("classification_rule"),
+            name="system-default-mce",
+            description=(
+                'An MCE hub\'s own nodes: any name containing "mce", checked '
+                "before the UPI catch-all below since an MCE hub is itself "
+                "UPI-installed and would otherwise be indistinguishable "
+                "from it by name alone."
+            ),
+            enabled=True,
+            system=True,
+            installation_type=InstallationType.MCE,
+            scope=RuleScope(),
+            field="name",
+            pattern=_MCE_PATTERN,
+            source="SYSTEM_DEFAULT",
+            priority=100,
+            order=2,
+            created_at=now,
+            updated_at=now,
+        ),
+        ClassificationRule(
+            id=new_id("classification_rule"),
             name="system-default-upi",
             description=(
-                "User-provisioned infrastructure: ocp4-[<env>-]<site>-<role>-NN, "
-                "where role is compute, control-plane or infra."
+                'User-provisioned infrastructure: any "ocp4"-prefixed name not '
+                "already claimed by a hosted-cluster or MCE rule above."
             ),
             enabled=True,
             system=True,
             installation_type=InstallationType.UPI,
             scope=RuleScope(),
             field="name",
-            pattern=_UPI_TEMPLATE.format(sites=alternation),
+            pattern=_UPI_PATTERN,
             source="SYSTEM_DEFAULT",
             priority=100,
-            order=2,
+            order=3,
             created_at=now,
             updated_at=now,
         ),

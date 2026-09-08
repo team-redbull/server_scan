@@ -10,7 +10,7 @@ import { useServerFacetsQuery, useServersQuery } from "@/features/inventory/hook
 import { useSitesQuery } from "@/features/sites/hooks";
 import { useDebouncedValue } from "@/lib/useDebouncedValue";
 
-const INSTALLATION_TYPES = ["HOSTED_CLUSTER", "UPI", "UNCLASSIFIED"] as const;
+const INSTALLATION_TYPES = ["HOSTED_CLUSTER", "MCE", "UPI", "UNCLASSIFIED"] as const;
 const HEALTH_SEVERITIES = [
   "UNKNOWN",
   "HEALTHY",

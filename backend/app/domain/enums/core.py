@@ -68,6 +68,7 @@ class InstallationType(StrEnum):
     """A server's role, as a regex verdict on its hostname (classification)."""
 
     HOSTED_CLUSTER = "HOSTED_CLUSTER"
+    MCE = "MCE"
     UPI = "UPI"
     UNCLASSIFIED = "UNCLASSIFIED"
 

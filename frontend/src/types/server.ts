@@ -44,7 +44,7 @@ export type LinkState = "UP" | "DOWN" | "UNKNOWN" | "DISABLED";
 /** Administrative enable state of a fabric attachment port. */
 export type AdminState = "ENABLED" | "DISABLED" | "UNKNOWN";
 
-export type InstallationType = "HOSTED_CLUSTER" | "UPI" | "UNCLASSIFIED";
+export type InstallationType = "HOSTED_CLUSTER" | "MCE" | "UPI" | "UNCLASSIFIED";
 
 export interface Classification {
   installation_type: InstallationType;

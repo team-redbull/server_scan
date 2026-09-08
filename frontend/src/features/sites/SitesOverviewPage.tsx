@@ -46,7 +46,7 @@ function vendorLabel(vendor: string): string {
 }
 
 /**
- * The three fleet-wide cards: everything, then each installation type.
+ * The fleet-wide cards: everything, then each installation type.
  *
  * `unassigned` is included in all of them — those servers are in the
  * fleet whatever their hostname says. The numbers come straight off the
@@ -76,6 +76,13 @@ function fleetCards(fleet: FleetSummary): CardSpec[] {
       subtitle: "servers, every site",
       to: "/servers?installation_type=UPI",
       stats: fleet.by_installation_type.UPI,
+    },
+    {
+      key: "MCE",
+      name: "MCE",
+      subtitle: "servers, every site",
+      to: "/servers?installation_type=MCE",
+      stats: fleet.by_installation_type.MCE,
     },
     {
       key: "HOSTED_CLUSTER",

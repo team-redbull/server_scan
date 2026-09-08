@@ -207,17 +207,25 @@ need to construct them). `POST /servers/{id}/reclassify` and
 on demand, for "I edited a rule/policy, show me the effect on this server
 now" without waiting for the next ingest cycle. `app.application.services.
 bootstrap` seeds the platform spec's own acceptance-scenario rules and
-policies (`^ocp-.*`/`^upi-.*` system defaults, Dell vendor overrides, the
-Cisco one-path-down/two-paths-down fabric policies) idempotently at
-startup — "seed only if missing, by name" specifically so an admin's edit
-to a system default's `enabled` flag survives every restart rather than
-being silently re-armed.
+policies (four `InstallationType` system defaults — `^ocp4-hypershift`
+and `^ocp-` prefixes for `HOSTED_CLUSTER`, an `mce` substring for `MCE`,
+an `^ocp4` catch-all for `UPI`, checked in that order — Dell vendor
+overrides, the Cisco one-path-down/two-paths-down fabric policies)
+idempotently at startup — "seed only if missing, by name" specifically so
+an admin's edit to a system default's `enabled` flag survives every
+restart rather than being silently re-armed. See
+`app.infrastructure.mongodb.classification_rule_repository.
+default_system_rules` for why the patterns are broad, overlapping
+catch-alls rather than mutually exclusive by construction, and why that
+makes `order` load-bearing.
 
-Verified against a live 1,000-server seeded dataset: 400 classified
-`HOSTED_CLUSTER`, 404 `UPI`, 196 `UNCLASSIFIED` (all via the correct
-rule); the exact Cisco fabric acceptance scenario (one path down →
-WARNING, two paths down → CRITICAL) reproduced on real seeded servers,
-not just fixtures.
+Verified against a live 1,000-server seeded dataset (regenerated
+2026-09-08 against the current four-rule set, superseding an earlier
+three-rule count from the same fixture): 349 classified `HOSTED_CLUSTER`,
+101 `MCE`, 435 `UPI`, 115 `UNCLASSIFIED` (all via the correct rule); the
+exact Cisco fabric acceptance scenario (one path down → WARNING, two
+paths down → CRITICAL) reproduced on real seeded servers, not just
+fixtures.
 
 Ingest also does two things on every server that are easy to miss because
 neither belongs to a collector:

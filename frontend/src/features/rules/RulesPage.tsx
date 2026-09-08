@@ -91,7 +91,7 @@ export function RulesPage() {
       <section className="mt-8">
         <h2 className="text-lg font-semibold">Classification rules</h2>
         <p className="mt-1 text-sm text-gray-500">
-          Assign an installation type (HOSTED_CLUSTER / UPI / UNCLASSIFIED)
+          Assign an installation type (HOSTED_CLUSTER / MCE / UPI / UNCLASSIFIED)
           from a server&apos;s own fields.
         </p>
 

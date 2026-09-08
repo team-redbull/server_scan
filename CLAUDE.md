@@ -256,9 +256,16 @@ from configuration, a server's site is parsed
 from its own name, vendor manager connections come from environment
 configuration rather than MongoDB documents plus mounted secrets, and the
 UI was rebuilt around a per-site overview as the landing page — which now
-leads with three fleet-wide cards (across all sites, UPI, hosted cluster)
+leads with fleet-wide cards (across all sites, UPI, MCE, hosted cluster)
 above the per-site ones, summed from a `by_installation_type` object
-`GET /api/v1/sites` returns per site row.
+`GET /api/v1/sites` returns per site row. **`InstallationType` gained a
+fourth member, `MCE`, 2026-09-08** — an MCE hub's own nodes are pulled
+out of the generic UPI bucket into their own card, and all four system-
+default classification rules became broad, overlapping, order-dependent
+prefix/substring catch-alls rather than mutually exclusive by
+construction (`app.infrastructure.mongodb.classification_rule_repository.
+default_system_rules`) — read that module's own comment before touching
+it, the ordering is load-bearing now in a way it wasn't before.
 
 **Every planned vendor collector now exists.** Cisco Intersight
 (ADR-0017), Dell OpenManage (ADR-0020) and HPE OneView (ADR-0022) all

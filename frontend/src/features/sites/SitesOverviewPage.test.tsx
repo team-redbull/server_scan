@@ -45,6 +45,7 @@ function site(
     by_installation_type: {
       UPI: upi,
       HOSTED_CLUSTER: hosted,
+      MCE: breakdown(),
       UNCLASSIFIED: breakdown(),
     },
   };
@@ -89,6 +90,7 @@ const SITES_RESPONSE = {
     by_installation_type: {
       UPI: sumBreakdowns(SITE_ITEMS.map((s) => s.by_installation_type.UPI)),
       HOSTED_CLUSTER: sumBreakdowns(SITE_ITEMS.map((s) => s.by_installation_type.HOSTED_CLUSTER)),
+      MCE: sumBreakdowns(SITE_ITEMS.map((s) => s.by_installation_type.MCE)),
       UNCLASSIFIED: sumBreakdowns(SITE_ITEMS.map((s) => s.by_installation_type.UNCLASSIFIED)),
     },
   },
@@ -134,7 +136,7 @@ describe("SitesOverviewPage", () => {
     vi.unstubAllGlobals();
   });
 
-  it("renders the three fleet-wide cards from the backend's own fleet summary", async () => {
+  it("renders the fleet-wide cards from the backend's own fleet summary", async () => {
     renderPage();
 
     await waitFor(() => {
@@ -144,6 +146,9 @@ describe("SitesOverviewPage", () => {
     expect(within(card("Across all sites")).getByText("50")).toBeInTheDocument();
     expect(within(card("UPI")).getByText("35")).toBeInTheDocument();
     expect(within(card("Hosted cluster")).getByText("15")).toBeInTheDocument();
+    // MCE gets its own card even at zero — the fixture has no MCE-classified
+    // servers, and that must still render as "0", not omit the card.
+    expect(within(card("MCE")).getByText("0")).toBeInTheDocument();
   });
 
   it("links each fleet-wide card to the matching pre-filtered server list", async () => {
@@ -180,6 +185,7 @@ describe("SitesOverviewPage", () => {
                 by_installation_type: {
                   UPI: breakdown(),
                   HOSTED_CLUSTER: breakdown(),
+                  MCE: breakdown(),
                   UNCLASSIFIED: breakdown(),
                 },
               },

@@ -328,13 +328,16 @@ _NAME_ENVIRONMENTS = ("prod", "prep", None)
 # instead of being unreachable in dev.
 #
 # UPI outweighs hosted-cluster rather than tying it, so the sites
-# overview's three fleet cards read as three different numbers. Equal
-# weights made HOSTED_CLUSTER and UPI land on the same count, which
-# looks like a bug in the page rather than a property of the fleet.
+# overview's fleet cards read as different numbers rather than several
+# landing on the same count, which looks like a bug in the page rather
+# than a property of the fleet. MCE stays a single-weight minority for
+# the same reason unclassified is — it is a real but small slice of a
+# UPI-installed estate, not a mainstream shape.
 _NAME_FAMILIES = (
     "hosted_cluster",
     "hosted_cluster",
     "hosted_cluster_hw",
+    "mce",
     "upi",
     "upi",
     "upi",
@@ -590,7 +593,7 @@ def _build_name(
     `site_code` as a whole `-`-delimited token, because the name is what
     `app.domain.value_objects.site.parse_site_code` reads the site back
     out of, and what the seeded classification rules key on to decide
-    HOSTED_CLUSTER vs UPI.
+    HOSTED_CLUSTER vs MCE vs UPI.
 
     Args:
         rng (random.Random): The seeded generator.
@@ -624,6 +627,13 @@ def _build_name(
             f"ocp-{vendor}-{short_model}-{site_code}-{cores}c-"
             f"{memory_gib}gb-{hardware}{vendor[:3].upper()}{index:07d}"
         )
+
+    if family == "mce":
+        # ocp4-mce-tlv-01 — an MCE hub's own nodes. Matched by name alone
+        # (the "mce" substring), same as every other family here, so it
+        # deliberately also matches the UPI catch-all below; the
+        # classification rules' own ordering is what keeps it out of UPI.
+        return f"ocp4-mce-{site_code}-{index % 100:02d}"
 
     if family == "upi":
         # ocp4-five-compute-01 / ocp4-nyc-control-plane-02 /

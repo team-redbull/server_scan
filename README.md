@@ -364,8 +364,8 @@ is reachable.
 
 **What to look at once it's seeded** (`--count 1000 --seed 42`):
 
-* **The sites overview's three fleet cards** read roughly 495 UPI, 349
-  hosted-cluster and 156 unclassified. All three are meant to be
+* **The sites overview's fleet cards** read roughly 435 UPI, 349
+  hosted-cluster, 101 MCE and 115 unclassified. All four are meant to be
   non-empty and visibly different — an unclassified server is a real
   state, not a seeding accident.
 * **GPU VRAM comes from the catalog, not from the fixture.** No vendor
