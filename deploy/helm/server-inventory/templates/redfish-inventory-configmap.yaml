@@ -1,0 +1,18 @@
+{{- /*
+Opt-in: only rendered when collectors.redfishStandalone.inventoryToml is
+set. Left blank (the default), the inventory ConfigMap is provisioned
+externally — see the comment above that value in values.yaml.
+*/}}
+{{- if .Values.collectors.redfishStandalone.inventoryToml }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Values.collectors.redfishStandalone.inventoryConfigMap | default (printf "%s-redfish-inventory" .Release.Name) }}
+  labels:
+    app.kubernetes.io/name: {{ .Release.Name }}-redfish-inventory
+    app.kubernetes.io/component: collector
+    app.kubernetes.io/part-of: server-inventory
+data:
+  inventory.toml: |
+{{ .Values.collectors.redfishStandalone.inventoryToml | indent 4 }}
+{{- end }}

@@ -286,6 +286,30 @@ Note that Intersight's three fields mean something different: it signs
 requests with an API key rather than logging in, so `username` is the API
 Key ID and `password` the secret key.
 
+### `REDFISH_STANDALONE`'s inventory
+
+Unlike every other collector, this one's fleet list is a file
+(`docs/examples/redfish-inventory.example.toml` shows the shape), not
+values you `--set`, because at a few hundred hosts it doesn't fit
+`values.yaml` or `--set` sanely. `collectors.redfishStandalone` offers the
+same choice `collectors.<vendor>.password` above already does for
+credentials:
+
+- Leave `inventoryToml` blank (the default) and provision the
+  `<release>-redfish-inventory` ConfigMap yourself — `kubectl create
+  configmap <release>-redfish-inventory
+  --from-file=inventory.toml=./redfish-inventory.toml`, or your own
+  GitOps tooling. This chart never creates or touches that ConfigMap.
+- Set `inventoryToml` (a multi-line string) and this chart renders and
+  owns the ConfigMap instead — no separate `kubectl` step. For Argo CD
+  this is the natural fit: `spec.source.helm.values` on the Application
+  is inline YAML anyway, so the fleet list lives in whatever repo that
+  Application manifest does. Give it the same access control as any
+  other GitOps-committed config: it names every BMC and decides which
+  credential each one receives, which is why the example file calls it
+  "equivalent to write access to the credential Secret" even though it
+  holds no password itself.
+
 ## Current state
 
 The backend API and the frontend both have full manifests

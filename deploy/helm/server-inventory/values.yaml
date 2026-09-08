@@ -480,10 +480,31 @@ collectors:
       minVersion: "TLSv1_2"
 
     # ConfigMap holding the fleet list under an `inventory.toml` key.
-    # Defaults to `<release>-redfish-inventory`, which this chart does NOT
-    # create — it is GitOps-owned. See
-    # docs/examples/redfish-inventory.example.toml.
+    # Defaults to `<release>-redfish-inventory`.
+    #
+    # Two ways to supply it, same choice `collectors.<vendor>.password`
+    # below already offers for credentials:
+    #
+    # 1. Leave `inventoryToml` below blank (the default) and provision the
+    #    ConfigMap yourself — this chart then does NOT create it. Set
+    #    `inventoryConfigMap` if your ConfigMap isn't named
+    #    `<release>-redfish-inventory`.
+    # 2. Set `inventoryToml` and this chart renders and owns the ConfigMap
+    #    (`templates/redfish-inventory-configmap.yaml`) — the natural
+    #    shape for Argo CD, whose Application `spec.source.helm.values` is
+    #    inline YAML anyway. The fleet list then lives in whatever repo
+    #    that Application manifest does, so give it the same access
+    #    control as any other GitOps-committed config — it names every
+    #    BMC and decides which credential each one gets
+    #    (docs/examples/redfish-inventory.example.toml explains why that
+    #    makes it review-gated, same as the credentials Secret). It holds
+    #    no password itself, which is why this is a ConfigMap and the
+    #    credentials file below is a Secret.
+    #
+    # Setting both is a conflict: this chart would try to own a ConfigMap
+    # you also provisioned externally under the same name. Pick one.
     inventoryConfigMap: ""
+    inventoryToml: ""
 
     # Secret holding per-host logins under a `credentials.toml` key.
     # Leave empty for a fleet sharing one account, which uses
