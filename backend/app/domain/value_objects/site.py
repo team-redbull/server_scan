@@ -78,14 +78,22 @@ class SiteDefinition:
     One site.
 
     Attributes:
-        code (str): The token embedded in hostnames, e.g. `"bat-yam"`.
-            Also the `Site` document's id and the value stored in
-            `Server.site_id`.
+        code (str): The canonical token embedded in hostnames, e.g.
+            `"bat-yam"`. Also the `Site` document's id and the value
+            stored in `Server.site_id` — an alias never is, even when a
+            server's own name carried the alias rather than this code.
         name (str): What the UI shows, e.g. `"Bat Yam"`.
+        aliases (tuple[str, ...]): Other tokens a hostname may carry that
+            mean this same site — e.g. an old naming convention's code, or
+            an abbreviation a different team used. Every server matching
+            an alias is stored and shown under `code`, not the alias, so
+            they combine onto one site card rather than splitting across
+            two.
     """
 
     code: str
     name: str
+    aliases: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,6 +121,14 @@ class SiteCatalog:
         title-cased names — because a deployment that does not care about
         pretty labels should not have to invent them.
 
+        The code half may itself be `|`-separated aliases, e.g.
+        `znif|prep:Znif` — the first token is canonical (`Server.site_id`,
+        every URL, the `Site` document's own id), the rest are other
+        tokens a hostname may carry for that same site, so a naming
+        convention that changed over time — or two teams' different
+        abbreviations for one site — still combines onto one site card
+        rather than splitting across two.
+
         Args:
             spec (str): The raw configured value. Empty means the shipped
                 default rather than "no sites", since a deployment with no
@@ -122,7 +138,10 @@ class SiteCatalog:
             SiteCatalog: The parsed catalog, in configured order.
 
         Raises:
-            SiteConfigurationError: On a malformed or duplicate entry.
+            SiteConfigurationError: On a malformed or duplicate entry —
+                including one token (a code or an alias) reused anywhere
+                else in the spec, which would make it ambiguous which
+                site a hostname carrying it names.
         """
         text = spec.strip() or DEFAULT_SITES_SPEC
         definitions: list[SiteDefinition] = []
@@ -130,21 +149,27 @@ class SiteCatalog:
         for entry in text.split(","):
             if not entry.strip():
                 continue
-            code, _, name = entry.partition(":")
-            code = code.strip().lower()
+            code_field, _, name = entry.partition(":")
+            tokens = [token.strip().lower() for token in code_field.split("|")]
             name = name.strip()
-            if not _VALID_CODE.match(code):
-                raise SiteConfigurationError(
-                    f"INVENTORY_SITES: {code!r} is not a usable site code. A code is the "
-                    "token that appears inside a hostname, so it must be lowercase "
-                    "letters, digits and single hyphens — e.g. 'tlv' or 'bat-yam'."
-                )
-            if code in seen:
-                raise SiteConfigurationError(
-                    f"INVENTORY_SITES: site code {code!r} is listed twice."
-                )
-            seen.add(code)
-            definitions.append(SiteDefinition(code=code, name=name or _title_case(code)))
+            for token in tokens:
+                if not _VALID_CODE.match(token):
+                    raise SiteConfigurationError(
+                        f"INVENTORY_SITES: {token!r} is not a usable site code or alias. "
+                        "A code is the token that appears inside a hostname, so it must "
+                        "be lowercase letters, digits and single hyphens — e.g. 'tlv' or "
+                        "'bat-yam'."
+                    )
+                if token in seen:
+                    raise SiteConfigurationError(
+                        f"INVENTORY_SITES: {token!r} is listed twice — as a code or alias "
+                        "of more than one site, or twice for the same one."
+                    )
+                seen.add(token)
+            code, *aliases = tokens
+            definitions.append(
+                SiteDefinition(code=code, name=name or _title_case(code), aliases=tuple(aliases))
+            )
         if not definitions:
             raise SiteConfigurationError(
                 "INVENTORY_SITES is set but lists no sites. Leave it unset for the "
@@ -194,15 +219,23 @@ class SiteCatalog:
 
     def alternation(self) -> str:
         """
-        Every site code as one regex alternation.
+        Every site code and alias as one regex alternation.
 
-        Used to build the seeded classification rules, so adding a site to
-        the configuration cannot leave those patterns behind.
+        No production caller left as of 2026-09-08 — the seeded
+        classification rules that used to interpolate this were broadened
+        into plain prefix/substring catch-alls with no site token at all
+        (`app.infrastructure.mongodb.classification_rule_repository.
+        default_system_rules`). Kept, and kept correct, for whatever next
+        needs "every token that means a configured site" as one pattern.
 
         Returns:
             str: e.g. `"nyc|tlv|bat-yam|five"`, regex-escaped.
         """
-        return "|".join(re.escape(code) for code in self.codes)
+        return "|".join(
+            re.escape(token)
+            for definition in self.definitions
+            for token in (definition.code, *definition.aliases)
+        )
 
     def parse(self, name: str | None) -> str | None:
         """
@@ -212,17 +245,25 @@ class SiteCatalog:
         inconsistent casing. If a name somehow contains two different site
         tokens the result is `None` rather than a guess — an ambiguous
         name is a naming bug worth surfacing, not worth resolving by
-        picking the leftmost match.
+        picking the leftmost match. A name carrying two different tokens
+        that both alias the *same* site is not ambiguous — it resolves to
+        that one canonical code, same as repeating the code itself would.
 
         Args:
             name (str | None): A hostname, or a UCS org/profile DN.
 
         Returns:
-            str | None: The single site code named, or `None`.
+            str | None: The single canonical site code named, or `None`.
+                Always `definition.code`, never an alias, even when the
+                alias is what the name actually carried.
         """
         if not name:
             return None
-        by_value = {definition.code: definition.code for definition in self.definitions}
+        by_value = {
+            token: definition.code
+            for definition in self.definitions
+            for token in (definition.code, *definition.aliases)
+        }
         max_tokens = max((len(_SEPARATORS.split(code)) for code in by_value), default=1)
         tokens = [token for token in _SEPARATORS.split(name.strip().lower()) if token]
         found = {

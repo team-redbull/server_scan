@@ -584,6 +584,11 @@ non-obvious enough to bite you.
   token falls back to its service profile's org DN**
   (`org-root/org_tlv/ls-worker-01` -> `tlv`) — the name is still the
   authority, the org path is only consulted when it says nothing.
+  **A site's code may itself be `|`-separated aliases** (added
+  2026-09-08 — `"znif|prep:Znif"`), for two naming conventions that mean
+  the same physical site: the first token is canonical (`Server.site_id`,
+  every URL), the rest are only ever recognized on the way in, never
+  produced. See `SiteCatalog.from_spec` and ADR-0018's dated update.
 - **`Vendor` is dell/cisco/hp/standalone — there is still no `UNKNOWN`.**
   `STANDALONE` means *a manufacturer this platform does not model*
   (Lenovo, Supermicro, a whitebox) **or one the BMC did not report at

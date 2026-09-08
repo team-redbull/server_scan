@@ -86,7 +86,11 @@ class Settings(BaseSettings):
     # The code is the token that appears inside a hostname
     # (`ocp4-prod-tlv-infra-01` -> `tlv`), so it must be lowercase
     # letters, digits and single hyphens. The display half is optional;
-    # `nyc,tlv` gives title-cased names.
+    # `nyc,tlv` gives title-cased names. The code half may itself be
+    # `|`-separated aliases (`znif|prep:Znif`) when more than one naming
+    # convention names the same site — the first token is canonical, the
+    # rest are recognised but never produced (`Server.site_id`, every URL,
+    # always the first token). See `SiteCatalog.from_spec`.
     #
     # Configuration rather than an enum in the source, because which
     # sites exist is a property of one estate's naming convention — see

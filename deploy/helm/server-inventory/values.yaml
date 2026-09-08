@@ -207,6 +207,9 @@ config:
   # The sites this deployment has, as `code:Display Name` pairs. The code
   # is the token that appears inside a hostname (`ocp4-prod-tlv-infra-01`
   # -> `tlv`), so it must be lowercase letters, digits and single hyphens.
+  # It may itself be `|`-separated aliases (`znif|prep:Znif`) when more
+  # than one naming convention names the same site — the first token is
+  # canonical, the rest are recognised but never produced as a value.
   #
   # This is the only place sites are defined: changing this list renames or
   # adds a site across the API, the UI's site cards, the inventory filter,

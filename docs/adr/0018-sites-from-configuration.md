@@ -61,9 +61,10 @@ Everything ADR-0011 wanted from the enum survives:
   of this.
 - `parse_site_code` can only ever produce a configured code, so ingest
   cannot write a site that does not exist.
-- The seeded classification rules interpolate `SiteCatalog.alternation()`,
-  so reconfiguring sites rebuilds their patterns rather than leaving them
-  silently behind.
+- The seeded classification rules interpolated `SiteCatalog.alternation()`
+  at the time this was written, so reconfiguring sites rebuilt their
+  patterns rather than leaving them silently behind. **No longer true as
+  of 2026-09-08** — see "Cost accepted" and the dated update below.
 
 ### `Server.site_id` becomes `str`, deliberately
 
@@ -99,10 +100,11 @@ matching is lowercase, so that is an operator being tidy, not a mistake.
 ## Consequences
 
 **Good.** Renaming or adding a site is one environment variable and a pod
-restart. It reaches the API, the site cards, the inventory filter, both
-policy editors and the seeded classification rules at once, with no code
-change, no image rebuild and no mirror round trip. Standing the platform
-up for a different estate no longer starts with a patch.
+restart. It reaches the API, the site cards, the inventory filter and
+both policy editors at once, with no code change, no image rebuild and no
+mirror round trip. Standing the platform up for a different estate no
+longer starts with a patch. (It no longer also reaches the seeded
+classification rules — see the dated update below.)
 
 **The ConfigMap is shared on purpose.** `INVENTORY_SITES` lives in the
 `api-config` ConfigMap, which the API deployment *and* every collector
@@ -119,8 +121,17 @@ knowing before someone renames a site and refreshes the UI expecting an
 instant change.
 
 **A seeded classification rule whose pattern drifts is re-synced on the
-next API start** — that mechanism already existed, and it is what makes a
-site change reach a database that was seeded before it.
+next API start** — that mechanism already exists (`app.application.
+services.bootstrap.ensure_default_classification_rules`) and is what
+makes a rule *definition* change reach a database that was seeded before
+it. **Corrected 2026-09-08: no default classification rule interpolates
+a site code any more** — the four `InstallationType` system defaults
+became broad prefix/substring catch-alls with no site token at all
+(`docs/architecture.md`'s "Ingestion wires both engines together"
+section), so a site rename or addition no longer needs this mechanism to
+reach classification. `SiteCatalog.alternation()`, which those rules used
+to interpolate, is kept only for a future caller that needs "every token
+this catalog recognises" as one pattern.
 
 **Cost accepted:** Pydantic no longer validates `Server.site_id`, and a
 typo in `INVENTORY_SITES` that is *syntactically* valid (`tvl` for `tlv`)
@@ -129,3 +140,24 @@ only looking at the resulting inventory can. `tools/run_collector.py
 --dry-run` prints the resolved site per server for exactly this reason,
 and `tools/verify_intersight.py` counts how many names resolved to a
 site.
+
+## Update (2026-09-08): aliases — several tokens naming one site
+
+Added at the operator's request: a site's code half in `INVENTORY_SITES`
+may be `|`-separated aliases (`znif|prep:Znif`), so two naming
+conventions for the same physical site — a renamed abbreviation, two
+teams' different shorthand — combine onto one `Site`/one fleet card
+instead of splitting across two. The first token is canonical: it is the
+only one ever written as `Server.site_id`, used in a URL, or returned by
+`codes`/`name_for` — the rest exist purely for `SiteCatalog.parse` to
+recognise on the way in.
+
+Every token, code or alias, still has to be globally unique across the
+whole spec — reusing one anywhere else is rejected at startup with the
+same "listed twice" error a duplicate plain code already got, for the
+same reason: two sites claiming one token would make it ambiguous which
+site a hostname carrying it names, exactly the ambiguity this whole
+module exists to refuse to guess through. Two different aliases of the
+*same* site appearing in one hostname is not that ambiguity — it resolves
+to that one canonical code, the same as the bare code appearing twice
+already did.

@@ -203,8 +203,10 @@ def test_a_spec_of_only_separators_is_rejected() -> None:
 
 
 def test_the_regex_alternation_covers_every_configured_site() -> None:
-    """The seeded classification rules interpolate this, so a site the
-    alternation misses is a site whose servers never classify.
+    """No production caller depends on this any more (the seeded
+    classification rules that used to interpolate it were broadened into
+    plain catch-alls with no site token), but it must still cover every
+    code and alias correctly for whatever next needs it.
     """
     catalog = SiteCatalog.from_spec("lon:London,bat-yam:Bat Yam")
 
@@ -226,3 +228,75 @@ def test_an_unknown_code_still_renders_rather_than_disappearing() -> None:
     """
     assert SITES.name_for("bat-yam") == "Bat Yam"
     assert SITES.name_for("decommissioned-dc") == "Decommissioned Dc"
+
+
+# --- aliases: several hostname tokens naming one site -------------------
+
+
+def test_an_alias_resolves_to_its_sites_canonical_code() -> None:
+    """A hostname carrying the alias lands on the same site as one
+    carrying the canonical code — that is the whole point: two naming
+    conventions, one site card.
+    """
+    catalog = SiteCatalog.from_spec("znif|prep:Znif,five|fn:Site Five")
+
+    assert parse_site_code("ocp4-prod-znif-infra-01", catalog) == "znif"
+    assert parse_site_code("ocp4-prod-prep-infra-01", catalog) == "znif"
+    assert parse_site_code("ocp4-fn-compute-01", catalog) == "five"
+    assert parse_site_code("ocp4-five-compute-01", catalog) == "five"
+
+
+def test_a_site_may_carry_more_than_two_aliases() -> None:
+    catalog = SiteCatalog.from_spec("znif|prep|legacy-znf:Znif")
+
+    for token in ("znif", "prep", "legacy-znf"):
+        assert parse_site_code(f"ocp4-{token}-infra-01", catalog) == "znif"
+
+
+def test_the_first_token_is_canonical_everywhere_else_too() -> None:
+    """`code`, `codes` and `name_for` all key off the first `|`-separated
+    token — the rest exist only for `parse` to recognise, never as a
+    value this catalog produces on its own.
+    """
+    catalog = SiteCatalog.from_spec("znif|prep:Znif")
+
+    assert catalog.codes == ("znif",)
+    assert catalog.definitions[0].code == "znif"
+    assert catalog.definitions[0].aliases == ("prep",)
+    assert catalog.name_for("znif") == "Znif"
+
+
+def test_an_alias_is_case_insensitive_like_a_code() -> None:
+    catalog = SiteCatalog.from_spec("znif|PREP:Znif")
+
+    assert catalog.definitions[0].aliases == ("prep",)
+    assert parse_site_code("ocp4-PREP-infra-01", catalog) == "znif"
+
+
+def test_two_aliases_of_the_same_site_in_one_name_is_not_ambiguous() -> None:
+    """Both tokens resolve to the same canonical code, so this is the
+    same non-ambiguous case `test_the_same_site_repeated_is_not_ambiguous`
+    already covers for a bare repeated code.
+    """
+    catalog = SiteCatalog.from_spec("znif|prep:Znif")
+
+    assert parse_site_code("ocp4-znif-prep-infra-01", catalog) == "znif"
+
+
+def test_an_alias_reused_as_another_sites_code_is_rejected() -> None:
+    """Would make it ambiguous which site a hostname carrying the shared
+    token names.
+    """
+    with pytest.raises(SiteConfigurationError, match="listed twice"):
+        SiteCatalog.from_spec("znif|five:Znif,five:Site Five")
+
+
+def test_an_alias_reused_as_another_sites_alias_is_rejected() -> None:
+    with pytest.raises(SiteConfigurationError, match="listed twice"):
+        SiteCatalog.from_spec("znif|shared:Znif,five|shared:Site Five")
+
+
+def test_the_regex_alternation_includes_aliases() -> None:
+    catalog = SiteCatalog.from_spec("znif|prep:Znif")
+
+    assert catalog.alternation() == "znif|prep"
