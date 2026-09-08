@@ -10,6 +10,9 @@ metadata:
     app.kubernetes.io/part-of: server-inventory
 spec:
   schedule: {{ $rf.schedule | quote }}
+  {{- with .Values.collectors.timeZone }}
+  timeZone: {{ . | quote }}
+  {{- end }}
   suspend: {{ $rf.suspend }}
   concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 3

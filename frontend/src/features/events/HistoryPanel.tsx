@@ -4,6 +4,7 @@ import { Fragment } from "react";
 import { ApiError } from "@/api/client";
 import { listEvents } from "@/api/events";
 import { queryKeys } from "@/api/queryKeys";
+import { formatTimestamp } from "@/lib/datetime";
 import type { AuditEventResponse } from "@/types/events";
 
 interface HistoryPanelProps {
@@ -96,7 +97,7 @@ export function HistoryPanel({ eventTypes, idField, entityId }: HistoryPanelProp
               <div className="flex items-center justify-between gap-4">
                 <span className="font-medium">{event.event_type}</span>
                 <span className="shrink-0 text-xs text-gray-500">
-                  {new Date(event.created_at).toLocaleString()}
+                  {formatTimestamp(event.created_at)}
                 </span>
               </div>
               <p className="mt-1 text-xs text-gray-500">

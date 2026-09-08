@@ -297,6 +297,13 @@ collectors:
   # collector alone — which is the only way to opt one out of a non-empty
   # default here, so an override is left commented out rather than set to "".
 
+  # IANA name, applied to every CronJob's `spec.timeZone` (Kubernetes 1.27+,
+  # GA). Left blank, a CronJob runs on the cluster's own configured
+  # timezone — kube-controller-manager's, almost always UTC regardless of
+  # where the cluster physically sits. Setting this keeps a schedule like
+  # "0 2 * * *" meaning 2am local, DST included, rather than 2am UTC.
+  timeZone: "Asia/Jerusalem"
+
   # Fake data, for a cluster with no vendor hardware to reach at all — a
   # demo, a UI environment, or a soak test of the ingest path. Runs
   # tools/seed_inventory.py, which drives the same pipeline a real collector

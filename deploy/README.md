@@ -207,6 +207,13 @@ A collector's entire connection config is one endpoint and one login per
 manager type, set in `collectors.<vendor>` in `values.yaml`. There are no
 `Manager` documents to create first and no credentials volume to mount.
 
+`collectors.timeZone` (default `Asia/Jerusalem`) sets every CronJob's
+`spec.timeZone` (Kubernetes 1.27+), so a schedule like `"0 2 * * *"` fires
+at 2am local time, DST included, rather than 2am on whatever timezone the
+cluster's `kube-controller-manager` happens to run — almost always UTC,
+regardless of where the cluster physically sits. Set it to `""` to fall
+back to the cluster default instead.
+
 `collectors.ucsManager` is the one carve-out and has no `ip` at all: the
 UCS Central collector reads every domain's address from Central at
 runtime (`ComputeSystem.address`) and logs into each one with

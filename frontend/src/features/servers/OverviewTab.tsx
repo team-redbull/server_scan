@@ -4,6 +4,7 @@ import { useState } from "react";
 import { ApiError } from "@/api/client";
 import { Badge } from "@/components/Badge";
 import { HealthBadge } from "@/components/HealthBadge";
+import { formatTimestamp } from "@/lib/datetime";
 import type { HealthSummary, OpenShiftState, ServerDetail } from "@/types/server";
 
 interface OverviewTabProps {
@@ -109,9 +110,9 @@ export function OverviewTab({
       />
       <Field
         label="Last seen"
-        value={server.last_seen_at ? new Date(server.last_seen_at).toLocaleString() : "—"}
+        value={server.last_seen_at ? formatTimestamp(server.last_seen_at) : "—"}
       />
-      <Field label="Updated" value={new Date(server.updated_at).toLocaleString()} />
+      <Field label="Updated" value={formatTimestamp(server.updated_at)} />
     </dl>
   );
 }
