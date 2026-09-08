@@ -48,6 +48,11 @@ playwright-report/
 test-results/
 
 **/.claude-flow/
+# ruflo/claude-flow's self-tuning benchmark state: a machine-specific
+# "champion" config adopted from a local benchmark run, not a project
+# decision. Regenerates on its own; committing it just adds diff noise.
+.claude/.proven-config-version
+.claude/proven-config.json
 # Probe output carried back from a site (docs/field-test-checklist.md):
 # holds server names, serials and management addresses, never committed.
 intersight-verify.txt
