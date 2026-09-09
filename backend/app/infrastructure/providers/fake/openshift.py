@@ -83,9 +83,11 @@ def openshift_for(server: Server) -> OpenShiftLifecycle:
         )
 
     # A hub's own nodes are cluster nodes like any other, so both are
-    # simply INSTALLED; `InstallationType` answers which kind.
+    # simply INSTALLED; `InstallationType` answers which kind. They get
+    # distinct cluster names so `?cluster_name=` can isolate a hub.
     if server.classification.installation_type in (InstallationType.UPI, InstallationType.MCE):
-        cluster = f"upi-{server.site_id or 'unassigned'}"
+        prefix = "mce" if server.classification.installation_type is InstallationType.MCE else "upi"
+        cluster = f"{prefix}-{server.site_id or 'unassigned'}"
         return OpenShiftLifecycle(
             lifecycle_state=OpenShiftState.INSTALLED,
             cluster_name=cluster,
