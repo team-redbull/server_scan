@@ -28,11 +28,19 @@ which is the collector's *fallback* when a name carries no site token —
 see `app.application.services.ingest`. `/` is a separator here for that
 reason.
 
-A token must match a site code *exactly* and stand alone between
-separators; a code spelled with a separator (`bat-yam`) matches a run of
-consecutive tokens. Substring matching would be actively dangerous here:
-site codes are short, and `ocp4-tlvx-01` contains "tlv" while naming no
-site at all.
+A code spelled with a separator (`bat-yam`) matches a run of consecutive
+tokens, exactly. Every code and alias also matches as a **substring of a
+single token** — `ocp4-computezn-01` matches an alias `zn`, glued
+together with no separator of its own — a deliberate reversal, made at
+the operator's explicit request 2026-09-09, of this module's original
+design: matching used to require a token to *equal* a code outright,
+specifically to reject `ocp4-tlvx-01` "containing" `tlv` while naming no
+site at all. That false-positive risk is now accepted, consciously, in
+exchange for letting a short alias (`zn`, `fn`) match wherever it appears
+glued into a name. A name whose tokens resolve to two *different* sites
+is still `None` rather than a guess (see `SiteCatalog.parse`) — that
+safety net is unchanged, and matters more now that substrings match more
+often.
 
 A name with no site token returns `None`. That is a real state the UI
 surfaces ("Unassigned"), never a silent default to some arbitrary site —
@@ -242,12 +250,24 @@ class SiteCatalog:
         The site code embedded in `name`, or `None` if it holds none.
 
         Case-insensitive, because hostnames arrive from vendor APIs with
-        inconsistent casing. If a name somehow contains two different site
-        tokens the result is `None` rather than a guess — an ambiguous
-        name is a naming bug worth surfacing, not worth resolving by
-        picking the leftmost match. A name carrying two different tokens
-        that both alias the *same* site is not ambiguous — it resolves to
-        that one canonical code, same as repeating the code itself would.
+        inconsistent casing. Two ways a code or alias can match, both
+        active at once:
+
+        1. As a run of one or more whole, consecutive tokens, exactly —
+           what makes a multi-token code (`bat-yam`) match its own
+           separator-spelled form.
+        2. As a **substring of a single token**, glued in with no
+           separator of its own (`ocp4-computezn-01` matches an alias
+           `zn`) — a deliberate reversal, 2026-09-09, of matching only
+           whole tokens; see the module docstring for why and what it
+           trades away.
+
+        If a name's tokens resolve to two *different* sites the result is
+        `None` rather than a guess — an ambiguous name is a naming bug
+        worth surfacing, not worth resolving by picking the leftmost
+        match. A name carrying two different tokens (or substrings) that
+        both alias the *same* site is not ambiguous — it resolves to that
+        one canonical code, same as repeating the code itself would.
 
         Args:
             name (str | None): A hostname, or a UCS org/profile DN.
@@ -266,12 +286,26 @@ class SiteCatalog:
         }
         max_tokens = max((len(_SEPARATORS.split(code)) for code in by_value), default=1)
         tokens = [token for token in _SEPARATORS.split(name.strip().lower()) if token]
+
         found = {
             by_value[candidate]
             for size in range(1, max_tokens + 1)
             for start in range(len(tokens) - size + 1)
             if (candidate := "-".join(tokens[start : start + size])) in by_value
         }
+        # A code/alias appearing anywhere inside one token, not just a
+        # token that equals it outright — e.g. "zn" inside "computezn". A
+        # multi-token code (containing its own "-") can never be a
+        # substring of one token, since splitting already removed every
+        # "-" from each token, so this only ever fires for single-token
+        # codes/aliases — exactly the short ones this exists for.
+        found |= {
+            code
+            for hostname_token in tokens
+            for candidate, code in by_value.items()
+            if candidate in hostname_token
+        }
+
         if len(found) != 1:
             return None
         return found.pop()

@@ -580,11 +580,21 @@ non-obvious enough to bite you.
 
 - **A server's site is parsed from its name**
   (`app.domain.value_objects.site.parse_site_code`), never taken from
-  configuration — `ocp4-prod-tlv-infra-01` -> `tlv`. Token-based, not a
-  substring search (`ocp4-tlvx-01` contains "tlv" but names no site),
-  and an ambiguous name yields `None` rather than a guess. `None` is a
-  real state the UI shows as "Unassigned". A code spelled with a
-  separator (`bat-yam`) matches consecutive tokens.
+  configuration — `ocp4-prod-tlv-infra-01` -> `tlv`. An ambiguous name
+  yields `None` rather than a guess. `None` is a real state the UI shows
+  as "Unassigned". A code spelled with a separator (`bat-yam`) matches
+  consecutive tokens. **Reversed 2026-09-09, at the operator's explicit
+  request: matching is now substring-within-a-token, not whole-token
+  only** — `ocp4-computezn-01` matches an alias `zn` glued in with no
+  separator of its own, and this is deliberately no longer safe from the
+  false positive it used to reject (`ocp4-tlvx-01` now really does
+  resolve to `tlv`). A multi-token code (`bat-yam`) still can't
+  substring-match, since splitting removes its own `-` from every token.
+  **Known real collision, not hypothetical:** a code/alias that is a
+  substring of `infra` (e.g. `fra`) makes every `-infra-`-named server
+  ambiguous (two sites "matched") rather than landing on the intended
+  one — avoiding common role words when picking a code/alias is now the
+  operator's job. See the module docstring and ADR-0018's dated update.
 
   **Which sites exist is `INVENTORY_SITES`, not code** (ADR-0018).
   `SiteCode` is gone; the set is a `SiteCatalog` parsed from

@@ -74,19 +74,34 @@ def test_parses_the_site_token(name: str, expected: str) -> None:
 
 
 @pytest.mark.parametrize(
-    "name",
+    ("name", "expected"),
     [
-        # The whole reason this is token-based and not a substring search:
-        # every one of these CONTAINS a site name but names no site.
-        "ocp4-tlvx-01",  # contains "tlv"
-        "ocp4-prod-nycity-01",  # contains "nyc"
-        "ocp4-fivestar-01",  # contains "five"
-        "ocp4-batyam-01",  # "bat-yam" without its separator
-        "ocp4-bat-01",  # half of "bat-yam"
-        "batman-host",
+        # Substring matching (2026-09-09, at the operator's explicit
+        # request, deliberately accepting the false-positive risk this
+        # trades away — see the module docstring): a code glued inside a
+        # larger token, with no separator of its own, now matches.
+        ("ocp4-tlvx-01", "tlv"),
+        ("ocp4-prod-nycity-01", "nyc"),
+        ("ocp4-fivestar-01", "five"),
     ],
 )
-def test_does_not_match_a_site_name_embedded_in_a_larger_word(name: str) -> None:
+def test_a_code_embedded_in_a_larger_word_now_matches(name: str, expected: str) -> None:
+    assert parse(name) == expected
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        # A MULTI-token code still never substring-matches: splitting a
+        # hostname on separators already removed every "-" from each
+        # token, so "bat-yam" (which carries its own "-") can never be a
+        # substring of one already-split token.
+        "ocp4-batyam-01",  # "bat-yam" without its separator
+        "ocp4-bat-01",  # half of "bat-yam"
+        "batman-host",  # no configured code/alias is a substring of "batman"
+    ],
+)
+def test_a_multi_token_code_never_substring_matches(name: str) -> None:
     assert parse(name) is None
 
 
@@ -99,6 +114,23 @@ def test_returns_none_when_there_is_no_site_token(name: str | None) -> None:
 
 def test_ambiguous_name_with_two_sites_returns_none_rather_than_guessing() -> None:
     assert parse("ocp4-tlv-nyc-infra-01") is None
+
+
+def test_a_short_code_can_collide_with_infra_and_go_ambiguous() -> None:
+    """A real, discovered collision, not a hypothetical one: "infra" is
+    this platform's own common role token
+    (`ocp4-prod-tlv-infra-01`), and "fra" sits right inside it.
+    Configuring "fra" as a site alongside anything collected with
+    "-infra-" in its name makes every such server ambiguous — two
+    different sites both "matched" — rather than landing on the intended
+    one. This is the accepted cost of substring-matching every code and
+    alias (2026-09-09, at the operator's explicit request after seeing
+    this exact example), not a bug: avoiding common role words (`infra`,
+    `compute`, `worker`, `master`, `control-plane`, `prod`,
+    `hypershift`) when picking a code or alias is now the operator's job.
+    """
+    catalog = SiteCatalog.from_spec("lon:London,fra:Frankfurt")
+    assert parse_site_code("ocp4-prod-lon-infra-01", catalog) is None
 
 
 def test_the_same_site_repeated_is_not_ambiguous() -> None:
@@ -131,9 +163,14 @@ def test_a_deployment_can_name_its_own_sites() -> None:
 
     assert catalog.codes == ("lon", "fra")
     assert catalog.name_for("lon") == "London"
-    assert parse_site_code("ocp4-prod-lon-infra-01", catalog) == "lon"
+    # Not "-infra-" here on purpose: "fra" is a substring of "infra", and
+    # that specific, real collision has its own dedicated test above
+    # (`test_a_short_code_can_collide_with_infra_and_go_ambiguous`) — this
+    # test's own point is unrelated, so it uses a role word that does not
+    # collide with either configured code.
+    assert parse_site_code("ocp4-prod-lon-worker-01", catalog) == "lon"
     # And the sites it no longer has are no longer recognised.
-    assert parse_site_code("ocp4-prod-tlv-infra-01", catalog) is None
+    assert parse_site_code("ocp4-prod-tlv-worker-01", catalog) is None
 
 
 def test_the_display_half_is_optional() -> None:

@@ -161,3 +161,43 @@ module exists to refuse to guess through. Two different aliases of the
 *same* site appearing in one hostname is not that ambiguity — it resolves
 to that one canonical code, the same as the bare code appearing twice
 already did.
+
+## Update (2026-09-09): substring matching, deliberately, false positives included
+
+Reversed at the operator's explicit request, after being asked twice and
+shown a concrete collision before implementing: a code or alias now also
+matches as a **substring of a single token**, not only a token equal to
+it outright. `ocp4-computezn-01` matches an alias `zn` glued in with no
+separator of its own — the entire reason to add this was that requiring
+a separator (`ocp4-compute-zn-01`) was not the estate's real naming
+convention.
+
+This is a direct reversal of this module's original design, which
+existed specifically to reject `ocp4-tlvx-01` "containing" `tlv` while
+naming no site — see the original "Decision" section's `_VALID_CODE`/
+token-matching reasoning above, now half-superseded. That false-positive
+risk is accepted consciously, not overlooked: the operator chose "every
+code and alias, no distinction" over the narrower "aliases only" option
+offered, after seeing the concrete collision below.
+
+**A multi-token code (`bat-yam`) still never substring-matches** —
+splitting a hostname on separators already removes every `-` from each
+resulting token, so a code that carries its own `-` can never be a
+substring of one. Substring matching only ever fires for single-token
+codes/aliases, which is what short aliases like `zn`/`fn` are anyway.
+
+**A real collision, found before this shipped, not after:** configuring
+a site code or alias that is a substring of `infra` — the role token
+this platform's own examples use everywhere
+(`ocp4-prod-tlv-infra-01`) — makes every `-infra-`-named server
+ambiguous rather than landing on the intended site: `fra` (a plausible
+choice for Frankfurt) sits right inside `infra`, so a hostname carrying
+both `lon` and `-infra-` now "matches" two different sites and gets
+`None`, same as any other ambiguous name. `tests/unit/domain/
+test_site_parsing.py::test_a_short_code_can_collide_with_infra_and_go_ambiguous`
+pins this exact case. Avoiding common role words (`infra`, `compute`,
+`worker`, `master`, `control-plane`, `prod`, `hypershift`) when picking a
+code or alias is now the operator's job — startup validation cannot
+catch this the way it catches an unusable character, because the
+collision depends on every other code/alias configured and on hostnames
+that do not exist yet.
