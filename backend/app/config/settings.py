@@ -425,6 +425,34 @@ class Settings(BaseSettings):
     oneview_name_pattern: str | None = None
     redfish_name_pattern: str | None = None
 
+    # --- OpenShift membership jobs (tools/collect_openshift.py) ---
+    #
+    # These run *inside* each cluster, deployed per-cluster by ArgoCD, and
+    # answer a different question from the vendor collectors: not what
+    # hardware exists, but whether a cluster is using it. They need no
+    # endpoint and no credentials — a pod's own ServiceAccount token
+    # reaches its own API server — so unlike every `ManagerType` above
+    # there is nothing here to resolve through `EnvConnectionResolver`.
+
+    # Which cluster this pod is in. Written onto every server the job
+    # claims, and the scope it is allowed to release: a job frees only
+    # servers already naming *its* cluster, never another's.
+    openshift_cluster_name: str = ""
+
+    # Which MCE this pod is, on a hub. Same role as the cluster name, for
+    # the agents job.
+    openshift_mce_id: str = ""
+
+    # Nodes that do not count as fleet capacity, matched as substrings of
+    # the node name, case-insensitively. Applied *after* the
+    # `node-role.kubernetes.io/worker` label selector, not instead of it:
+    # infra nodes usually carry the worker label too, so the label alone
+    # keeps them, while a name list alone would misfire on a node called
+    # `compute-infra-01`.
+    openshift_exclude_name_parts: str = "infra,control-plane"
+
+    openshift_request_timeout_seconds: float = 30.0
+
     @field_validator("cors_allowed_origins", mode="before")
     @classmethod
     def _split_csv(cls, value: object) -> object:

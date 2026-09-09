@@ -50,6 +50,12 @@ FILTER_FIELDS: dict[str, str] = {
     # `?source_provider=REDFISH_STANDALONE` is what answers "these have
     # no manager — do not look for them in OpenManage or UCS".
     "source_provider": "source_provider",
+    # Whether a cluster holds the server, as the OpenShift jobs report it.
+    # Distinct from `installation_type`, which is what its *name* claims:
+    # `?openshift_state=AVAILABLE` answers "what can I build on", and no
+    # regex over a hostname can.
+    "openshift_state": "openshift.lifecycle_state",
+    "cluster_name": "openshift.cluster_name",
 }
 
 # API sort query-param name -> real Mongo field path. Every value here

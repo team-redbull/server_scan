@@ -11,8 +11,9 @@ import type { LegacyColumnDef } from "@tanstack/react-table/legacy";
 import { Link, useNavigate } from "react-router";
 
 import type { ServerListParams } from "@/api/servers";
+import { InstallationBadge } from "@/components/InstallationBadge";
 import { StateBadge } from "@/components/StateBadge";
-import type { HealthSeverity } from "@/types/server";
+import type { HealthSeverity, OpenShiftState } from "@/types/server";
 import type { ServerSummary } from "@/types/server";
 
 /**
@@ -86,6 +87,27 @@ const columns: LegacyColumnDef<ServerSummary, any>[] = [
       </Link>
     ),
     enableSorting: true,
+  }),
+  columnHelper.accessor((row) => row.openshift.lifecycle_state, {
+    id: "openshift_state",
+    header: "Installation",
+    cell: (info) => {
+      const row = info.row.original;
+      return (
+        // The cluster in the title rather than a second column: it is
+        // what you want *after* spotting a red row, not while scanning,
+        // and a hostname-width column beside Name pushes Model off small
+        // screens.
+        <span title={row.openshift.cluster_name ?? undefined}>
+          <InstallationBadge state={info.getValue<OpenShiftState>()} />
+        </span>
+      );
+    },
+    // Sorting a keyset-paginated list needs a compound index ending
+    // `name_normalized, _id`; `openshift_state_name_id` exists, but
+    // `SORT_FIELDS` does not yet expose it, and offering a sort the API
+    // rejects is worse than not offering one.
+    enableSorting: false,
   }),
   columnHelper.accessor("model", {
     id: "model",

@@ -107,6 +107,9 @@ export interface ServerSummary {
   classification: Classification;
   health: HealthSummary;
   maintenance: MaintenanceState;
+  /** Whether a cluster is using this server, from the OpenShift jobs.
+   * Independent of `classification`, which is what its *name* claims. */
+  openshift: OpenShiftLifecycle;
   connectivity: ConnectivitySummary;
   last_seen_at: string | null;
   updated_at: string;
@@ -343,21 +346,25 @@ export interface ServerFacets {
   health_overall: Record<string, number>;
   /** Keyed `"true"`/`"false"` — JSON object keys cannot be booleans. */
   maintenance: Record<string, number>;
+  openshift_state: Record<string, number>;
 }
 
-/** Which job saw a server and in what role. */
+/** Whether a server is in use, as OpenShift reports it.
+ *
+ * Three states, and *what kind* of node it is comes from
+ * `InstallationType` instead. `AVAILABLE` is the default — a server no
+ * cluster claims — so there is no "nothing reported yet" state. */
 export type OpenShiftState =
-  | "UNKNOWN"
-  | "UPI_NODE"
-  | "HOSTED_NODE"
-  | "AVAILABLE";
+  | "AVAILABLE"
+  | "INSTALLED"
+  | "INSTALLED_TO_INVENTORY";
 
 /**
  * One server's observed OpenShift membership.
  *
  * Read `lifecycle_state` before trusting anything else: `cluster_name` is
- * a UPI cluster on a `UPI_NODE` and a hosted cluster on a `HOSTED_NODE`,
- * and `mce_id` is set only by the MCE job.
+ * set only when a cluster claims the server, and `mce_id` only by the MCE
+ * job.
  */
 export interface OpenShiftLifecycle {
   lifecycle_state: OpenShiftState;

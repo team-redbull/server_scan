@@ -73,7 +73,7 @@ def test_a_hosted_cluster_node_names_its_cluster_and_its_mce() -> None:
     """
     state = openshift_for(_server("ocp4-hypershift-tlv-05"))
 
-    assert state.lifecycle_state is OpenShiftState.HOSTED_NODE
+    assert state.lifecycle_state is OpenShiftState.INSTALLED
     assert state.cluster_name is not None
     assert state.mce_id == "mce-tlv"
 
@@ -86,41 +86,44 @@ def test_a_upi_node_names_a_cluster_but_no_mce() -> None:
         _server("ocp4-prod-tlv-compute-01", installation_type=InstallationType.UPI)
     )
 
-    assert state.lifecycle_state is OpenShiftState.UPI_NODE
+    assert state.lifecycle_state is OpenShiftState.INSTALLED
     assert state.cluster_name == "upi-tlv"
     assert state.mce_id is None
 
 
-def test_an_available_agent_has_an_mce_but_no_cluster() -> None:
-    """`AVAILABLE` means registered and bound to nothing. `cluster_name`
-    stays None: there is no cluster, which is a different claim from a
-    cluster whose name went unread.
+def test_an_agent_in_inventory_has_an_mce_but_no_cluster() -> None:
+    """`INSTALLED_TO_INVENTORY` means registered to an MCE and bound to
+    nothing. `cluster_name` stays None: there is no cluster, which is a
+    different claim from a cluster whose name went unread.
     """
     states = [
         openshift_for(_server(f"random-server-{i:04d}", server_id=f"srv_avail_{i}"))
+        for i in range(40)
+    ]
+    in_inventory = [
+        s for s in states if s.lifecycle_state is OpenShiftState.INSTALLED_TO_INVENTORY
+    ]
+
+    assert in_inventory, "no server came back in inventory across 40 draws"
+    for state in in_inventory:
+        assert state.cluster_name is None
+        assert state.mce_id is not None
+        assert state.agent_id is not None
+
+
+def test_an_unclaimed_server_carries_no_claims_at_all() -> None:
+    """`AVAILABLE` is the default and the only state reached by absence:
+    no cluster holds this machine. Every field stays empty rather than
+    defaulting to something plausible.
+    """
+    states = [
+        openshift_for(_server(f"random-server-{i:04d}", server_id=f"srv_unknown_{i}"))
         for i in range(40)
     ]
     available = [s for s in states if s.lifecycle_state is OpenShiftState.AVAILABLE]
 
     assert available, "no server came back available across 40 draws"
     for state in available:
-        assert state.cluster_name is None
-        assert state.mce_id is not None
-        assert state.agent_id is not None
-
-
-def test_an_unreported_server_carries_no_claims_at_all() -> None:
-    """A machine racked but not yet handed to OpenShift. Every field stays
-    empty rather than defaulting to something plausible.
-    """
-    states = [
-        openshift_for(_server(f"random-server-{i:04d}", server_id=f"srv_unknown_{i}"))
-        for i in range(40)
-    ]
-    unknown = [s for s in states if s.lifecycle_state is OpenShiftState.UNKNOWN]
-
-    assert unknown, "no server came back unreported across 40 draws"
-    for state in unknown:
         assert state.cluster_name is None
         assert state.mce_id is None
         assert state.last_reported_at is None
@@ -147,4 +150,4 @@ def test_membership_is_not_forced_to_agree_with_the_classification() -> None:
     """
     state = openshift_for(_server("ocp4-hypershift-tlv-05"))
 
-    assert state.lifecycle_state is OpenShiftState.HOSTED_NODE
+    assert state.lifecycle_state is OpenShiftState.INSTALLED

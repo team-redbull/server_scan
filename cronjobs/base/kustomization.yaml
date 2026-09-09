@@ -1,0 +1,18 @@
+# Shared pieces. An overlay picks which CronJobs a cluster gets: a UPI
+# cluster takes nodes-cronjob.yaml alone, an MCE hub takes both.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - rbac.yaml
+  - nodes-cronjob.yaml
+  - agents-cronjob.yaml
+
+# Overlays override cluster-name / mce-id. Never committed with a real
+# cluster's values — the base has to be deployable nowhere by itself.
+configMapGenerator:
+  - name: openshift-membership-config
+    literals:
+      - cluster-name=
+      - mce-id=
+      - exclude-name-parts=infra,control-plane

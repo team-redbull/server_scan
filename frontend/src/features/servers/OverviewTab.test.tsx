@@ -117,19 +117,20 @@ describe("OverviewTab maintenance controls", () => {
 });
 
 describe("OverviewTab OpenShift membership", () => {
-  it("shows nothing has reported rather than guessing from the classification", () => {
-    // A regex verdict on the hostname is not proof of cluster membership,
-    // so an unreported server must not borrow its classification here.
+  it("shows a server no cluster holds as available, not as a gap in the data", () => {
+    // AVAILABLE is the default and the only state reached by absence. It
+    // must never borrow the classification, which is a regex verdict on
+    // the hostname rather than proof of anything.
     render(<OverviewTab server={makeServer()} />);
 
-    expect(screen.getByText("Not reported")).toBeInTheDocument();
+    expect(screen.getByText("Available")).toBeInTheDocument();
   });
 
   it("names the hosted cluster and the MCE that reported it", () => {
     const server = makeServer();
     server.openshift = {
       ...server.openshift,
-      lifecycle_state: "HOSTED_NODE",
+      lifecycle_state: "INSTALLED",
       mce_id: "mce-tlv",
       cluster_name: "hc-tlv-02",
       role: "worker",
@@ -137,38 +138,38 @@ describe("OverviewTab OpenShift membership", () => {
 
     render(<OverviewTab server={server} />);
 
-    expect(screen.getByText("Hosted cluster node")).toBeInTheDocument();
+    expect(screen.getByText("Installed")).toBeInTheDocument();
     expect(screen.getByText("hc-tlv-02")).toBeInTheDocument();
     expect(screen.getByText(/mce-tlv/)).toBeInTheDocument();
   });
 
-  it("names the UPI cluster without an MCE, which does not manage one", () => {
+  it("names a plain cluster without an MCE, which does not manage one", () => {
     const server = makeServer();
     server.openshift = {
       ...server.openshift,
-      lifecycle_state: "UPI_NODE",
+      lifecycle_state: "INSTALLED",
       cluster_name: "upi-tlv",
       role: "master",
     };
 
     render(<OverviewTab server={server} />);
 
-    expect(screen.getByText("UPI node")).toBeInTheDocument();
+    expect(screen.getByText("Installed")).toBeInTheDocument();
     expect(screen.getByText("upi-tlv")).toBeInTheDocument();
     expect(screen.queryByText(/MCE /)).not.toBeInTheDocument();
   });
 
-  it("shows an unbound agent as available, with no cluster name", () => {
+  it("shows an unbound agent as held by its MCE, with no cluster name", () => {
     const server = makeServer();
     server.openshift = {
       ...server.openshift,
-      lifecycle_state: "AVAILABLE",
+      lifecycle_state: "INSTALLED_TO_INVENTORY",
       mce_id: "mce-nyc",
     };
 
     render(<OverviewTab server={server} />);
 
-    expect(screen.getByText("Available in MCE")).toBeInTheDocument();
+    expect(screen.getByText("Installed to inventory")).toBeInTheDocument();
     expect(screen.getByText(/mce-nyc/)).toBeInTheDocument();
   });
 
@@ -180,7 +181,7 @@ describe("OverviewTab OpenShift membership", () => {
     server.classification.installation_type = "UNCLASSIFIED";
     server.openshift = {
       ...server.openshift,
-      lifecycle_state: "HOSTED_NODE",
+      lifecycle_state: "INSTALLED",
       cluster_name: "hc-nyc-01",
       mce_id: "mce-nyc",
     };
@@ -188,7 +189,7 @@ describe("OverviewTab OpenShift membership", () => {
     render(<OverviewTab server={server} />);
 
     expect(screen.getByText("UNCLASSIFIED")).toBeInTheDocument();
-    expect(screen.getByText("Hosted cluster node")).toBeInTheDocument();
+    expect(screen.getByText("Installed")).toBeInTheDocument();
   });
 });
 

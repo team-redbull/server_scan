@@ -26,6 +26,19 @@ function makeServer(overrides: Partial<ServerSummary> = {}): ServerSummary {
       power: "HEALTHY",
     },
     maintenance: { enabled: false, reason: null },
+    openshift: {
+      lifecycle_state: "INSTALLED",
+      mce_id: null,
+      cluster_name: "ocp4-tlv",
+      cluster_id: null,
+      role: "worker",
+      node_name: "ocp-dell-worker-001",
+      bmh_name: null,
+      agent_id: null,
+      boot_mac: null,
+      last_reported_at: "2026-08-12T10:00:00Z",
+      reported_by_agent_id: "ocp4-tlv",
+    },
     connectivity: {
       facts: {
         fabric_paths_total: 2,
@@ -126,6 +139,7 @@ const FACETS_RESPONSE = {
   installation_type: { UPI: 2 },
   health_overall: { HEALTHY: 2 },
   maintenance: { false: 2 },
+  openshift_state: { INSTALLED: 1, AVAILABLE: 1 },
 };
 
 describe("InventoryPage", () => {

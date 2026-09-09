@@ -73,6 +73,11 @@ class ServerSummary(BaseModel):
     classification: Classification
     health: Health
     maintenance: Maintenance
+    # The whole sub-model rather than `lifecycle_state` alone: the
+    # inventory's Installation column shows the state, and a row's title
+    # attribute shows the cluster holding it, so trimming this to one
+    # field would need a second request to answer "which cluster".
+    openshift: OpenShiftLifecycle
     connectivity: ConnectivitySummary
     last_seen_at: datetime | None
     updated_at: datetime
@@ -99,6 +104,7 @@ class ServerSummary(BaseModel):
             classification=server.classification,
             health=server.health,
             maintenance=server.maintenance,
+            openshift=server.openshift,
             connectivity=ConnectivitySummary(facts=server.connectivity.facts),
             last_seen_at=server.last_seen_at,
             updated_at=server.updated_at,
@@ -244,6 +250,7 @@ class ServerFacets(BaseModel):
     installation_type: dict[str, int] = Field(default_factory=dict)
     health_overall: dict[str, int] = Field(default_factory=dict)
     maintenance: dict[str, int] = Field(default_factory=dict)
+    openshift_state: dict[str, int] = Field(default_factory=dict)
 
     @classmethod
     def from_rows(cls, rows: Iterable[FacetRow]) -> ServerFacets:
@@ -263,6 +270,7 @@ class ServerFacets(BaseModel):
             "installation_type": Counter(),
             "health_overall": Counter(),
             "maintenance": Counter(),
+            "openshift_state": Counter(),
         }
         total = 0
         for row in rows:
@@ -273,6 +281,7 @@ class ServerFacets(BaseModel):
                 ("installation_type", row.installation_type),
                 ("health_overall", row.health_overall),
                 ("maintenance", "true" if row.maintenance else "false"),
+                ("openshift_state", row.openshift_state),
             ):
                 # A `None` is a server the field was never set on. It is
                 # counted in `total` but named by no option, because there
@@ -286,4 +295,5 @@ class ServerFacets(BaseModel):
             installation_type=dict(totals["installation_type"]),
             health_overall=dict(totals["health_overall"]),
             maintenance=dict(totals["maintenance"]),
+            openshift_state=dict(totals["openshift_state"]),
         )

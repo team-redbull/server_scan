@@ -75,7 +75,7 @@ class InstallationType(StrEnum):
 
 class OpenShiftState(StrEnum):
     """
-    What OpenShift observed about a server, as opposed to what its name suggests.
+    Whether a server is in use, as OpenShift reports it.
 
     Deliberately parallel to `InstallationType` and deliberately not the
     same thing. `InstallationType` is a regex verdict on a hostname, which
@@ -83,20 +83,31 @@ class OpenShiftState(StrEnum):
     actually holds. When they disagree the server is misnamed or
     misplaced, and that is worth seeing rather than reconciling away — see
     `app.domain.models.openshift`.
+
+    Three states, not four: this answers "is it in use", and *what kind*
+    of node it is comes from `InstallationType`. An earlier shape encoded
+    the kind here too (`UPI_NODE`/`HOSTED_NODE`), which made the same fact
+    answerable two ways and left no single value the inventory could
+    filter on.
     """
 
-    UNKNOWN = "UNKNOWN"
-    """Nothing has reported on this server yet. The shipped default."""
-
-    UPI_NODE = "UPI_NODE"
-    """A node in a UPI cluster, seen in that cluster's own node list."""
-
-    HOSTED_NODE = "HOSTED_NODE"
-    """An Agent bound to a hosted cluster, seen on an MCE."""
-
     AVAILABLE = "AVAILABLE"
-    """An Agent registered to an MCE and bound to nothing — spare
-    capacity that cluster creation can draw on."""
+    """No cluster claims this server — free to take.
+
+    The **default**, and the only state reached by absence rather than by
+    observation. A server is available the moment it is ingested, and
+    returns here when the cluster that claimed it stops listing it. There
+    is deliberately no "nobody looked yet" state: it would be
+    indistinguishable from this one in every place it is displayed, and
+    every server has to answer the in-use question somehow."""
+
+    INSTALLED = "INSTALLED"
+    """In use: a node in a cluster, or an Agent bound to a hosted cluster."""
+
+    INSTALLED_TO_INVENTORY = "INSTALLED_TO_INVENTORY"
+    """Registered to an MCE and bound to no cluster — spare capacity that
+    cluster creation can draw on. Distinct from `AVAILABLE`: an MCE holds
+    this server and can deploy it without anyone racking anything."""
 
 
 class HealthSeverity(StrEnum):

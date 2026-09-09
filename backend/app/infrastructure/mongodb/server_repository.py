@@ -67,6 +67,7 @@ class FacetRow:
         installation_type (str | None): `classification.installation_type`.
         health_overall (str | None): `health.overall`.
         maintenance (bool): Whether maintenance is enabled.
+        openshift_state (str | None): `openshift.lifecycle_state`.
         count (int): How many servers.
     """
 
@@ -75,6 +76,7 @@ class FacetRow:
     installation_type: str | None
     health_overall: str | None
     maintenance: bool
+    openshift_state: str | None
     count: int
 
 
@@ -294,12 +296,13 @@ class MongoServerRepository:
         A single `$group` over a composite key rather than a `$facet` with
         one sub-pipeline per dimension, for the same reason
         `site_breakdown` uses one: the key's cardinality is bounded by the
-        enums and not by the estate — 4 vendors x 5 collectors x 3
-        installation types x 5 severities x 2 maintenance states, so 600
-        small rows at absolute worst — and each dimension's counts are the
-        marginals the caller sums out of them. The alternative is a
-        `count_documents` per option, which is one round trip per number
-        on the screen.
+        enums and not by the estate — 4 vendors x 5 collectors x 4
+        installation types x 6 severities x 2 maintenance states x 3
+        OpenShift states, so about 5,700 small rows at absolute worst, and
+        in practice a tiny fraction of that since most combinations never
+        occur — and each dimension's counts are the marginals the caller
+        sums out of them. The alternative is a `count_documents` per
+        option, which is one round trip per number on the screen.
 
         `site_id` is deliberately not part of the key. It is a filter an
         operator has usually already applied by the time they want these
@@ -332,6 +335,7 @@ class MongoServerRepository:
                         "installation_type": "$classification.installation_type",
                         "health_overall": "$health.overall",
                         "maintenance": "$maintenance.enabled",
+                        "openshift_state": "$openshift.lifecycle_state",
                     },
                     "count": {"$sum": 1},
                 }
@@ -348,6 +352,7 @@ class MongoServerRepository:
                     installation_type=key.get("installation_type"),
                     health_overall=key.get("health_overall"),
                     maintenance=bool(key.get("maintenance")),
+                    openshift_state=key.get("openshift_state"),
                     count=int(doc["count"]),
                 )
             )

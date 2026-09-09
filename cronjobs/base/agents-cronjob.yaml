@@ -1,0 +1,75 @@
+# MCE hubs only: report the Agents this hub holds.
+#
+# An Agent bound to a hosted cluster is INSTALLED and names that cluster;
+# one bound to nothing is INSTALLED_TO_INVENTORY — the spare pool cluster
+# creation draws on. Servers this hub no longer lists are released, and
+# only servers already naming THIS MCE are in scope. See ../README.md.
+#
+# Deploy alongside openshift-nodes on a hub: this covers the fleet the
+# MCE manages, that one covers the hub's own hardware.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: openshift-agents
+  labels:
+    app.kubernetes.io/name: openshift-agents
+    app.kubernetes.io/component: membership
+    app.kubernetes.io/part-of: server-inventory
+spec:
+  schedule: "*/15 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 5
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 600
+      template:
+        spec:
+          restartPolicy: Never
+          serviceAccountName: openshift-membership
+          automountServiceAccountToken: true
+          containers:
+            - name: membership
+              image: ghcr.io/team-redbull/server_scan-api:latest
+              imagePullPolicy: IfNotPresent
+              command:
+                - python3
+                - -m
+                - tools.collect_openshift
+                - --source
+                - agents
+              env:
+                - name: INVENTORY_ENVIRONMENT
+                  value: production
+                # Which MCE this is. Written onto every server it holds,
+                # and the scope it is allowed to release.
+                - name: INVENTORY_OPENSHIFT_MCE_ID
+                  valueFrom:
+                    configMapKeyRef:
+                      name: openshift-membership-config
+                      key: mce-id
+                - name: INVENTORY_MONGO_URI
+                  valueFrom:
+                    secretKeyRef:
+                      name: server-inventory-db
+                      key: mongo-uri
+                - name: INVENTORY_CURSOR_SECRET
+                  valueFrom:
+                    secretKeyRef:
+                      name: server-inventory-cursor
+                      key: cursor-secret
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 128Mi
+                limits:
+                  memory: 256Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: ["ALL"]
+                readOnlyRootFilesystem: true
+                runAsNonRoot: true
+                seccompProfile:
+                  type: RuntimeDefault

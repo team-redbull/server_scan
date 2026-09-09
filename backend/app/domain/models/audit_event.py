@@ -56,6 +56,11 @@ class EventType(StrEnum):
     # rather than overloading DISABLED to mean two different things.
     HEALTH_POLICY_DELETED = "HEALTH_POLICY_DELETED"
     HEALTH_STATUS_CHANGED = "HEALTH_STATUS_CHANGED"
+    # A cluster claimed or released a server. Recorded on transition only,
+    # like CLASSIFICATION_CHANGED: the OpenShift jobs run every 15 minutes
+    # over the whole fleet, so an event per observation would be noise
+    # measured in millions, and the only interesting moment is the change.
+    OPENSHIFT_STATE_CHANGED = "OPENSHIFT_STATE_CHANGED"
     MAINTENANCE_ENABLED = "MAINTENANCE_ENABLED"
     MAINTENANCE_UPDATED = "MAINTENANCE_UPDATED"
     MAINTENANCE_DISABLED = "MAINTENANCE_DISABLED"

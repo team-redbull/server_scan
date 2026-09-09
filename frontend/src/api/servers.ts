@@ -14,6 +14,10 @@ export interface ServerListParams {
   manager_id?: string;
   source_provider?: string;
   installation_type?: string;
+  /** `openshift.lifecycle_state` — whether a cluster is using the server,
+   * as distinct from what its name says it is. */
+  openshift_state?: string;
+  cluster_name?: string;
   health_overall?: string;
   maintenance?: boolean;
   sort?: "name" | "serial" | "model" | "updated_at" | "last_seen_at";

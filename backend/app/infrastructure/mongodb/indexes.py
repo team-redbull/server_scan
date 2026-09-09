@@ -134,6 +134,34 @@ SERVER_INDEXES: list[IndexModel] = [
         name="vendor_name_id",
     ),
     IndexModel(
+        [
+            ("openshift.lifecycle_state", ASCENDING),
+            ("name_normalized", ASCENDING),
+            ("_id", ASCENDING),
+        ],
+        name="openshift_state_name_id",
+    ),
+    # Also the OpenShift jobs' own working set: each run reads every
+    # server naming its cluster, to free the ones the cluster stopped
+    # listing. Without this that is a collection scan every 15 minutes,
+    # from every cluster at once.
+    IndexModel(
+        [
+            ("openshift.cluster_name", ASCENDING),
+            ("name_normalized", ASCENDING),
+            ("_id", ASCENDING),
+        ],
+        name="openshift_cluster_name_id",
+    ),
+    IndexModel(
+        [
+            ("openshift.mce_id", ASCENDING),
+            ("name_normalized", ASCENDING),
+            ("_id", ASCENDING),
+        ],
+        name="openshift_mce_name_id",
+    ),
+    IndexModel(
         [("maintenance.enabled", ASCENDING), ("name_normalized", ASCENDING), ("_id", ASCENDING)],
         name="maintenance_enabled_name_id",
     ),

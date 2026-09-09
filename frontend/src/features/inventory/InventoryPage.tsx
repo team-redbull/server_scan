@@ -11,6 +11,16 @@ import { useSitesQuery } from "@/features/sites/hooks";
 import { useDebouncedValue } from "@/lib/useDebouncedValue";
 
 const INSTALLATION_TYPES = ["HOSTED_CLUSTER", "MCE", "UPI", "UNCLASSIFIED"] as const;
+// Whether a cluster is using the server, from the OpenShift jobs — a
+// different question from `INSTALLATION_TYPES` above, which is a regex
+// verdict on the hostname. Labelled here rather than reusing the enum
+// values: "INSTALLED_TO_INVENTORY" in a dropdown is not a phrase anyone
+// says out loud.
+const OPENSHIFT_STATES = [
+  { value: "INSTALLED", label: "Installed" },
+  { value: "INSTALLED_TO_INVENTORY", label: "In inventory" },
+  { value: "AVAILABLE", label: "Available" },
+] as const;
 const HEALTH_SEVERITIES = [
   "UNKNOWN",
   "HEALTHY",
@@ -64,6 +74,7 @@ export function InventoryPage() {
   const vendor = searchParams.get("vendor") ?? "";
   const siteId = searchParams.get("site_id") ?? "";
   const installationType = searchParams.get("installation_type") ?? "";
+  const openshiftState = searchParams.get("openshift_state") ?? "";
   const healthOverall = searchParams.get("health_overall") ?? "";
   const sourceProvider = searchParams.get("source_provider") ?? "";
   const maintenanceOnly = searchParams.get("maintenance") === "true";
@@ -93,6 +104,7 @@ export function InventoryPage() {
     if (siteId) params.site_id = siteId;
     if (sourceProvider) params.source_provider = sourceProvider;
     if (installationType) params.installation_type = installationType;
+    if (openshiftState) params.openshift_state = openshiftState;
     if (healthOverall) params.health_overall = healthOverall;
     if (maintenanceOnly) params.maintenance = true;
     return params;
@@ -102,6 +114,7 @@ export function InventoryPage() {
     siteId,
     sourceProvider,
     installationType,
+    openshiftState,
     healthOverall,
     maintenanceOnly,
   ]);
@@ -221,6 +234,14 @@ export function InventoryPage() {
     });
   }
   if (installationType) activeFilters.push({ key: "installation_type", label: `Classification ${installationType}` });
+  if (openshiftState) {
+    activeFilters.push({
+      key: "openshift_state",
+      label: `Installation ${
+        OPENSHIFT_STATES.find((s) => s.value === openshiftState)?.label ?? openshiftState
+      }`,
+    });
+  }
   if (healthOverall) activeFilters.push({ key: "health_overall", label: `Health ${healthOverall}` });
   if (maintenanceOnly) activeFilters.push({ key: "maintenance", label: "Maintenance only" });
 
@@ -231,6 +252,7 @@ export function InventoryPage() {
       site_id: null,
       source_provider: null,
       installation_type: null,
+      openshift_state: null,
       health_overall: null,
       maintenance: null,
     });
@@ -345,6 +367,25 @@ export function InventoryPage() {
             {INSTALLATION_TYPES.map((t) => (
               <option key={t} value={t}>
                 {withCount(t, facets?.installation_type, t, installationType !== "")}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className="flex flex-col text-xs font-medium text-[var(--text-secondary)]">
+          <label htmlFor="filter-installation">Installation</label>
+          <select
+            id="filter-installation"
+            value={openshiftState}
+            onChange={(e) => {
+              updateFilters({ openshift_state: e.target.value });
+            }}
+            className={FIELD_CLASS}
+          >
+            <option value="">All{facets ? ` (${facets.total})` : ""}</option>
+            {OPENSHIFT_STATES.map((s) => (
+              <option key={s.value} value={s.value}>
+                {withCount(s.label, facets?.openshift_state, s.value, openshiftState !== "")}
               </option>
             ))}
           </select>
