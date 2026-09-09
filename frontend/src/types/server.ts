@@ -149,6 +149,11 @@ export interface MemoryModule {
   /** `MemoryModule.speed_mhz` on the backend. This was declared
    * `speed_mts` here and matched no field the API has ever sent. */
   speed_mhz: number | null;
+  health: ComponentHealth;
+  /** The raw vendor string `health` was reduced from — e.g. "self-test-failed"
+   * for a drive read as CRITICAL, or "inoperable" for a PSU read as DOWN.
+   * Never read by the health policy engine; diagnosis only. */
+  health_detail: string | null;
 }
 
 export interface MemoryInfo {
@@ -173,6 +178,7 @@ export interface StorageDrive {
   media_type: string;
   capacity_bytes: number | null;
   health: ComponentHealth;
+  health_detail: string | null;
 }
 
 export interface StorageInfo {
@@ -186,6 +192,7 @@ export interface GpuInfo {
   serial: string | null;
   memory_bytes: number | null;
   health: ComponentHealth;
+  health_detail: string | null;
   pci_address: string | null;
   firmware_version: string | null;
   memory_type: string | null;
@@ -201,6 +208,7 @@ export interface PsuInfo {
   model: string | null;
   serial: string | null;
   health: ComponentHealth;
+  health_detail: string | null;
   capacity_watts: number | null;
 }
 

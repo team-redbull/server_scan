@@ -67,51 +67,55 @@ export function HardwareTab({
 
       <section>
         <h2 className="text-sm font-semibold uppercase tracking-wide text-gray-500">Storage</h2>
+        {/* Total first, exactly like Memory above it, and on its own —
+         * decoupled from whether per-drive detail is available at all.
+         * It used to be nested inside the drives block, so a real,
+         * nonzero total was hidden behind "No storage data." whenever
+         * `drives` alone was empty or unread, even though the total
+         * itself had nothing wrong with it. */}
+        <Reported
+          unread={unread.has("hardware.storage.total_bytes")}
+          empty={!storage || storage.total_bytes <= 0}
+        >
+          {storage ? (
+            <p className="mt-2 text-sm">{formatBytes(storage.total_bytes)} total</p>
+          ) : (
+            <p className="mt-2 text-sm text-gray-500">No storage data.</p>
+          )}
+        </Reported>
         <Reported
           unread={unread.has("hardware.storage.drives")}
           empty={!storage || storage.drives.length === 0}
         >
           {storage && storage.drives.length > 0 ? (
-            <>
-              <table className="mt-2 min-w-full divide-y divide-gray-200 text-sm dark:divide-gray-700">
-                <thead>
-                  <tr className="text-left text-gray-500">
-                    <th className="py-1 pr-4">Model</th>
-                    <th className="py-1 pr-4">Serial</th>
-                    <th className="py-1 pr-4">Media</th>
-                    <th className="py-1 pr-4">Capacity</th>
-                    <th className="py-1 pr-4">Health</th>
+            <table className="mt-2 min-w-full divide-y divide-gray-200 text-sm dark:divide-gray-700">
+              <thead>
+                <tr className="text-left text-gray-500">
+                  <th className="py-1 pr-4">Model</th>
+                  <th className="py-1 pr-4">Serial</th>
+                  <th className="py-1 pr-4">Media</th>
+                  <th className="py-1 pr-4">Capacity</th>
+                  <th className="py-1 pr-4">Health</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
+                {storage.drives.map((drive) => (
+                  <tr key={drive.id}>
+                    <td className="py-1 pr-4">{drive.model ?? "—"}</td>
+                    <td className="py-1 pr-4">{drive.serial ?? "—"}</td>
+                    <td className="py-1 pr-4">{drive.media_type}</td>
+                    <td className="py-1 pr-4">
+                      {drive.capacity_bytes != null ? formatBytes(drive.capacity_bytes) : "—"}
+                    </td>
+                    <td className="py-1 pr-4">
+                      <Health value={drive.health} detail={drive.health_detail} />
+                    </td>
                   </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
-                  {storage.drives.map((drive) => (
-                    <tr key={drive.id}>
-                      <td className="py-1 pr-4">{drive.model ?? "—"}</td>
-                      <td className="py-1 pr-4">{drive.serial ?? "—"}</td>
-                      <td className="py-1 pr-4">{drive.media_type}</td>
-                      <td className="py-1 pr-4">
-                        {drive.capacity_bytes != null ? formatBytes(drive.capacity_bytes) : "—"}
-                      </td>
-                      <td className="py-1 pr-4">
-                        <Health value={drive.health} />
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              <p className="mt-2 text-xs text-gray-500">
-                Total:{" "}
-                <Reported
-                  inline
-                  unread={unread.has("hardware.storage.total_bytes")}
-                  empty={storage.total_bytes <= 0}
-                >
-                  {formatBytes(storage.total_bytes)}
-                </Reported>
-              </p>
-            </>
+                ))}
+              </tbody>
+            </table>
           ) : (
-            <p className="mt-2 text-sm text-gray-500">No storage data.</p>
+            <p className="mt-2 text-sm text-gray-500">No per-drive detail.</p>
           )}
         </Reported>
       </section>
@@ -162,7 +166,7 @@ export function HardwareTab({
                         {gpu.power_watts != null ? `${gpu.power_watts.toFixed(0)}W` : "—"}
                       </td>
                       <td className="py-1 pr-4">
-                        <Health value={gpu.health} />
+                        <Health value={gpu.health} detail={gpu.health_detail} />
                       </td>
                       <td className="py-1 pr-4">{gpu.firmware_version ?? "—"}</td>
                     </tr>
@@ -188,7 +192,7 @@ export function HardwareTab({
                 <li key={psu.id || `psu-${index}`}>
                   {psu.model ?? psu.id ?? "—"}
                   {psu.capacity_watts != null ? ` — ${psu.capacity_watts}W` : ""}{" "}
-                  <Health value={psu.health} />
+                  <Health value={psu.health} detail={psu.health_detail} />
                 </li>
               ))}
             </ul>
@@ -207,11 +211,19 @@ export function HardwareTab({
  * (Cisco reports UP/DOWN here, not HEALTHY/CRITICAL), and dashed when the
  * collector read nothing at all.
  */
-function Health({ value }: { value: ComponentHealth }) {
+function Health({ value, detail }: { value: ComponentHealth; detail?: string | null }) {
   if (value == null) {
     return <>—</>;
   }
-  return isHealthSeverity(value) ? <HealthBadge severity={value} /> : <>{value}</>;
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      {isHealthSeverity(value) ? <HealthBadge severity={value} /> : <>{value}</>}
+      {/* The raw vendor reason `value` was reduced from — e.g. "self-test-failed"
+       * for a drive read as CRITICAL. Diagnosis only; the badge above is
+       * still the authoritative severity. */}
+      {detail && <span className="text-xs text-gray-500">({detail})</span>}
+    </span>
+  );
 }
 
 function Stat({

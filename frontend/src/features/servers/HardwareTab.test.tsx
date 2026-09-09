@@ -22,11 +22,14 @@ describe("HardwareTab unread fields", () => {
   it("says 'Not reported' rather than showing the zero a collector never read", () => {
     render(<HardwareTab hardware={ilo4Hardware()} unreadFields={UNREAD} />);
 
-    // Storage and GPU both unread — two blocks, not one.
-    expect(screen.getAllByText("Not reported")).toHaveLength(2);
+    // Storage total, storage drives and GPU are each their own block —
+    // three, not two: total and drives are unread independently of each
+    // other (2026-09-09), matching Memory's total being independent of
+    // its own module list.
+    expect(screen.getAllByText("Not reported")).toHaveLength(3);
     // The zero must not be presented as a reading anywhere.
     expect(screen.queryByText(/No storage data/)).not.toBeInTheDocument();
-    expect(screen.queryByText(/Total: 0 B/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/0 B total/)).not.toBeInTheDocument();
 
     // Fields the same run *did* read stay untouched.
     expect(screen.getByText("Xeon E5-2690 v4")).toBeInTheDocument();
@@ -45,6 +48,7 @@ describe("HardwareTab unread fields", () => {
           media_type: "SSD",
           capacity_bytes: 2 * 1024 ** 4,
           health: "HEALTHY",
+          health_detail: null,
         },
       ],
     };
@@ -65,7 +69,12 @@ describe("HardwareTab unread fields", () => {
   it("renders unchanged when nothing was unread", () => {
     render(<HardwareTab hardware={ilo4Hardware()} />);
     expect(screen.queryByText("Not reported")).not.toBeInTheDocument();
-    expect(screen.getByText("No storage data.")).toBeInTheDocument();
+    // A confirmed-read zero total is a real reading, same as Memory's own
+    // "0 B total" would be — it renders plainly rather than as
+    // "No storage data.", which is reserved for the per-drive block
+    // genuinely having nothing.
+    expect(screen.getByText(/0 B total/)).toBeInTheDocument();
+    expect(screen.getByText("No per-drive detail.")).toBeInTheDocument();
     expect(screen.getByText("No GPUs.")).toBeInTheDocument();
   });
 });
@@ -85,6 +94,7 @@ describe("a GPU field the provider could not read", () => {
         serial: null,
         memory_bytes: null,
         health: null,
+        health_detail: null,
         pci_address: null,
         firmware_version: null,
         memory_type: null,
@@ -121,6 +131,7 @@ describe("a drive, PSU or GPU the collector reported partially", () => {
           media_type: "UNKNOWN",
           capacity_bytes: null,
           health: null,
+          health_detail: null,
         },
       ],
     };
@@ -138,8 +149,22 @@ describe("a drive, PSU or GPU the collector reported partially", () => {
     const hardware = ilo4Hardware();
     hardware.power = {
       psus: [
-        { id: "PSU1", model: "800W Platinum", serial: "PSU123", health: "UP", capacity_watts: 800 },
-        { id: "PSU2", model: null, serial: null, health: null, capacity_watts: null },
+        {
+          id: "PSU1",
+          model: "800W Platinum",
+          serial: "PSU123",
+          health: "UP",
+          health_detail: null,
+          capacity_watts: 800,
+        },
+        {
+          id: "PSU2",
+          model: null,
+          serial: null,
+          health: null,
+          health_detail: null,
+          capacity_watts: null,
+        },
       ],
     };
 
@@ -162,6 +187,7 @@ describe("a drive, PSU or GPU the collector reported partially", () => {
         serial: null,
         memory_bytes: null,
         health: "UP",
+        health_detail: null,
         pci_address: null,
         firmware_version: null,
         memory_type: null,
@@ -179,5 +205,123 @@ describe("a drive, PSU or GPU the collector reported partially", () => {
     // badge, whose colour table has no "UP" key.
     expect(screen.getByText(/UP/)).toBeInTheDocument();
     expect(screen.queryByText("UP", { selector: "span.rounded-full" })).not.toBeInTheDocument();
+  });
+});
+
+describe("Storage's total, independent of per-drive detail", () => {
+  it("shows a real total even when the drive list is empty", () => {
+    // The bug this fixes: the total used to live *inside* the same
+    // Reported block as the drives table, so a real, nonzero total was
+    // hidden behind "No storage data." whenever drives alone came back
+    // empty — exactly the OME/OpenManage shape where a bulk total is
+    // known before any per-drive detail is.
+    const hardware = ilo4Hardware();
+    hardware.storage = { total_bytes: 4 * 1024 ** 4, drives: [] };
+
+    render(<HardwareTab hardware={hardware} unreadFields={[]} />);
+
+    expect(screen.getByText(/4.0 TB total/)).toBeInTheDocument();
+    expect(screen.getByText("No per-drive detail.")).toBeInTheDocument();
+    expect(screen.queryByText(/No storage data/)).not.toBeInTheDocument();
+  });
+
+  it("still shows the total when only the drive list is unread", () => {
+    const hardware = ilo4Hardware();
+    hardware.storage = { total_bytes: 4 * 1024 ** 4, drives: [] };
+
+    render(
+      <HardwareTab hardware={hardware} unreadFields={["hardware.storage.drives"]} />,
+    );
+
+    expect(screen.getByText(/4.0 TB total/)).toBeInTheDocument();
+    expect(screen.getByText("Not reported")).toBeInTheDocument();
+  });
+});
+
+describe("a component's health reason, alongside its severity", () => {
+  it("shows a drive's raw health_detail next to its health badge", () => {
+    const hardware = ilo4Hardware();
+    hardware.storage = {
+      total_bytes: 4 * 1024 ** 4,
+      drives: [
+        {
+          id: "d1",
+          model: "MZ7LH3T8",
+          serial: "DRIVE-1",
+          media_type: "SSD",
+          capacity_bytes: 4 * 1024 ** 4,
+          health: "CRITICAL",
+          health_detail: "self-test-failed",
+        },
+      ],
+    };
+
+    render(<HardwareTab hardware={hardware} unreadFields={[]} />);
+
+    expect(screen.getByText("(self-test-failed)")).toBeInTheDocument();
+  });
+
+  it("shows nothing extra when there is no reason to show", () => {
+    const hardware = ilo4Hardware();
+    hardware.storage = {
+      total_bytes: 4 * 1024 ** 4,
+      drives: [
+        {
+          id: "d1",
+          model: "MZ7LH3T8",
+          serial: "DRIVE-1",
+          media_type: "SSD",
+          capacity_bytes: 4 * 1024 ** 4,
+          health: "HEALTHY",
+          health_detail: null,
+        },
+      ],
+    };
+
+    render(<HardwareTab hardware={hardware} unreadFields={[]} />);
+
+    // Scoped to the drive's own row: Memory's own "(0 modules)" text
+    // elsewhere on the page would otherwise false-match a broader query.
+    const row = screen.getByText("MZ7LH3T8").closest("tr") as HTMLElement;
+    expect(within(row).queryByText(/\(.*\)/)).not.toBeInTheDocument();
+  });
+
+  it("shows a PSU's and a GPU's own reason the same way", () => {
+    const hardware = ilo4Hardware();
+    hardware.power = {
+      psus: [
+        {
+          id: "PSU1",
+          model: "800W Platinum",
+          serial: "PSU123",
+          health: "DOWN",
+          health_detail: "inoperable",
+          capacity_watts: 800,
+        },
+      ],
+    };
+    hardware.gpus = [
+      {
+        vendor: "NVIDIA",
+        model: "A100",
+        serial: null,
+        memory_bytes: null,
+        health: "CRITICAL",
+        health_detail: "Critical",
+        pci_address: null,
+        firmware_version: null,
+        memory_type: null,
+        ecc_mode_enabled: null,
+        correctable_error_count: null,
+        uncorrectable_error_count: null,
+        temperature_celsius: null,
+        power_watts: null,
+      },
+    ];
+
+    render(<HardwareTab hardware={hardware} unreadFields={[]} />);
+
+    expect(screen.getByText("(inoperable)")).toBeInTheDocument();
+    expect(screen.getByText("(Critical)")).toBeInTheDocument();
   });
 });
