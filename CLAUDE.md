@@ -629,6 +629,24 @@ non-obvious enough to bite you.
   cluster, not beside the API. `deploy/helm/server-inventory` is still
   the platform itself. A kustomize `cronjobs/` tree used to hold this and
   is deleted; don't resurrect it.
+- **A change that is correct on a fresh database is not automatically
+  correct on an existing one**, and this bit three times on 2026-09-10
+  alone: a narrowed enum whose old values no longer decoded, an index
+  rename that left the old unique constraint enforcing, and a nullable
+  sort field. Every one shipped green because every test ran against a
+  database the new code had just created. **Before shipping a stored-shape
+  change, write the old shape into a real database and read it back.**
+  `docs/adr/0026-nullable-sort-fields.md` has the rule and the two
+  mechanisms that now exist for it: `OpenShiftLifecycle`'s
+  `mode="before"` validator, and `indexes.RETIRED_INDEXES` — **renaming or
+  removing an index means adding its old name to that list**, or a
+  deployed database keeps enforcing the old one forever.
+- **Sorting on a nullable field needs the null-aware cursor**
+  (ADR-0026). Mongo's `$gt`/`$lt` are type-bracketed: `{$gt: null}`
+  matches *nothing* and `{$lt: "abc"}` skips every null, while the sort
+  itself orders nulls before strings. A naive keyset clause therefore
+  drops rows silently — no error, just a short page. `cluster_name` and
+  `mce_name` are the two fields this applies to today.
 - **Search tokens are word-boundary suffixes, not bare parts**
   (`docs/adr/0025-search-tokens-are-word-boundary-suffixes.md`). That is
   what lets an *anchored* `^` query find `cisco-m6` inside

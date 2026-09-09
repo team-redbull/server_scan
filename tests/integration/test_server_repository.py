@@ -242,9 +242,8 @@ async def test_sorting_by_openshift_state_pages_without_gaps(
 ) -> None:
     """A new sort field is only safe once a keyset walk over it is proven.
 
-    `SORT_FIELDS`, `SORT_ACCESSORS` and the compound index have to agree,
-    and a mismatch shows up as a silently skipped or repeated server
-    rather than an error.
+    A `SORT_FIELDS`/`SORT_ACCESSORS`/index mismatch shows up as a skipped
+    or repeated server, never as an error.
     """
     repo = MongoServerRepository(mongo_holder, cursor_secret=_CURSOR_SECRET)
     states = [
@@ -279,6 +278,46 @@ async def test_sorting_by_openshift_state_pages_without_gaps(
 
         assert len(seen) == len(set(seen)) == 12
         assert order == sorted(order, reverse=descending)
+
+
+async def test_sorting_by_a_nullable_field_pages_without_gaps(
+    mongo_holder: MongoClientHolder,
+) -> None:
+    """Mongo's range operators are type-bracketed, which silently drops rows.
+
+    A naive cursor strands every server no cluster holds (ADR-0026).
+    """
+    repo = MongoServerRepository(mongo_holder, cursor_secret=_CURSOR_SECRET)
+    clusters = ["ocp4-tlv", None, "ocp4-nyc", None, "hc-tlv-01"]
+    for index in range(15):
+        server = _make_server(index)
+        server.openshift = OpenShiftLifecycle(cluster_name=clusters[index % 5])
+        await repo.upsert(server)
+
+    for descending in (False, True):
+        seen: list[str] = []
+        order: list[str | None] = []
+        cursor: str | None = None
+        while True:
+            page = await repo.list_page(
+                filters={},
+                search=None,
+                sort="cluster_name",
+                sort_desc=descending,
+                cursor=cursor,
+                page_size=4,
+                with_count=False,
+            )
+            seen.extend(item.id for item in page.items)
+            order.extend(item.openshift.cluster_name for item in page.items)
+            if not page.has_more or page.next_cursor is None:
+                break
+            cursor = page.next_cursor
+
+        assert len(seen) == len(set(seen)) == 15
+        # Nulls sort before every string ascending, after them descending.
+        ranked = [(value is not None, value or "") for value in order]
+        assert ranked == sorted(ranked, reverse=descending)
 
 
 async def test_unknown_sort_field_raises(mongo_holder: MongoClientHolder) -> None:

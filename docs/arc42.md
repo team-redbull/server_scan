@@ -404,6 +404,7 @@ of it.
 | 0023 | `ServerInventoryProvider` becomes an ABC with a `collect()` template method |
 | 0024 | Cluster membership is reported by the clusters, per cluster, as a reconcile |
 | 0025 | Search tokens are word-boundary suffixes, so an anchored query finds mid-name fragments |
+| 0026 | Nullable sort fields need a null-aware cursor; retired indexes are dropped automatically |
 
 ---
 

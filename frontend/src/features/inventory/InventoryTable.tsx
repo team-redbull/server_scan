@@ -104,7 +104,7 @@ function buildColumns(withMce: boolean): LegacyColumnDef<ServerSummary, any>[] {
           cell: (info) => (
             <span className="text-[var(--text-secondary)]">{info.getValue() || "—"}</span>
           ),
-          enableSorting: false,
+          enableSorting: true,
         }),
       ]
     : []),
@@ -114,7 +114,9 @@ function buildColumns(withMce: boolean): LegacyColumnDef<ServerSummary, any>[] {
     cell: (info) => (
       <span className="text-[var(--text-secondary)]">{info.getValue() || "—"}</span>
     ),
-    enableSorting: false,
+    // Nullable, so the servers no cluster holds sort together at one end
+    // rather than being dropped — see ADR-0026.
+    enableSorting: true,
   }),
   columnHelper.accessor("model", {
     id: "model",

@@ -39,6 +39,12 @@ def _cursor_position_clause(
     agree with the query's own `.sort()` direction or the page would skip
     or repeat rows.
 
+    A nullable sort field needs more than `$gt`/`$lt`, because Mongo sorts
+    null before every string but its range operators are type-bracketed:
+    `{$gt: null}` matches nothing at all and `{$lt: "abc"}` skips nulls
+    entirely. Both would silently drop rows — see
+    `docs/adr/0026-nullable-sort-fields.md`.
+
     Args:
         sort_field (str): The field being sorted on.
         direction (int): `1` for ascending, `-1` for descending.
@@ -48,12 +54,24 @@ def _cursor_position_clause(
         dict[str, object]: A Mongo filter clause to `$and` onto the query.
     """
     op = "$gt" if direction == 1 else "$lt"
-    return {
-        "$or": [
-            {sort_field: {op: position.sort_value}},
-            {"$and": [{sort_field: position.sort_value}, {"_id": {op: position.id_value}}]},
-        ]
+    tie: dict[str, object] = {
+        "$and": [{sort_field: position.sort_value}, {"_id": {op: position.id_value}}]
     }
+
+    if position.sort_value is None:
+        # Nulls sort first ascending, last descending. Everything
+        # non-null is therefore still ahead of us going up, and nothing
+        # is going down.
+        ahead: list[dict[str, object]] = [{sort_field: {"$ne": None}}] if direction == 1 else []
+        return {"$or": [*ahead, tie]}
+
+    legs: list[dict[str, object]] = [{sort_field: {op: position.sort_value}}]
+    if direction == -1:
+        # Type bracketing leaves nulls out of `$lt`, but descending they
+        # come after every string, so they are exactly what is left.
+        legs.append({sort_field: None})
+    legs.append(tie)
+    return {"$or": legs}
 
 
 @dataclass(frozen=True, slots=True)

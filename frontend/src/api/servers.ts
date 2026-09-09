@@ -26,7 +26,9 @@ export interface ServerListParams {
     | "model"
     | "updated_at"
     | "last_seen_at"
-    | "openshift_state";
+    | "openshift_state"
+    | "cluster_name"
+    | "mce_name";
   sort_desc?: boolean;
   cursor?: string;
   page_size?: number;

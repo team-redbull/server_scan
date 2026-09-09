@@ -40,12 +40,16 @@ from app.utils.digest import stable_hash
 _TYPE_STR = "str"
 _TYPE_DATETIME = "datetime"
 
+# A genuinely absent sort value, tagged rather than encoded as "" because
+# the two sort to different places (ADR-0026).
+_TYPE_NULL = "null"
+
 
 @dataclass(frozen=True, slots=True)
 class CursorPosition:
     """The decoded `(sort_field_value, _id)` position to resume listing from."""
 
-    sort_value: str | datetime
+    sort_value: str | datetime | None
     id_value: str
 
 
@@ -64,13 +68,17 @@ def _b64decode(data: str) -> bytes:
     return base64.urlsafe_b64decode(data + padding)
 
 
-def _serialize_value(value: str | datetime) -> tuple[str, str]:
+def _serialize_value(value: str | datetime | None) -> tuple[str, str]:
+    if value is None:
+        return "", _TYPE_NULL
     if isinstance(value, datetime):
         return value.isoformat(), _TYPE_DATETIME
     return value, _TYPE_STR
 
 
-def _deserialize_value(value: str, value_type: str) -> str | datetime:
+def _deserialize_value(value: str, value_type: str) -> str | datetime | None:
+    if value_type == _TYPE_NULL:
+        return None
     if value_type == _TYPE_DATETIME:
         return datetime.fromisoformat(value)
     return value
@@ -78,7 +86,7 @@ def _deserialize_value(value: str, value_type: str) -> str | datetime:
 
 def encode_cursor(
     *,
-    sort_value: str | datetime,
+    sort_value: str | datetime | None,
     id_value: str,
     filters: dict[str, object],
     sort: str,

@@ -74,6 +74,10 @@ SORT_FIELDS: dict[str, str] = {
     # alphabetical and happens to read free-to-busy. Backed by
     # `openshift_state_name_id`.
     "openshift_state": "openshift.lifecycle_state",
+    # Both nullable, which is why `_cursor_position_clause` is null-aware
+    # (ADR-0026). Backed by `openshift_cluster_name_id` / `_mce_name_id`.
+    "cluster_name": "openshift.cluster_name",
+    "mce_name": "openshift.mce_name",
 }
 
 MIN_SEARCH_QUERY_LENGTH = 2
@@ -93,13 +97,15 @@ MAX_SEARCH_QUERY_LENGTH = 64
 # common path.
 _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 
-SORT_ACCESSORS: dict[str, Callable[[Server], str | datetime]] = {
+SORT_ACCESSORS: dict[str, Callable[[Server], str | datetime | None]] = {
     "name": lambda s: s.name_normalized,
     "serial": lambda s: s.identity.serial_normalized,
     "model": lambda s: s.model_normalized,
     "updated_at": lambda s: s.updated_at,
     "last_seen_at": lambda s: s.last_seen_at or _EPOCH,
     "openshift_state": lambda s: s.openshift.lifecycle_state.value,
+    "cluster_name": lambda s: s.openshift.cluster_name,
+    "mce_name": lambda s: s.openshift.mce_name,
 }
 
 
