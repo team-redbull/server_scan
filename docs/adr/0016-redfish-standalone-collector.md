@@ -604,16 +604,25 @@ null-UUID defect above, just for a live, non-null value this fix's
 anything wrong with the value's *type*.
 
 **Fix: dropped `system_uuid`'s uniqueness entirely, kept the field and
-its index.** Correlation was never based on it — `IngestService.
-_find_by_vendor_serial` is the only lookup ingestion does, keyed on
-`(vendor, serial_normalized)` — so `system_uuid` had no correlation role
-to lose. What it keeps: real, useful, vendor-reported data, still
-indexed (now purely for an equality/aggregation query like "which
-documents share this UUID", exactly what diagnosing this needed), no
-longer able to reject a write. See `app.infrastructure.mongodb.
-indexes`'s module docstring for the full reasoning, and its
-`SERVER_INDEXES` for why the index kept its `uniq_system_uuid` *name*
-despite no longer being unique — renaming it first (tried, reverted)
-bypassed the very migration mechanism this ADR's fix above exists to
-provide, since that mechanism detects a changed specification by
-matching name.
+its index — renamed to plain `system_uuid`.** Correlation was never
+based on it — `IngestService._find_by_vendor_serial` is the only lookup
+ingestion does, keyed on `(vendor, serial_normalized)` — so `system_uuid`
+had no correlation role to lose. What it keeps: real, useful,
+vendor-reported data, still indexed (now purely for an
+equality/aggregation query like "which documents share this UUID",
+exactly what diagnosing this needed), no longer able to reject a write.
+See `app.infrastructure.mongodb.indexes`'s module docstring for the full
+reasoning.
+
+**The rename does not self-migrate, on purpose.** `_create_indexes`
+detects a changed specification by matching *name* — a straight rename
+does not conflict with the old index at all, it creates `system_uuid`
+alongside the still-present, still-unique `uniq_system_uuid` rather than
+replacing it. Keeping the old name was the safe default (tried first);
+the operator explicitly chose the honest name instead and accepted
+owning the migration on any already-deployed database — drop
+`uniq_system_uuid` by hand (`db.servers.dropIndex("uniq_system_uuid")`)
+or recreate the database, either before or right after deploying this
+change. A future rename of any *other* index should not assume the same
+call without asking, since it trades the self-healing property every
+other index here still has.

@@ -72,17 +72,18 @@ AUDIT_EVENTS_COLLECTION = "audit_events"
 SERVER_INDEXES: list[IndexModel] = [
     IndexModel(
         [("identity.system_uuid", ASCENDING)],
-        # Name kept as "uniq_..." despite no longer being unique
-        # (misleading in isolation, but load-bearing): `_create_indexes`
-        # below detects a changed specification by matching *name* — a
-        # renamed index would not conflict with the old one at all, it
-        # would just create a second index alongside it, leaving the old
-        # unique constraint in place on every already-deployed database.
-        # Confirmed the hard way while fixing this: renaming it first
-        # left the old `uniq_system_uuid` enforcing uniqueness right
-        # through the "fix", since MongoDB saw an unrelated new index
-        # name rather than a changed spec to migrate.
-        name="uniq_system_uuid",
+        # Renamed from "uniq_system_uuid" to "system_uuid", 2026-09-09,
+        # at the operator's explicit request — the old name is actively
+        # misleading once the field is no longer unique. `_create_indexes`
+        # below detects a changed spec by matching *name*, so a rename
+        # does NOT migrate an already-deployed database automatically: it
+        # creates this index alongside the old "uniq_system_uuid" one
+        # rather than replacing it, leaving the old unique constraint in
+        # place. An existing deployment needs the old index dropped
+        # explicitly (`db.servers.dropIndex("uniq_system_uuid")`) or the
+        # database recreated — this was a deliberate, informed choice for
+        # this deployment, not something every future rename can assume.
+        name="system_uuid",
         # NOT unique, since 2026-09-09 — see the module docstring for why
         # a live UCS domain proved this field cannot be trusted to be
         # unique. Still partial (`$type: "string"`, not `$exists: true`:
