@@ -15,7 +15,7 @@ test.describe("Inventory", () => {
         res.url().includes("/api/v1/servers?") &&
         res.url().includes("search=ocp-dell"),
     );
-    await page.getByPlaceholder("Name, serial, tag…").fill("ocp-dell");
+    await page.getByPlaceholder("Name, serial, tag, BMC…").fill("ocp-dell");
     await searchResponse;
 
     await expect(rows.first()).toBeVisible();
