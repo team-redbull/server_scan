@@ -30,9 +30,16 @@ COPY tools ./tools
 # Required for OpenShift's arbitrary UID: useradd -d /app leaves it 0700. See deploy/README.md.
 RUN chgrp -R 0 /app && chmod -R g=u /app
 
+# PYTHONWARNINGS: `ucsmsdk` 0.9.18 writes its version regexes as non-raw
+# strings, so every collector pod logs ~32 SyntaxWarnings the first time
+# it compiles the package — which is every pod, since nothing here caches
+# bytecode. Scoped to that one message, so any other SyntaxWarning still
+# surfaces; `W605` gates our own at lint time. The pin is to what the
+# air-gapped mirror carries, so upgrading is not available.
 ENV PATH="/opt/venv/bin:${PATH}" \
     PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONWARNINGS="ignore:invalid escape sequence:SyntaxWarning"
 
 USER 1001
 EXPOSE 8080

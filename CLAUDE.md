@@ -928,6 +928,21 @@ non-obvious enough to bite you.
   wrap blocking calls in `asyncio.to_thread`, never call them directly
   from an async context (`app.infrastructure.providers.ucs_manager.
   client`).
+- **`ucsmsdk` 0.9.18 emits ~32 `SyntaxWarning`s and they are filtered, not
+  fixed.** Its version regexes are non-raw strings (`"\."`), and the pin
+  is to what the air-gapped mirror carries, so upgrading is not on the
+  table. The warning is emitted at *compile* time, so it appears once per
+  fresh venv (every CI run) and once per pod (nothing caches bytecode:
+  `--no-compile` at install plus `PYTHONDONTWRITEBYTECODE=1`). Measured
+  cost of that recompile: 0.36s cold against 0.24s warm, which is why the
+  fix is a filter rather than tens of MB of precompiled bytecode in an
+  air-gapped image. Two filters, both scoped to the one message so any
+  other `SyntaxWarning` still surfaces: `filterwarnings` in
+  `[tool.pytest.ini_options]`, and `PYTHONWARNINGS` in the
+  `Containerfile`. **`W605` was added to the ruff gate at the same time
+  and is what keeps this safe** — ruff does not select it by default, so
+  before that our own invalid escapes were caught by neither the linter
+  nor (once filtered) the runtime.
 - `requirements.txt`/`pylock.toml` at the repo root are generated
   exports for air-gapped mirroring — regenerate both after any
   `pyproject.toml` dependency change:

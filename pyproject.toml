@@ -123,6 +123,15 @@ markers = [
     "integration: requires testcontainers (mongo/redis)",
     "unit: pure domain logic, no I/O",
 ]
+# `ucsmsdk` 0.9.18 writes its version regexes as non-raw strings, so
+# Python emits ~32 SyntaxWarnings the first time it compiles the package
+# — a fresh CI venv every run. The pin is to what the air-gapped mirror
+# carries (see the dependency comment), so this cannot be fixed by
+# upgrading. Matched on message and module so our own invalid escapes
+# still surface; `W605` gates them at lint time regardless.
+filterwarnings = [
+    "ignore:invalid escape sequence:SyntaxWarning",
+]
 
 [tool.ruff]
 line-length = 100
@@ -154,6 +163,11 @@ select = [
     # ANN401 (`Any` in an annotation) is deliberately absent: `Any` at an
     # untyped-vendor-SDK boundary is this codebase's documented design, and
     # selecting it would flag 37 such sites. See ADR-0019.
+    # Python's own compiler warns on an invalid escape sequence but ruff
+    # does not select it by default, and the runtime warning is filtered
+    # below to silence `ucsmsdk`'s ~32 of them — which would have hidden
+    # ours too. Listed by code, like ANN above, rather than as `W`.
+    "W605",
     "ANN001",
     "ANN002",
     "ANN003",
