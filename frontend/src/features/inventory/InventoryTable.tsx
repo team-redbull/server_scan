@@ -1,4 +1,5 @@
 import { flexRender } from "@tanstack/react-table";
+import { useMemo } from "react";
 import type { SortingState } from "@tanstack/react-table";
 // @tanstack/react-table v9 replaced the v8 `useReactTable`/`createColumnHelper`
 // hooks with a new feature-composition API (`useTable` + explicit
@@ -11,21 +12,22 @@ import type { LegacyColumnDef } from "@tanstack/react-table/legacy";
 import { Link, useNavigate } from "react-router";
 
 import type { ServerListParams } from "@/api/servers";
+import type { SortableField } from "@/features/inventory/sorting";
 import { InstallationBadge } from "@/components/InstallationBadge";
 import { StateBadge } from "@/components/StateBadge";
 import type { HealthSeverity, OpenShiftState } from "@/types/server";
 import type { ServerSummary } from "@/types/server";
 
 /**
- * Three columns, deliberately: name, model, state.
+ * Name, Installation, MCE, Cluster, Model, State — in that order.
  *
- * The previous table had nine (vendor, site, classification, fabric,
- * last-updated…), which is a lot of horizontal scanning to answer the two
- * questions this screen exists for — "which box is this" and "does it need
- * me". Everything cut is still one click away on the detail page, where
- * there is room to present it properly. Site in particular is now
- * redundant in every row: it is already inside the hostname, and the list
- * is normally reached pre-filtered from a site card.
+ * Kept deliberately short of the nine this table once had (vendor, site,
+ * fabric, last-updated…): everything cut is one click away on the detail
+ * page. Site in particular is redundant per row, being already inside the
+ * hostname. What earns a column here is what an operator scans for.
+ *
+ * MCE renders only when a row on the page actually has one — an estate
+ * with no MCE would otherwise scan a column of dashes forever.
  *
  * Motion note: rows animate nothing. An operator scrolls this list many
  * times a day, and per-row transitions on a 50-row table are both a
@@ -48,8 +50,6 @@ const ROW_ACCENT: Record<HealthSeverity, string> = {
   UNKNOWN: "border-l-2 border-l-transparent",
 };
 
-export type SortableField = "name" | "model" | "updated_at";
-
 interface InventoryTableProps {
   servers: ServerSummary[];
   sortField: NonNullable<ServerListParams["sort"]>;
@@ -68,7 +68,8 @@ const columnHelper = legacyCreateColumnHelper<ServerSummary>();
 // `ColumnDef<TData, any>` for exactly this case — the alternative is a
 // `TValue=unknown` array, which `exactOptionalPropertyTypes` then rejects
 // on every column.
-const columns: LegacyColumnDef<ServerSummary, any>[] = [
+function buildColumns(withMce: boolean): LegacyColumnDef<ServerSummary, any>[] {
+  return [
   columnHelper.accessor("name", {
     id: "name",
     header: "Name",
@@ -91,22 +92,28 @@ const columns: LegacyColumnDef<ServerSummary, any>[] = [
   columnHelper.accessor((row) => row.openshift.lifecycle_state, {
     id: "openshift_state",
     header: "Installation",
-    cell: (info) => {
-      const row = info.row.original;
-      return (
-        // The cluster in the title rather than a second column: it is
-        // what you want *after* spotting a red row, not while scanning,
-        // and a hostname-width column beside Name pushes Model off small
-        // screens.
-        <span title={row.openshift.cluster_name ?? undefined}>
-          <InstallationBadge state={info.getValue<OpenShiftState>()} />
-        </span>
-      );
-    },
-    // Sorting a keyset-paginated list needs a compound index ending
-    // `name_normalized, _id`; `openshift_state_name_id` exists, but
-    // `SORT_FIELDS` does not yet expose it, and offering a sort the API
-    // rejects is worse than not offering one.
+    cell: (info) => <InstallationBadge state={info.getValue<OpenShiftState>()} />,
+    // Backed by `openshift_state_name_id`, which keyset pagination needs.
+    enableSorting: true,
+  }),
+  ...(withMce
+    ? [
+        columnHelper.accessor((row) => row.openshift.mce_name, {
+          id: "mce_name",
+          header: "MCE",
+          cell: (info) => (
+            <span className="text-[var(--text-secondary)]">{info.getValue() || "—"}</span>
+          ),
+          enableSorting: false,
+        }),
+      ]
+    : []),
+  columnHelper.accessor((row) => row.openshift.cluster_name, {
+    id: "cluster_name",
+    header: "Cluster",
+    cell: (info) => (
+      <span className="text-[var(--text-secondary)]">{info.getValue() || "—"}</span>
+    ),
     enableSorting: false,
   }),
   columnHelper.accessor("model", {
@@ -126,7 +133,8 @@ const columns: LegacyColumnDef<ServerSummary, any>[] = [
     },
     enableSorting: false,
   }),
-];
+  ];
+}
 
 export function InventoryTable({
   servers,
@@ -137,6 +145,8 @@ export function InventoryTable({
 }: InventoryTableProps) {
   const navigate = useNavigate();
   const sorting: SortingState = [{ id: sortField, desc: sortDesc }];
+  const withMce = servers.some((server) => server.openshift.mce_name);
+  const columns = useMemo(() => buildColumns(withMce), [withMce]);
 
   const table = useLegacyTable({
     data: servers,

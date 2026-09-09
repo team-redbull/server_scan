@@ -193,6 +193,66 @@ describe("InventoryPage", () => {
     expect(screen.queryByText("2/2 up")).not.toBeInTheDocument();
   });
 
+  it("shows the cluster as a column, and hides MCE until a row has one", async () => {
+    mockServerList(() => jsonResponse(pageResponse([makeServer()])));
+
+    renderInventoryPage();
+
+    await waitFor(() => {
+      expect(screen.getByRole("columnheader", { name: /cluster/i })).toBeInTheDocument();
+    });
+    expect(screen.getAllByText("ocp4-tlv").length).toBeGreaterThan(0);
+    // An estate with no MCE would otherwise scan a column of dashes.
+    expect(screen.queryByRole("columnheader", { name: /^mce$/i })).not.toBeInTheDocument();
+  });
+
+  it("shows the MCE column as soon as one row reports one", async () => {
+    mockServerList(() =>
+      jsonResponse(
+        pageResponse([
+          makeServer(),
+          makeServer({
+            id: "srv_mce",
+            name: "ocp4-hypershift-tlv-01",
+            openshift: {
+              lifecycle_state: "INSTALLED",
+              mce_name: "mce-tlv",
+              cluster_name: "hc-tlv-01",
+              last_reported_at: "2026-08-12T10:00:00Z",
+              reported_by_agent_id: "mce-tlv",
+            },
+          }),
+        ]),
+      ),
+    );
+
+    renderInventoryPage();
+
+    await waitFor(() => {
+      expect(screen.getByRole("columnheader", { name: /^mce$/i })).toBeInTheDocument();
+    });
+    expect(screen.getByText("mce-tlv")).toBeInTheDocument();
+  });
+
+  it("sorts by installation when the Installation header is clicked", async () => {
+    const requests: string[] = [];
+    mockServerList((url) => {
+      requests.push(url.search);
+      return jsonResponse(pageResponse([makeServer()]));
+    });
+
+    renderInventoryPage();
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /installation/i })).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole("button", { name: /installation/i }));
+
+    await waitFor(() => {
+      expect(requests.some((url) => url.includes("sort=openshift_state"))).toBe(true);
+    });
+  });
+
   it("updates the URL search params when a filter changes", async () => {
     mockServerList(() => jsonResponse(pageResponse([makeServer()])));
 

@@ -70,6 +70,10 @@ SORT_FIELDS: dict[str, str] = {
     "model": "model_normalized",
     "updated_at": "updated_at",
     "last_seen_at": "last_seen_at",
+    # Sorts AVAILABLE / INSTALLED / INSTALLED_TO_INVENTORY, which is
+    # alphabetical and happens to read free-to-busy. Backed by
+    # `openshift_state_name_id`.
+    "openshift_state": "openshift.lifecycle_state",
 }
 
 MIN_SEARCH_QUERY_LENGTH = 2
@@ -95,6 +99,7 @@ SORT_ACCESSORS: dict[str, Callable[[Server], str | datetime]] = {
     "model": lambda s: s.model_normalized,
     "updated_at": lambda s: s.updated_at,
     "last_seen_at": lambda s: s.last_seen_at or _EPOCH,
+    "openshift_state": lambda s: s.openshift.lifecycle_state.value,
 }
 
 

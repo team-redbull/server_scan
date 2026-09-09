@@ -3,7 +3,8 @@ import { useSearchParams } from "react-router";
 
 import { ApiError } from "@/api/client";
 import type { ServerListParams } from "@/api/servers";
-import type { SortableField } from "@/features/inventory/InventoryTable";
+import { SORTABLE_FIELDS } from "@/features/inventory/sorting";
+import type { SortableField } from "@/features/inventory/sorting";
 import { InventoryTable } from "@/features/inventory/InventoryTable";
 import { siteOptions, SOURCE_PROVIDERS, VENDORS } from "@/api/sites";
 import { useServerFacetsQuery, useServersQuery } from "@/features/inventory/hooks";
@@ -38,7 +39,7 @@ const DEFAULT_SORT: SortableField = "name";
 const PAGE_SIZE = 50;
 
 function isSortableField(value: string): value is SortableField {
-  return value === "name" || value === "model" || value === "updated_at";
+  return (SORTABLE_FIELDS as readonly string[]).includes(value);
 }
 
 /**

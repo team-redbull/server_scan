@@ -20,7 +20,13 @@ export interface ServerListParams {
   cluster_name?: string;
   health_overall?: string;
   maintenance?: boolean;
-  sort?: "name" | "serial" | "model" | "updated_at" | "last_seen_at";
+  sort?:
+    | "name"
+    | "serial"
+    | "model"
+    | "updated_at"
+    | "last_seen_at"
+    | "openshift_state";
   sort_desc?: boolean;
   cursor?: string;
   page_size?: number;

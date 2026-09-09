@@ -82,7 +82,7 @@ frontend/src/api/servers.ts 1
 frontend/src/components/StateBadge.test.tsx 1
 frontend/src/features/events/HistoryPanel.tsx 1
 frontend/src/features/inventory/InventoryPage.tsx 5
-frontend/src/features/inventory/InventoryTable.tsx 7
+frontend/src/features/inventory/InventoryTable.tsx 5
 frontend/src/features/rules/RulesPage.tsx 1
 frontend/src/features/servers/ConnectivityTab.tsx 1
 frontend/src/features/servers/HardwareTab.test.tsx 3
@@ -102,7 +102,7 @@ tests/integration/test_classification_rule_repository.py 1
 tests/integration/test_health_policy_repository.py 1
 tests/integration/test_ingest_gpu_catalog.py 2
 tests/integration/test_ingest_partial_reads.py 10
-tests/integration/test_server_repository.py 2
+tests/integration/test_server_repository.py 3
 tests/redfish_fixture.py 1
 tests/unit/application/services/test_ingest_unread_fields.py 1
 tests/unit/config/test_settings.py 2

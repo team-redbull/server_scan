@@ -13,10 +13,11 @@ import json
 import pytest
 from pymongo.errors import DuplicateKeyError
 
-from app.domain.enums import HealthSeverity, InstallationType, Vendor
+from app.domain.enums import HealthSeverity, InstallationType, OpenShiftState, Vendor
 from app.domain.models.classification import Classification
 from app.domain.models.health import Health
 from app.domain.models.maintenance import Maintenance
+from app.domain.models.openshift import OpenShiftLifecycle
 from app.domain.models.server import Identity, Server
 from app.domain.services.normalize import normalize_text
 from app.domain.services.search import build_search_query
@@ -234,6 +235,50 @@ async def test_sort_ascending_and_descending(mongo_holder: MongoClientHolder) ->
 
     assert [s.name for s in ascending.items] == ["alpha", "bravo", "charlie"]
     assert [s.name for s in descending.items] == ["charlie", "bravo", "alpha"]
+
+
+async def test_sorting_by_openshift_state_pages_without_gaps(
+    mongo_holder: MongoClientHolder,
+) -> None:
+    """A new sort field is only safe once a keyset walk over it is proven.
+
+    `SORT_FIELDS`, `SORT_ACCESSORS` and the compound index have to agree,
+    and a mismatch shows up as a silently skipped or repeated server
+    rather than an error.
+    """
+    repo = MongoServerRepository(mongo_holder, cursor_secret=_CURSOR_SECRET)
+    states = [
+        OpenShiftState.INSTALLED,
+        OpenShiftState.AVAILABLE,
+        OpenShiftState.INSTALLED_TO_INVENTORY,
+    ]
+    for index in range(12):
+        server = _make_server(index)
+        server.openshift = OpenShiftLifecycle(lifecycle_state=states[index % 3])
+        await repo.upsert(server)
+
+    for descending in (False, True):
+        seen: list[str] = []
+        order: list[str] = []
+        cursor: str | None = None
+        while True:
+            page = await repo.list_page(
+                filters={},
+                search=None,
+                sort="openshift_state",
+                sort_desc=descending,
+                cursor=cursor,
+                page_size=5,
+                with_count=False,
+            )
+            seen.extend(item.id for item in page.items)
+            order.extend(item.openshift.lifecycle_state.value for item in page.items)
+            if not page.has_more or page.next_cursor is None:
+                break
+            cursor = page.next_cursor
+
+        assert len(seen) == len(set(seen)) == 12
+        assert order == sorted(order, reverse=descending)
 
 
 async def test_unknown_sort_field_raises(mongo_holder: MongoClientHolder) -> None:
