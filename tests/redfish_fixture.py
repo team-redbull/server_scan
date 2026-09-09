@@ -17,6 +17,8 @@ See docs/adr/0016-redfish-standalone-collector.md.
 from __future__ import annotations
 
 import json
+import socket
+import sys
 import threading
 import time
 import uuid
@@ -25,6 +27,26 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
 _SESSIONS = "/redfish/v1/SessionService/Sessions"
+
+
+class _QuietServer(ThreadingHTTPServer):
+    """A server that does not print a traceback when a client hangs up.
+
+    The `delays` tests close the socket before this server answers, which
+    is a passing timeout test rather than a failure.
+    """
+
+    def handle_error(self, request: object, client_address: object) -> None:
+        """
+        Ignore a client that disconnected; report anything else.
+
+        Args:
+            request (object): The socket the failure happened on.
+            client_address (object): Its peer address.
+        """
+        if isinstance(sys.exc_info()[1], (BrokenPipeError, ConnectionResetError, socket.timeout)):
+            return
+        super().handle_error(request, client_address)  # type: ignore
 
 
 @dataclass
@@ -57,7 +79,7 @@ class RedfishFixture:
     session_valid: bool = True
     requests: list[tuple[str, str]] = field(default_factory=list)
     tokens: set[str] = field(default_factory=set)
-    _server: ThreadingHTTPServer | None = None
+    _server: _QuietServer | None = None
     _thread: threading.Thread | None = None
 
     @property
@@ -146,7 +168,7 @@ class RedfishFixture:
                 fixture.requests.append(("DELETE", self.path))
                 self._respond(200, {})
 
-        self._server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self._server = _QuietServer(("127.0.0.1", 0), Handler)
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
         self._thread.start()
         return self
@@ -258,12 +280,9 @@ def minimal_service(**overrides: Any) -> dict[str, Any]:
             "MemoryDeviceType": "DDR5",
             "Status": {"State": "Enabled", "Health": "OK"},
         },
-        # An empty DIMM slot: physically present in the collection, and
-        # deliberately given a stale CapacityMiB (some firmware reports
-        # one for a slot's last-known module) to prove exclusion happens
-        # because of `Status.State == "Absent"` — the same empty-bay
-        # signal ADR-0016 confirmed for `Drive` — not merely because a
-        # capacity was missing.
+        # An empty DIMM slot with a deliberately stale CapacityMiB, to
+        # prove exclusion follows `Status.State == "Absent"` and not a
+        # missing capacity (the empty-bay signal ADR-0016 confirmed).
         "/redfish/v1/Systems/1/Memory/DIMM_B1": {
             "@odata.id": "/redfish/v1/Systems/1/Memory/DIMM_B1",
             "@odata.type": "#Memory.v1_16_0.Memory",

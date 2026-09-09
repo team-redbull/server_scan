@@ -103,7 +103,6 @@ tests/integration/test_health_policy_repository.py 1
 tests/integration/test_ingest_gpu_catalog.py 2
 tests/integration/test_ingest_partial_reads.py 10
 tests/integration/test_server_repository.py 2
-tests/redfish_fixture.py 1
 tests/unit/application/services/test_ingest_unread_fields.py 1
 tests/unit/config/test_settings.py 2
 tests/unit/domain/services/test_health_conditions.py 1
