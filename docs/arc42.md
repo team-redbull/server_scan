@@ -213,6 +213,15 @@ Table, Tailwind 4, Vite. Pages: sites overview (landing), inventory,
 server detail (overview/hardware/network/connectivity tabs),
 classification rules, health policies, and an audit history panel.
 
+**Dark only.** There is no light palette and no `prefers-color-scheme`
+query anywhere in the built stylesheet — the console is watched on wall
+displays in dim rooms, so the theme is not the viewer's to choose. Four
+things enforce it together: the dark values are the only token values,
+`color-scheme: dark` carries the browser's own controls, an `index.html`
+meta plus `html` background stop the pre-stylesheet white frame, and
+`@custom-variant dark (&)` makes Tailwind's `dark:` utilities
+unconditional rather than media-query gated.
+
 The sites overview leads with six fleet-wide cards above the per-site
 cards, ordered so a three-column grid reads as two rows: `Across all
 sites` / `UPI` / `Hosted cluster`, then `MCE` / `Available` /
@@ -347,7 +356,7 @@ collector does, and never call this platform's API.
 | **Error handling** | `exception_handlers` | RFC 9457 Problem Details, extended with a stable `code`, `request_id` and structured `details` (ADR-0002) |
 | **Persistence rules** | `infrastructure/mongodb` | Datetimes stored as ISO 8601 **strings**; range/cursor queries must compare against that type (ADR-0006 — this caused a real silent-wrong-results bug) |
 | **Search** | `domain/services/search_tokens` | Anchored, escaped prefix match over a multikey-indexed token array; structurally incapable of ReDoS or an unanchored scan (ADR-0004). Tokens are word-boundary **suffixes**, so the anchored query still finds a fragment from the middle of a name — `cisco-m6` matches `ocp-cisco-m6-bat-yam-…` (ADR-0025) |
-| **Pagination** | `domain/services/cursor` | Keyset only, HMAC-signed cursor bound to the filter/sort combination |
+| **Pagination** | `domain/services/cursor` | Keyset only, HMAC-signed cursor bound to the filter/sort combination. A **nullable** sort field needs the null-aware clause: Mongo's range operators are type-bracketed, so a naive `$gt`/`$lt` cursor drops rows with no error (ADR-0026) |
 | **Caching** | `infrastructure/redis` | Cache-aside; revision-keyed detail entries; every method returns a miss on error rather than raising |
 | **Classification** | `domain/services/classification` | Total order `(priority, specificity, order, id)` computed in Python; conflicts recorded, not hidden (ADR-0005 for the sibling idea) |
 | **Health policy** | `domain/services/health` | `policy_key` families — one winner per family, families independent. The platform's headline design decision (ADR-0005) |

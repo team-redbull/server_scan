@@ -275,6 +275,42 @@ is a real mistake, not a style preference.
     for anything OpenShift-observation-shaped) needs the same update —
     don't assume it already covers the new case.
 
+11. **Every change updates the docs it makes wrong, in the same commit.**
+    Added 2026-09-10 at the user's request, after a feature shipped whose
+    jobs appeared nowhere in `README.md`, `docs/architecture.md` or
+    `docs/arc42.md`, and after a survey found three separate statements
+    in those files that had quietly become false. Documentation that
+    lags is worse than none: a reader cannot tell a stale sentence from
+    a current one, and the next session acts on it.
+
+    This is not "write docs for everything". It is: **when you finish a
+    change, go and look at what now describes it wrongly.** The sweep is
+    short and the list is nearly always the same:
+
+    - `README.md` — the status list, the data-flow diagram, the project
+      layout, and any seeded figures you may have just changed.
+    - `docs/architecture.md` — the subsystem section for what you
+      touched.
+    - `docs/arc42.md` — **§9 is the ADR index; a new ADR needs a row
+      there or nothing links to it.** Also §5 (deployable units,
+      frontend), §7 (deployment view), §8 (quality/solution table), §11
+      (risks), §12 (glossary).
+    - `deploy/README.md` — anything about charts, values or CronJobs,
+      including its opening sentence, which has been contradicted by a
+      later section before.
+    - `CLAUDE.md` — this file: "Key technical facts" for a new trap, and
+      "Where to continue right now" for what you just finished.
+    - `.env.example` — any new or renamed variable.
+
+    A decision gets an ADR (`docs/adr/`), and the code carries a one-line
+    pointer to it rather than the reasoning — that is convention 8, and
+    the two work together: explanation moves *out* of code and has to
+    land somewhere real.
+
+    **Correcting a doc that was already wrong counts as part of the
+    job**, not scope creep. If you notice a false statement while you are
+    in the file, fix it and say so in the commit body.
+
 ## Current status
 
 Phase 1 slices 0–7 are done (see `docs/architecture.md`'s "What's
@@ -641,6 +677,17 @@ non-obvious enough to bite you.
   `mode="before"` validator, and `indexes.RETIRED_INDEXES` — **renaming or
   removing an index means adding its old name to that list**, or a
   deployed database keeps enforcing the old one forever.
+- **The UI is dark only, and four things enforce it together** — the dark
+  values are the only token values in `index.css` (no
+  `prefers-color-scheme` block), `color-scheme: dark` carries the
+  browser's own scrollbars and controls, `index.html` sets a
+  `color-scheme` meta plus an `html` background so the pre-stylesheet
+  frame is not white, and `@custom-variant dark (&)` makes Tailwind's
+  `dark:` utilities unconditional. That last one is the easy miss: 49
+  `dark:` classes across 13 components are media-query gated by default,
+  so forcing the palette without it leaves a dark page wearing light
+  badges on a light OS. **The check worth repeating: `grep -c
+  prefers-color-scheme frontend/dist/assets/*.css` must be 0.**
 - **Sorting on a nullable field needs the null-aware cursor**
   (ADR-0026). Mongo's `$gt`/`$lt` are type-bracketed: `{$gt: null}`
   matches *nothing* and `{$lt: "abc"}` skips every null, while the sort
@@ -912,6 +959,11 @@ uv run python scripts/check_comment_density.py    # CLAUDE.md convention 8
 cd frontend && npm run lint && npm run typecheck && npm run test -- --run && npm run build
 npm run test:e2e                                    # needs backend + frontend dev server running
 ```
+
+Then the step no command covers: **re-read the docs your change made
+wrong** (convention 11). `README.md`, `docs/architecture.md`,
+`docs/arc42.md` — §9 is the ADR index — `deploy/README.md`, this file and
+`.env.example`.
 
 For a real test of the UCS Manager data path (which the Cisco collector
 drives per domain) without production hardware:

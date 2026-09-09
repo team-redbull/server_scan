@@ -49,6 +49,17 @@ far, in order:
     one question no vendor manager can answer
     (`docs/adr/0024-openshift-cluster-membership.md`).
 
+The inventory table shows **Name, Installation, MCE, Cluster, Model,
+State**, and sorts on Name, Model, Installation, Cluster and MCE. The last
+two are nullable — plenty of servers have no cluster — which needed a
+null-aware keyset cursor to page over without silently dropping rows
+(`docs/adr/0026-nullable-sort-fields.md`). MCE appears as a column only
+when a row on the page has one.
+
+**The UI is dark only** and deliberately ignores the viewer's system
+theme: it is watched on wall displays in dim rooms, and a light flash on
+load is the failure mode being designed out.
+
 Each [GitHub Release](https://github.com/team-redbull/server_scan/releases)
 lists what changed in it, generated from the commit subjects that also
 decide its version number.
@@ -177,7 +188,7 @@ standalone".
                                                                             ▼
                                                        React admin UI (inventory table,
                                                        server detail, read-only rules/
-                                                       policies page)
+                                                       policies page — dark theme only)
 ```
 
 MongoDB is the only thing that ties a collector run to what the UI shows

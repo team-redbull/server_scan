@@ -111,6 +111,19 @@ any real collector exists.
   cursor with a clear error instead of silently returning wrong results.
   Verified end-to-end against 1,000 seeded servers: every server is
   returned exactly once across a full paginated walk, in any page size.
+
+  **A nullable sort field needs more than `$gt`/`$lt`.** Mongo's range
+  operators are type-bracketed — `{$gt: null}` matches nothing and
+  `{$lt: "abc"}` skips every null — while the sort itself places nulls
+  before every string ascending and after them descending. The two
+  disagree, so a naive cursor strands rows silently: no error, just a
+  short page. `_cursor_position_clause` carries the null-aware branches
+  that make `cluster_name` and `mce_name` sortable
+  (`docs/adr/0026-nullable-sort-fields.md`). Sortable fields today are
+  `name`, `model`, `updated_at`, `last_seen_at`, `serial`,
+  `openshift_state`, `cluster_name` and `mce_name`; each needs an entry in
+  `SORT_FIELDS`, a matching `SORT_ACCESSORS` reader, and a compound index
+  ending in `_id`.
 - **List responses are a lean projection** (`ServerSummary`), not the
   persistence model: no `hardware` subdocument, since at the platform's
   ~10k-servers-with-headroom target scale, shipping full hardware detail on
@@ -119,6 +132,14 @@ any real collector exists.
   schemas (`app/api/v1/schemas.py`), not `Server` returned as-is — this
   also keeps the MongoDB `_id` alias from ever leaking into a public
   response.
+- **A retired index is dropped, not left to an operator.**
+  `_create_indexes` reconciles on index *name*, so renaming one creates
+  the new index beside the old rather than replacing it — which is how a
+  `uniq_system_uuid` that had stopped being declared unique went on
+  rejecting real servers. `indexes.RETIRED_INDEXES` names what this file
+  no longer declares and `ensure_indexes` drops it on startup, logging
+  `mongo.index_retired`. Renaming or removing an index means adding its
+  old name there (ADR-0026).
 - **Redis caching is cache-aside** with revision-keyed detail cache
   entries (`si:1:srv:{id}:r{revision}` — a write makes the old key
   unreachable without an explicit delete) and short-TTL list-page entries.
