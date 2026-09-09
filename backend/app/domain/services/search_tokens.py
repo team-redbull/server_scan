@@ -8,9 +8,12 @@ ReDoS vector. This module only builds the token set; the query itself is
 built in `app.domain.services.search`.
 
 Token sources: name, hostname-ish identity fields, serial, model, vendor,
-site/manager references, tags, and both the colon-form and bare-hex form
-of every MAC (so `aa:bb:cc:dd:ee:ff` and `aabbccddeeff` both find the same
-server — bare-hex is how the existing `map-pxe` boot scripts key on MACs).
+site/manager references, tags, the BMC's own address
+(`network.bmc.host` — the same value `NetworkTab.tsx` shows as
+"Address", so what an operator copies off a server's own page is what
+finds it), and both the colon-form and bare-hex form of every MAC (so
+`aa:bb:cc:dd:ee:ff` and `aabbccddeeff` both find the same server —
+bare-hex is how the existing `map-pxe` boot scripts key on MACs).
 """
 
 from __future__ import annotations

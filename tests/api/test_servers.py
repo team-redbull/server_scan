@@ -18,6 +18,7 @@ from app.domain.enums import HealthSeverity, InstallationType, Vendor
 from app.domain.models.classification import Classification
 from app.domain.models.health import Health
 from app.domain.models.maintenance import Maintenance
+from app.domain.models.network import BmcInfo, NetworkInfo
 from app.domain.models.server import Identity, Server
 from app.domain.services.normalize import normalize_text
 from app.domain.services.search_tokens import build_search_tokens
@@ -38,6 +39,7 @@ def _make_server(
     installation_type: InstallationType = InstallationType.UNCLASSIFIED,
     maintenance_enabled: bool = False,
     name: str | None = None,
+    bmc_host: str | None = None,
 ) -> Server:
     now = utcnow()
     nm = name if name is not None else f"api-test-srv-{index:04d}"
@@ -56,6 +58,7 @@ def _make_server(
         classification=Classification(installation_type=installation_type),
         health=Health(overall=health),
         maintenance=Maintenance(enabled=maintenance_enabled),
+        network=NetworkInfo(bmc=BmcInfo(host=bmc_host)),
         created_at=now,
         updated_at=now,
         last_seen_at=now,
@@ -149,6 +152,27 @@ async def test_search_matches_by_token(
     body = resp.json()
     assert len(body["items"]) == 1
     assert body["items"][0]["name"] == "ocp-dell-worker-777"
+
+
+async def test_search_matches_by_bmc_host(
+    app_context: tuple[AsyncClient, MongoServerRepository],
+) -> None:
+    """`build_search_tokens` has indexed `network.bmc.host` since before
+    this test existed — `NetworkTab.tsx` shows exactly this value as
+    "Address", so search already matched what an operator would copy off
+    the server's own page. What was missing was the inventory search
+    box's own placeholder never mentioning it, not the behavior itself.
+    """
+    client, repo = app_context
+    await repo.upsert(_make_server(1, name="srv-with-bmc", bmc_host="10.20.30.41"))
+    await repo.upsert(_make_server(2, name="srv-without-bmc"))
+
+    resp = await client.get("/api/v1/servers", params={"search": "10.20.30"})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body["items"]) == 1
+    assert body["items"][0]["name"] == "srv-with-bmc"
 
 
 async def test_filter_by_site_id(app_context: tuple[AsyncClient, MongoServerRepository]) -> None:

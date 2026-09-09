@@ -261,7 +261,7 @@ export function InventoryPage() {
             onChange={(e) => {
               updateFilters({ search: e.target.value });
             }}
-            placeholder="Name, serial, tag…"
+            placeholder="Name, serial, tag, BMC…"
             className={FIELD_CLASS}
           />
         </label>

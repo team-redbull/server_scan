@@ -32,6 +32,12 @@ def test_splits_hyphenated_name_into_tokens() -> None:
     assert "001" in tokens
 
 
+def test_includes_the_bmc_host() -> None:
+    server = _server(network=NetworkInfo(bmc=BmcInfo(host="10.20.30.41")))
+    tokens = build_search_tokens(server)
+    assert "10.20.30.41" in tokens
+
+
 def test_includes_both_mac_forms() -> None:
     server = _server(
         network=NetworkInfo(bmc=BmcInfo(mac="aa:bb:cc:dd:ee:ff")),
