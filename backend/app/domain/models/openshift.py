@@ -28,6 +28,10 @@ job therefore reconciles the set it owns (the servers naming *its*
 cluster) rather than only writing what it saw; see
 `app.application.services.openshift_membership`.
 
+A state retired from `OpenShiftState` decodes as `AVAILABLE` rather than
+raising — narrowing a persisted enum is a migration, and ADR-0024 records
+what skipping it cost.
+
 Correlation is by **hostname**, not MAC. Metal3 binds an Agent to a host
 via `bootMACAddress`, which would be the stronger key, but it is only
 available through the `BareMetalHost` — and not every server has one, so
@@ -43,7 +47,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from app.domain.enums import OpenShiftState
 
@@ -75,3 +79,19 @@ class OpenShiftLifecycle(BaseModel):
     mce_name: str | None = None
     last_reported_at: datetime | None = None
     reported_by_agent_id: str | None = None
+
+    @field_validator("lifecycle_state", mode="before")
+    @classmethod
+    def _decode_retired_state(cls, value: object) -> object:
+        """
+        Map a state this enum no longer has onto `AVAILABLE`.
+
+        Args:
+            value (object): The stored value, from MongoDB or a caller.
+
+        Returns:
+            object: `value` if the enum still has it, else `AVAILABLE`.
+        """
+        if isinstance(value, str) and value not in OpenShiftState.__members__:
+            return OpenShiftState.AVAILABLE
+        return value

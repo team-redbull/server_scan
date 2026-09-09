@@ -143,9 +143,25 @@ An earlier shape carried five more. Each was dropped for its own reason:
   inventory never follows. `bmh_name` and `boot_mac` were never populated
   at all, since BareMetalHost is not read.
 
-Existing documents carrying the old values decode as-is; the jobs
-overwrite them on first run, and the sites aggregation counts an
-unrecognized state under `AVAILABLE` so slice totals still add up.
+**Existing documents need a decode rule, and the first version of this
+ADR was wrong to say they did not.** It claimed the old values "decode
+as-is". They do not: Pydantic rejects an unknown enum member outright, so
+a single stored `UPI_NODE` raised `ValidationError` inside
+`Server.model_validate` and took down every read path that touches it —
+`GET /servers`, the seeder, and every ingest correlating on an existing
+document. Found in a real cluster on 2026-09-10, where a collector run
+reported `errors=232` of 258 servers and the seeder crashed outright.
+
+`OpenShiftLifecycle` therefore carries a `mode="before"` field validator
+that maps any state the enum no longer has onto `AVAILABLE`. It is the
+same catch-all rule the sites aggregation already applies so slice totals
+add up, and it is what makes the sentence above true rather than
+aspirational. The jobs then overwrite the value on their first run.
+
+The general rule this cost us: **narrowing a persisted enum is a
+migration, not an edit.** Nothing in the type system flags it, the tests
+all passed because every fixture was written by the new code, and the
+failure only appears against a database that predates the change.
 
 ## Decision 4: kept separate from `Classification`, on purpose
 
