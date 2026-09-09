@@ -91,16 +91,35 @@ async def test_get_by_id_missing_returns_none(mongo_holder: MongoClientHolder) -
     assert await repo.get_by_id("srv_does_not_exist") is None
 
 
-async def test_duplicate_system_uuid_raises_duplicate_key_error(
-    mongo_holder: MongoClientHolder,
-) -> None:
+async def test_duplicate_system_uuid_no_longer_raises(mongo_holder: MongoClientHolder) -> None:
+    """Reversed 2026-09-09: `system_uuid` used to be a second unique index,
+    on the same reasoning as vendor+serial. A live Cisco UCS domain proved
+    that reasoning wrong — `computeBlade`/`computeRackUnit.uuid` reflects
+    the *associated service profile's* UUID, drawn from an admin-managed
+    UUID Suffix Pool, not an immutable hardware id, so two cloned profiles
+    (or two domains with overlapping pool ranges) can legitimately hand
+    two different real servers the same UUID. Enforcing uniqueness on it
+    turned that vendor-side misconfiguration into a platform outage: the
+    second server permanently failed every ingest run. `system_uuid` is
+    still collected, stored and indexed (for exactly the "find every
+    document sharing this UUID" query that diagnosing this required) —
+    just no longer rejected on collision, since correlation was never
+    based on it in the first place (`vendor`+`serial_normalized` is what
+    `IngestService._find_by_vendor_serial` actually looks servers up by).
+    """
     repo = MongoServerRepository(mongo_holder, cursor_secret=_CURSOR_SECRET)
     first = _make_server(1, system_uuid="uuid-shared")
     second = _make_server(2, system_uuid="uuid-shared")
 
     await repo.upsert(first)
-    with pytest.raises(DuplicateKeyError):
-        await repo.upsert(second)
+    await repo.upsert(second)
+
+    stored_first = await repo.get_by_id(first.id)
+    stored_second = await repo.get_by_id(second.id)
+    assert stored_first is not None
+    assert stored_second is not None
+    assert stored_first.identity.system_uuid == "uuid-shared"
+    assert stored_second.identity.system_uuid == "uuid-shared"
 
 
 async def test_duplicate_vendor_serial_raises_duplicate_key_error(

@@ -25,13 +25,30 @@ sort_field, _id)` index lets `list_page`'s `$or` cursor-position query and
 `.sort([(sort_field, dir), ("_id", dir)])` both use the same index instead
 of falling back to an in-memory sort past the 32MB blocking-sort limit.
 
-The two unique partial indexes enforce identity constraints at the
-database layer (not just in application code) precisely because slice 2's
-identity-correlation ladder doesn't exist yet — until it does, "insert
-what looks like a new server" is the only path ingestion has, and a
-collision on `system_uuid` or `(vendor, serial_normalized)` must be
-rejected loudly (`DuplicateKeyError`) rather than silently creating a
-duplicate document for the same physical machine.
+`uniq_vendor_serial` enforces the one identity constraint that actually
+means "this is the same physical machine": ingestion's whole correlation
+path (`IngestService._find_by_vendor_serial`) looks a server up by
+`(vendor, serial_normalized)` alone, so a collision there is either a
+genuine race between two concurrent ingests of the same server or a real
+correlation bug — either way worth rejecting loudly
+(`DuplicateKeyError`) at the database layer rather than silently
+creating a duplicate document.
+
+**`system_uuid` is deliberately NOT a unique index, as of 2026-09-09.**
+It was one originally, on the same reasoning as `uniq_vendor_serial` —
+but `system_uuid` is never used for correlation (only serial is), and a
+live Cisco UCS domain proved the assumption wrong: `computeBlade`/
+`computeRackUnit.uuid` reflects the *associated service profile's*
+UUID, drawn from an admin-configured UUID Suffix Pool, not an immutable
+hardware id — two cloned profiles, or two domains with overlapping
+pool ranges, can legitimately hand two different real servers the same
+UUID. Enforcing uniqueness on it made that vendor-side misconfiguration
+a platform outage: the second server permanently failed to ingest
+(`DuplicateKeyError` on every run) rather than the anomaly being merely
+visible. The field is kept — it is real, useful, vendor-reported data,
+indexed for exactly the kind of "which two documents share this UUID"
+query that diagnosing this required — just no longer used to reject a
+write.
 """
 
 from __future__ import annotations
@@ -55,14 +72,26 @@ AUDIT_EVENTS_COLLECTION = "audit_events"
 SERVER_INDEXES: list[IndexModel] = [
     IndexModel(
         [("identity.system_uuid", ASCENDING)],
+        # Name kept as "uniq_..." despite no longer being unique
+        # (misleading in isolation, but load-bearing): `_create_indexes`
+        # below detects a changed specification by matching *name* — a
+        # renamed index would not conflict with the old one at all, it
+        # would just create a second index alongside it, leaving the old
+        # unique constraint in place on every already-deployed database.
+        # Confirmed the hard way while fixing this: renaming it first
+        # left the old `uniq_system_uuid` enforcing uniqueness right
+        # through the "fix", since MongoDB saw an unrelated new index
+        # name rather than a changed spec to migrate.
         name="uniq_system_uuid",
-        unique=True,
-        # `$type: "string"`, not `$exists: true`: MongoDB's `$exists` is
-        # true for a field that is *present and null*, and `model_dump(
-        # mode="json")` always emits `identity.system_uuid`. So `$exists`
-        # admitted every UUID-less server into a unique index keyed on
-        # null, letting exactly one of them exist fleet-wide. See
-        # docs/adr/0016-redfish-standalone-collector.md.
+        # NOT unique, since 2026-09-09 — see the module docstring for why
+        # a live UCS domain proved this field cannot be trusted to be
+        # unique. Still partial (`$type: "string"`, not `$exists: true`:
+        # MongoDB's `$exists` is true for a field that is *present and
+        # null*, and `model_dump(mode="json")` always emits
+        # `identity.system_uuid`) — that keeps every UUID-less server out
+        # of the index, which is now purely a size optimisation rather
+        # than what stops a null-keyed collision, but is still worth
+        # doing. See docs/adr/0016-redfish-standalone-collector.md.
         partialFilterExpression={"identity.system_uuid": {"$type": "string"}},
     ),
     IndexModel(

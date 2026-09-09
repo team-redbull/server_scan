@@ -115,11 +115,14 @@ class MongoServerRepository:
 
         Raises:
             pymongo.errors.DuplicateKeyError: If the document collides with
-                an *other* document on a secondary unique index
-                (`identity.system_uuid` or `(identity.vendor,
-                identity.serial_normalized)`) — uncaught; that is expected
-                and is `app.application.services.ingest`'s job to catch and
-                resolve via lookup+update, not this repository's.
+                an *other* document on the one secondary unique index,
+                `(identity.vendor, identity.serial_normalized)` —
+                uncaught; that is expected and is `app.application.
+                services.ingest`'s job to catch and resolve via
+                lookup+update, not this repository's. `identity.
+                system_uuid` cannot raise this: it is indexed but not
+                unique, since 2026-09-09 (see `app.infrastructure.
+                mongodb.indexes`'s module docstring).
         """
         doc = server.model_dump(by_alias=True, mode="json")
         await self._collection.replace_one({"_id": server.id}, doc, upsert=True)

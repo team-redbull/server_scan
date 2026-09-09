@@ -362,9 +362,9 @@ async def test_two_servers_without_a_system_uuid_can_both_be_ingested(
     schema-optional, so this blocked OpenBMC whiteboxes and older firmware
     outright.
     """
-    # `mongo_holder` already ran `ensure_indexes`, so `uniq_system_uuid`
-    # is present with its declared specification — re-creating it here
-    # would race the fixture's own migration.
+    # `mongo_holder` already ran `ensure_indexes`, so the `system_uuid`
+    # index is present with its declared specification — re-creating it
+    # here would race the fixture's own migration.
     service = _service(mongo_holder)
     summary = await service.ingest(
         _OneShotProvider(
@@ -375,6 +375,57 @@ async def test_two_servers_without_a_system_uuid_can_both_be_ingested(
 
     assert summary.errors == 0
     assert summary.fetched == 2
+
+
+async def test_two_different_servers_sharing_a_system_uuid_both_ingest(
+    mongo_holder: MongoClientHolder,
+) -> None:
+    """The real bug, reproduced: a live Cisco UCS domain reported the same
+    `system_uuid` for two genuinely different physical servers — a UUID
+    Suffix Pool misconfiguration, not a correlation bug. `system_uuid`'s
+    unique index used to turn that into a permanent per-run failure for
+    the second server (`DuplicateKeyError`, uncaught here since the two
+    servers have different serials, so `IngestService`'s recovery path —
+    which only looks up by vendor+serial — found nothing to reuse).
+
+    Fixed 2026-09-09 by dropping `system_uuid`'s uniqueness entirely:
+    correlation was never based on it (`vendor`+`serial_normalized` is
+    the real key), so two different, correctly-identified servers sharing
+    a vendor-reported UUID must ingest as two documents, not fail one of
+    them forever.
+    """
+    service = _service(mongo_holder)
+    summary = await service.ingest(
+        _OneShotProvider(
+            _fully_read(
+                serial="SN-DUPE-UUID-1",
+                name="ocp4-prod-tlv-infra-01",
+                system_uuid="11111111-2222-3333-4444-555555555555",
+            ),
+            _fully_read(
+                serial="SN-DUPE-UUID-2",
+                name="ocp4-prod-nyc-infra-01",
+                system_uuid="11111111-2222-3333-4444-555555555555",
+            ),
+        )
+    )
+
+    assert summary.errors == 0
+    assert summary.fetched == 2
+
+    repo = MongoServerRepository(mongo_holder, cursor_secret=_CURSOR_SECRET)
+    for serial in ("sn-dupe-uuid-1", "sn-dupe-uuid-2"):
+        page = await repo.list_page(
+            filters={"identity.serial_normalized": serial},
+            search=None,
+            sort="name",
+            sort_desc=False,
+            cursor=None,
+            page_size=1,
+            with_count=False,
+        )
+        assert len(page.items) == 1
+        assert page.items[0].identity.system_uuid == "11111111-2222-3333-4444-555555555555"
 
 
 async def test_the_document_records_which_fields_this_run_could_not_read(

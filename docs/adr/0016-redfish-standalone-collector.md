@@ -223,7 +223,10 @@ always emits the key. Reproduced against live MongoDB with the repo's own
 server fails ingest on every run forever. `ComputerSystem.UUID` is
 schema-optional, so this blocks OpenBMC whiteboxes and older firmware
 outright. It has never fired because UCS always reports a UUID and no
-test covers two servers without one. Fix: `{"$type": "string"}`.
+test covers two servers without one. Fix: `{"$type": "string"}`. **"UCS
+always reports a UUID" turned out to be true but not the reassurance it
+reads as here — a live domain reported the same one twice; see the dated
+update below.**
 
 **`run_collector` never writes the `Manager` document.**
 `IngestService.ingest` upserts managers only from its `managers=`
@@ -576,3 +579,41 @@ reports zero CPU-type `Processors` entries (rather than, say, omitting
 `Processors` from its service root link entirely, in which case
 `has_only_gpu_processors` correctly returns `False` for it and it would
 be — wrongly — treated as an unmergeable second host).
+
+## Update (2026-09-09): `uniq_system_uuid` gave up its uniqueness too
+
+The fix above (`{"$exists": True}` → `{"$type": "string"}`) settled the
+*null*-collision case. A live Cisco UCS domain then found the other half
+of the same field's problem: a real, non-null collision, between two
+genuinely different physical servers.
+
+`computeBlade`/`computeRackUnit.uuid` — what `ucs_manager/mapping.py`
+reads into `system_uuid` — turned out to reflect the *associated service
+profile's* UUID, drawn from an admin-managed UUID Suffix Pool, not an
+immutable hardware id. Two profiles cloned with a fixed UUID instead of a
+pool-derived one, or two domains with overlapping pool ranges, can
+legitimately hand two different real servers the same UUID — confirmed
+directly in the UCS UI, not inferred. Enforcing uniqueness on it made
+that vendor-side misconfiguration a platform outage: the second server's
+every ingest run raised `DuplicateKeyError` on `uniq_system_uuid`,
+`_ingest_one`'s recovery path found nothing to reuse (it looks up by
+`vendor`+`serial`, which the two servers do not share), and the server
+was permanently dropped from inventory — the same failure shape as the
+null-UUID defect above, just for a live, non-null value this fix's
+`{"$type": "string"}` does nothing to catch, because there was never
+anything wrong with the value's *type*.
+
+**Fix: dropped `system_uuid`'s uniqueness entirely, kept the field and
+its index.** Correlation was never based on it — `IngestService.
+_find_by_vendor_serial` is the only lookup ingestion does, keyed on
+`(vendor, serial_normalized)` — so `system_uuid` had no correlation role
+to lose. What it keeps: real, useful, vendor-reported data, still
+indexed (now purely for an equality/aggregation query like "which
+documents share this UUID", exactly what diagnosing this needed), no
+longer able to reject a write. See `app.infrastructure.mongodb.
+indexes`'s module docstring for the full reasoning, and its
+`SERVER_INDEXES` for why the index kept its `uniq_system_uuid` *name*
+despite no longer being unique — renaming it first (tried, reverted)
+bypassed the very migration mechanism this ADR's fix above exists to
+provide, since that mechanism detects a changed specification by
+matching name.

@@ -528,10 +528,11 @@ class IngestService:
         try:
             await self._server_repo.upsert(server)
         except DuplicateKeyError:
-            # A concurrent/duplicate insert collided on a secondary unique
-            # index (system_uuid or (vendor, serial_normalized)) between
-            # our lookup and our upsert. Not fancy: look the real owner up
-            # and update it in place instead of failing the whole run.
+            # A concurrent/duplicate insert collided on the one secondary
+            # unique index, (vendor, serial_normalized) — system_uuid is
+            # indexed but not unique (2026-09-09), so it cannot raise
+            # this. Not fancy: look the real owner up and update it in
+            # place instead of failing the whole run.
             refetched = (
                 await self._find_by_vendor_serial(vendor, serial_normalized)
                 if serial_normalized
