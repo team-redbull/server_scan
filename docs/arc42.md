@@ -132,6 +132,7 @@ read-only, and that is a safety property rather than a missing feature.
 |---|---|
 | **Backend API** (`backend/app`) | Serves the REST API; owns classification, health evaluation, search, pagination, caching. Never contacts a vendor. |
 | **Collectors** (`tools/run_collector.py` + a provider) | One process per manager type, on a schedule. Reads a vendor, normalises, ingests. Never serves traffic. |
+| **Membership jobs** (`tools/collect_openshift.py`) | Two per cluster at most, on a schedule. Run *inside* each OpenShift cluster, not beside the API, and deployed from their own chart. Read that cluster's own Kubernetes API and write only `Server.openshift`. Never contact a vendor, never serve traffic, never use `IngestService`. |
 | **Frontend** (`frontend/`) | React admin UI. Talks only to the backend API. |
 | **MongoDB** | Source of truth. |
 | **Redis** | Cache only, cache-aside, never authoritative. |
@@ -161,18 +162,25 @@ ingestion wires both together.
 ### Level 3 — the collector seam (the part built most often)
 
 ```
-ServerInventoryProvider (Protocol)
+ServerInventoryProvider (ABC)                       # ADR-0023
     ├── provider_type: str
-    ├── health_check() -> None
-    └── list_servers() -> AsyncIterator[ProviderServer]
+    ├── collect() -> AsyncGenerator[ProviderServer]  # template method
+    ├── collection_errors() -> tuple[str, ...]
+    ├── health_check() -> None                       # abstract
+    └── _list_servers() -> AsyncGenerator[...]       # abstract
 ```
+
+The membership jobs deliberately do **not** sit behind this seam. It
+exists to normalise a *vendor* into `ProviderServer` for `IngestService`;
+a cluster reports membership, not hardware, and writes `Server.openshift`
+directly (ADR-0024).
 
 | Provider | Status | Shape |
 |---|---|---|
 | `ucs_central` (+ `ucs_manager` as its engine) | Implemented, validated against a live UCS Central and a UCS Platform Emulator | Central lists domains; each domain's own UCS Manager supplies inventory |
 | `intersight` | Implemented, validated against a live on-prem PVA (2026-09-01, 2026-09-07) — a narrower OperState/Health vocabulary gap remains (ADR-0017) | Fleet-wide OData list queries joined in memory |
 | `redfish` | Implemented, validated | One BMC at a time from an inventory file |
-| `openmanage` | Implemented; **never run against a live appliance** (ADR-0020) | OME says who exists and what it is called; each iDRAC says what it is, over Redfish |
+| `openmanage` | Implemented; validated against a live OME appliance and iDRAC9 on 2026-09-08, which found the Service Tag defect (ADR-0020) | OME says who exists and what it is called; each iDRAC says what it is, over Redfish |
 | `oneview` | Implemented, validated against a live appliance (2026-09-07) — GPU field mapping remains unverified (ADR-0022) | Three bulk calls per appliance, `expand=all`; the only HPE source at any iLO generation |
 | `fake` | Implemented | Deterministic dev/CI data through the same port |
 
@@ -205,13 +213,23 @@ Table, Tailwind 4, Vite. Pages: sites overview (landing), inventory,
 server detail (overview/hardware/network/connectivity tabs),
 classification rules, health policies, and an audit history panel.
 
-The sites overview leads with fleet-wide cards — everything, UPI, MCE, and
-Hosted cluster — above the per-site cards, each linking into the
-pre-filtered server list (`/servers?installation_type=UPI`). They are a
-sum over `GET /api/v1/sites`, which carries a `by_installation_type`
-object per site row (`HOSTED_CLUSTER`/`MCE`/`UPI`/`UNCLASSIFIED`, each
-with the same total/health/vendor/maintenance counts a site has) rather
-than a second endpoint.
+The sites overview leads with six fleet-wide cards above the per-site
+cards, ordered so a three-column grid reads as two rows: `Across all
+sites` / `UPI` / `Hosted cluster`, then `MCE` / `Available` /
+`Installed`. Each links into the pre-filtered server list
+(`/servers?installation_type=UPI`, `/servers?openshift_state=AVAILABLE`).
+
+They are a sum over `GET /api/v1/sites`, which carries two slice objects
+per site row rather than needing a second endpoint: `by_installation_type`
+(`HOSTED_CLUSTER`/`MCE`/`UPI`/`UNCLASSIFIED`) and `by_openshift_state`
+(`AVAILABLE`/`INSTALLED`/`INSTALLED_TO_INVENTORY`), each carrying the same
+total/health/vendor/maintenance counts a site does. The two answer
+different questions on purpose — what a server's *name* claims it is,
+against what a cluster reports actually holding it (ADR-0024).
+
+`INSTALLED_TO_INVENTORY` has no card of its own: the landing page asks
+"what is in use and what is free", and a third state on that row would
+dilute it. It is still filterable and still in the per-site slice.
 
 It holds **no** copy of the site list — it reads that from
 `GET /api/v1/sites`, which is what let ADR-0018 change the site model
@@ -284,7 +302,23 @@ OpenShift namespace
 ├── Secret   <release>-collector-credentials  (rendered from values, or bring your own)
 ├── MongoDB  ─┐  platform-provided, not deployed by this chart
 └── Redis    ─┘
+
+EVERY OpenShift cluster, its own namespace, its own Helm release
+  (deploy/helm/openshift-membership — a SEPARATE chart)
+├── CronJob  <release>-openshift-nodes    (every cluster; --source nodes)
+├── CronJob  <release>-openshift-agents   (MCE hubs only; --source agents)
+│      the one workload here that mounts its ServiceAccount token: it
+│      reads its own cluster's Kubernetes API
+├── ServiceAccount + ClusterRole (list on nodes and/or agents, read-only)
+└── needs: network to the platform's MongoDB, plus copies of the
+          mongo-uri and cursor-secret Secrets
 ```
+
+**The membership jobs do not live in the inventory namespace.** That is
+the most important deployment fact about them: they run wherever the
+cluster they report on runs, one Helm release per cluster, pointed at by
+an ArgoCD `Application` each. They reach MongoDB directly, exactly as a
+collector does, and never call this platform's API.
 
 - **Images:** backend on `ubi9/ubi-minimal:9.8`; frontend built on
   `ubi9/nodejs-22` and served by `ubi9/nginx-124`. Both published to GHCR
@@ -297,9 +331,9 @@ OpenShift namespace
   environment** (ADR-0012). No `Manager` document to create. The Redfish
   collector is the documented exception: its fleet comes from a mounted
   TOML inventory (ADR-0016).
-- **Gap, stated plainly: there are no Kubernetes manifests for the
-  frontend.** Only the backend has a Deployment/Service/Route, despite the
-  frontend having had a working Containerfile since slice 1.
+- **The frontend has full manifests** (Deployment/Service/Route) as of
+  chart 0.2.0. This entry used to record their absence as a gap and was
+  simply out of date.
 - **Gap: nothing deploys these images.** CI publishes; no GitOps/ArgoCD
   wiring exists.
 
@@ -312,7 +346,7 @@ OpenShift namespace
 | **Domain model** | `domain/models` | `Server` composed of `identity`, `profile_template`, `hardware`, `network`, `connectivity`, `classification`, `health`, `maintenance`, `openshift`; plus `Site`, `Manager`, `ClassificationRule`, `HealthPolicy`, `AuditEvent`. `Vendor` is `dell`/`cisco`/`hp`/`standalone`; `InstallationType` is `HOSTED_CLUSTER`/`MCE`/`UPI`/`UNCLASSIFIED` |
 | **Error handling** | `exception_handlers` | RFC 9457 Problem Details, extended with a stable `code`, `request_id` and structured `details` (ADR-0002) |
 | **Persistence rules** | `infrastructure/mongodb` | Datetimes stored as ISO 8601 **strings**; range/cursor queries must compare against that type (ADR-0006 — this caused a real silent-wrong-results bug) |
-| **Search** | `domain/services/search_tokens` | Anchored, escaped prefix match over a multikey-indexed token array; structurally incapable of ReDoS or an unanchored scan (ADR-0004) |
+| **Search** | `domain/services/search_tokens` | Anchored, escaped prefix match over a multikey-indexed token array; structurally incapable of ReDoS or an unanchored scan (ADR-0004). Tokens are word-boundary **suffixes**, so the anchored query still finds a fragment from the middle of a name — `cisco-m6` matches `ocp-cisco-m6-bat-yam-…` (ADR-0025) |
 | **Pagination** | `domain/services/cursor` | Keyset only, HMAC-signed cursor bound to the filter/sort combination |
 | **Caching** | `infrastructure/redis` | Cache-aside; revision-keyed detail entries; every method returns a miss on error rather than raising |
 | **Classification** | `domain/services/classification` | Total order `(priority, specificity, order, id)` computed in Python; conflicts recorded, not hidden (ADR-0005 for the sibling idea) |
@@ -368,6 +402,8 @@ of it.
 | 0021 | A built-in GPU catalog, matched by model string as well as Cisco PID |
 | 0022 | HPE is collected from OneView only, at every iLO generation |
 | 0023 | `ServerInventoryProvider` becomes an ABC with a `collect()` template method |
+| 0024 | Cluster membership is reported by the clusters, per cluster, as a reconcile |
+| 0025 | Search tokens are word-boundary suffixes, so an anchored query finds mid-name fragments |
 
 ---
 
@@ -411,8 +447,7 @@ go stale — treat its date as load-bearing.
 | Risk | Detail |
 |---|---|
 | **No authentication at all** | Every endpoint is open to anyone who can reach the Route, including all write endpoints. Deliberate and confirmed, but it is the release gate and nothing should go to production without it. |
-| **The OpenManage (Dell) collector has never been run against live hardware** | The one collector left with no live-hardware pass at all — UCS Manager/Central, Intersight and OneView have all now been validated against real equipment (ADR-0009, ADR-0017, ADR-0022). Its hardware half reuses the Redfish mapping and inherits `REDFISH_STANDALONE`'s own validation for that half only; the OME identity/name-resolution half (`docs/adr/0020`) has no live-hardware proof of its own. |
-| **No staleness detection** | A CronJob pod is never scraped, so no collector-side metric can report its own absence. Nothing today answers "40 hosts have been failing for two weeks". `last_seen_at` is written on every ingest and read by nothing. This is the top item on the not-done list. |
+| **No staleness detection** | A CronJob pod is never scraped, so no metric can report its own absence. Nothing today answers "40 hosts have been failing for two weeks". `last_seen_at` is written on every ingest and read by nothing. Since 2026-09-10 this covers the **membership jobs** too, where it bites harder: a cluster that stops running its job leaves every server it holds `INSTALLED` forever, so the inventory quietly overstates how much capacity is in use. Top item on the not-done list. |
 
 ### Medium
 
@@ -465,3 +500,8 @@ go stale — treat its date as load-bearing.
 | **PARTIAL run** | Exit code 3: some servers were written, but the run did not see the whole fleet. |
 | **UCSPE** | Cisco's free UCS Platform Emulator — the test target that validated the UCS collector. |
 | **PVA** | Intersight Private Virtual Appliance: on-prem Intersight, the only form reachable from an air-gapped site. |
+| **Membership job** | A scheduled process that runs *inside* an OpenShift cluster and reports which servers that cluster is using. Two sources, `nodes` and `agents`. Not a collector: it reads no vendor and writes only `Server.openshift` (ADR-0024). |
+| **`OpenShiftState`** | Whether a cluster holds a server: `AVAILABLE` (nothing does — the default, and the only state reached by absence), `INSTALLED` (a cluster does), `INSTALLED_TO_INVENTORY` (an MCE holds it but no cluster does — the spare pool). Distinct from **classification**, which is what the *name* claims. |
+| **MCE hub** | A multicluster-engine cluster that provisions and manages other clusters. Runs both membership jobs: `agents` for the fleet it manages, `nodes` for its own hardware. |
+| **Agent** | The `agent-install.openshift.io` custom resource an MCE creates per discovered host. Bound to a cluster or unbound; the `agents` job reads these. |
+| **Reconcile (membership)** | Each run claims what its cluster reports *and frees what it does not*, scoped to the servers already naming that cluster. Nothing in Kubernetes reports a removal, so this is the only thing that returns a server to `AVAILABLE`. |

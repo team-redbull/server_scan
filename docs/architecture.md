@@ -796,6 +796,15 @@ is `docs/adr/0013`.
 
 ### Staleness detection is the collector's missing half
 
+**Since 2026-09-10 this covers the membership jobs too, where it bites
+harder.** A collector that stops running leaves stale hardware facts; a
+membership job that stops running leaves every server it holds
+`INSTALLED` forever, because `AVAILABLE` is only ever reached by that
+job's own reconcile. The inventory then quietly overstates how much of
+the fleet is in use — and the sites page's Available card, the one an
+operator would act on, is exactly what goes wrong.
+
+
 A CronJob pod lives minutes and exits, so Prometheus never scrapes it —
 no metric the Redfish collector emits could report its own *absence*,
 which is exactly the failure that matters when hosts quietly stop

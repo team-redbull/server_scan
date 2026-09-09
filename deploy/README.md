@@ -1,6 +1,11 @@
 # Deployment
 
-One Helm chart under `helm/server-inventory`, and nothing else.
+Two Helm charts. `helm/server-inventory` is the platform — API, frontend
+and the per-vendor collector CronJobs — and is what the rest of this
+document is about. `helm/openshift-membership` is the pair of jobs that
+run *inside* every OpenShift cluster to report what it is using, one
+release per cluster; it has its own README, and the section below says
+why it is separate.
 
 There used to be a parallel set of plain OpenShift YAML under
 `openshift/`. It was removed rather than maintained: it held the same

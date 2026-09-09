@@ -44,6 +44,10 @@ far, in order:
     (`docs/adr/0020-dell-identity-from-ome-hardware-from-redfish.md`).
 13. **HPE OneView**, the only source for every HPE server whatever its
     iLO generation (`docs/adr/0022-oneview-only-hpe-collector.md`).
+14. **Cluster membership** — two jobs that run *inside* each OpenShift
+    cluster and report which servers it is actually using, which is the
+    one question no vendor manager can answer
+    (`docs/adr/0024-openshift-cluster-membership.md`).
 
 Each [GitHub Release](https://github.com/team-redbull/server_scan/releases)
 lists what changed in it, generated from the commit subjects that also
@@ -160,8 +164,12 @@ standalone".
  UCS Central CronJob ─┐   (one login per UCS Manager domain)
  Redfish CronJob ─────┼── (one login per BMC, from an inventory file)
  OpenManage CronJob ──┼──▶  ProviderServer  ──▶  IngestService  ──▶  MongoDB
- Intersight CronJob ──┤       (vendor-neutral)   (classify, health,        │
- OneView CronJob ─────┘                           audit, upsert)          │
+ Intersight CronJob ──┤       (vendor-neutral)   (classify, health,        ▲
+ OneView CronJob ─────┘                           audit, upsert)           │
+                                                                           │
+ openshift-nodes  CronJob ─┐  in EVERY cluster    writes Server.openshift  │
+ openshift-agents CronJob ─┴─ on an MCE hub       only, never IngestService┘
+                                                                            │
                                                                             ▼
                                                        FastAPI REST API (reads MongoDB,
                                                        Redis cache-aside on top)
@@ -177,8 +185,11 @@ MongoDB is the only thing that ties a collector run to what the UI shows
 vendor manager directly. Adding a new vendor is: write a `ServerInventoryProvider`
 implementation for it (see `app.infrastructure.providers.ucs_manager` as
 the reference), register it in `tools/run_collector.py`, and add a
-CronJob manifest — nothing in the API, the classification engine, the
-health engine, or the frontend needs to change. `docs/adr/0009-ucs-
+CronJob to `deploy/helm/server-inventory` — nothing in the API, the
+classification engine, the health engine, or the frontend needs to
+change. (The membership jobs are the other chart,
+`deploy/helm/openshift-membership`, and do not go through this seam at
+all — they write `Server.openshift` directly.) `docs/adr/0009-ucs-
 manager-collector.md` is the detailed writeup of how the first provider
 was built and validated, and `docs/adr/0014-ucs-central-multi-domain-
 collector.md` of how the Cisco collector drives it once per domain.
@@ -396,10 +407,20 @@ is reachable.
 
 **What to look at once it's seeded** (`--count 1000 --seed 42`):
 
-* **The sites overview's fleet cards** read roughly 435 UPI, 349
-  hosted-cluster, 101 MCE and 115 unclassified. All four are meant to be
-  non-empty and visibly different — an unclassified server is a real
-  state, not a seeding accident.
+* **The sites overview's six fleet cards** read 1000 across all sites,
+  453 UPI, 292 hosted-cluster and 127 MCE on the first row, then 191
+  available and 706 installed on the second. (128 servers are
+  unclassified and 103 are installed-to-inventory; neither has a card,
+  both are filterable.) Every card is meant to be non-empty and visibly
+  different — an unclassified server is a real state, not a seeding
+  accident, and so is an available one.
+* **Availability is not derived from the name.** A seeded server named
+  `ocp4-prod-tlv-compute-01` can come back `AVAILABLE`, because a freed
+  server keeps the name it was installed under. That disagreement between
+  what a name claims and what a cluster reports is the whole point of
+  keeping the two apart (ADR-0024) — if only `random-server-*` entries
+  were ever free, the Available card would be lying about the shape of a
+  real fleet.
 * **GPU VRAM comes from the catalog, not from the fixture.** No vendor
   API reports a GPU's memory (see
   `docs/adr/0021-built-in-gpu-catalog-with-model-matching.md`), so no
