@@ -72,17 +72,8 @@ AUDIT_EVENTS_COLLECTION = "audit_events"
 SERVER_INDEXES: list[IndexModel] = [
     IndexModel(
         [("identity.system_uuid", ASCENDING)],
-        # Renamed from "uniq_system_uuid" to "system_uuid", 2026-09-09,
-        # at the operator's explicit request — the old name is actively
-        # misleading once the field is no longer unique. `_create_indexes`
-        # below detects a changed spec by matching *name*, so a rename
-        # does NOT migrate an already-deployed database automatically: it
-        # creates this index alongside the old "uniq_system_uuid" one
-        # rather than replacing it, leaving the old unique constraint in
-        # place. An existing deployment needs the old index dropped
-        # explicitly (`db.servers.dropIndex("uniq_system_uuid")`) or the
-        # database recreated — this was a deliberate, informed choice for
-        # this deployment, not something every future rename can assume.
+        # Renamed from "uniq_system_uuid" 2026-09-09; that name is in
+        # `RETIRED_INDEXES` so a deployed database drops it on startup.
         name="system_uuid",
         # NOT unique, since 2026-09-09 — see the module docstring for why
         # a live UCS domain proved this field cannot be trusted to be
@@ -275,6 +266,17 @@ AUDIT_EVENT_INDEXES: list[IndexModel] = [
 
 
 _INDEX_KEY_SPECS_CONFLICT = 86
+_INDEX_NOT_FOUND = 27
+
+# Indexes this file once declared and no longer does, by collection.
+# `_create_indexes` reconciles on *name*, so a renamed index leaves its
+# predecessor in place with its old options still enforced — which is how
+# a `uniq_system_uuid` that stopped being declared kept rejecting real
+# servers long after the declaration said it was not unique. Renaming or
+# removing an index means adding its old name here.
+RETIRED_INDEXES: dict[str, tuple[str, ...]] = {
+    SERVERS_COLLECTION: ("uniq_system_uuid",),
+}
 
 
 async def _create_indexes(
@@ -331,15 +333,47 @@ async def _create_indexes(
             await db[collection].create_indexes([index])
 
 
+async def _drop_retired(
+    db: AsyncDatabase[dict[str, Any]], collection: str, names: tuple[str, ...]
+) -> None:
+    """
+    Drop indexes this file no longer declares, if the database still has them.
+
+    Args:
+        db (AsyncDatabase[dict[str, Any]]): The database to act on.
+        collection (str): Collection whose retired indexes are dropped.
+        names (tuple[str, ...]): Index names that are no longer declared.
+
+    Raises:
+        OperationFailure: For any failure other than the index already
+            being absent, which is the normal case.
+    """
+    for name in names:
+        try:
+            await db[collection].drop_index(name)
+        except OperationFailure as exc:
+            if exc.code != _INDEX_NOT_FOUND:
+                raise
+            continue
+        logger.warning(
+            "mongo.index_retired",
+            collection=collection,
+            index=name,
+            hint="Dropped an index this build no longer declares.",
+        )
+
+
 async def ensure_indexes(db: AsyncDatabase[dict[str, Any]]) -> None:
     """
-    Create every declared index if missing.
+    Create every declared index if missing, and drop retired ones.
 
     Safe to call on every process startup — see the module docstring.
 
     Args:
         db (AsyncDatabase[dict[str, Any]]): The database to act on.
     """
+    for collection, retired in RETIRED_INDEXES.items():
+        await _drop_retired(db, collection, retired)
     await _create_indexes(db, SERVERS_COLLECTION, SERVER_INDEXES)
     await _create_indexes(db, SITES_COLLECTION, SITE_INDEXES)
     await _create_indexes(db, MANAGERS_COLLECTION, MANAGER_INDEXES)
