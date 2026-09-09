@@ -81,6 +81,12 @@ jobs:
       - name: ty
         run: uv run ty check backend/app tools tests
 
+      # Convention 8's two rules ruff cannot express: comment-block length
+      # and docstring-summary length. Existing offenders are baselined and
+      # that list may only shrink.
+      - name: comment density
+        run: uv run python scripts/check_comment_density.py
+
       # Gates the 4 layering contracts that already hold (domain
       # independent of every outer layer, infrastructure independent of
       # application and api, application independent of api) — see

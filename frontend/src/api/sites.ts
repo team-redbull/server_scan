@@ -2,6 +2,7 @@ import { apiFetch } from "@/api/client";
 import type {
   HealthSeverity,
   InstallationType,
+  OpenShiftState,
   SiteCode,
   Vendor,
 } from "@/types/server";
@@ -42,15 +43,18 @@ export interface SiteStats extends Breakdown {
   name: string;
   /** Always contains every `InstallationType` key, including empty ones. */
   by_installation_type: Record<InstallationType, Breakdown>;
+  /** Always contains every `OpenShiftState` key, including empty ones. */
+  by_openshift_state: Record<OpenShiftState, Breakdown>;
 }
 
 /** Every site summed together, sliced further by installation type — the
- * fleet-wide "Across all sites"/UPI/hosted-cluster cards. Computed
+ * fleet-wide cards. Computed
  * backend-side from the same aggregation `items` is built from, not
  * summed from `items` here, so it can never disagree with what a second
  * consumer of this endpoint would compute for itself. */
 export interface FleetSummary extends Breakdown {
   by_installation_type: Record<InstallationType, Breakdown>;
+  by_openshift_state: Record<OpenShiftState, Breakdown>;
 }
 
 export interface SiteStatsListResponse {
@@ -72,9 +76,12 @@ export function listSites(): Promise<SiteStatsListResponse> {
 export function siteOptions(
   items: SiteStats[] | undefined,
 ): { value: string; label: string }[] {
-  return (items ?? [])
-    .filter((site) => site.site_id !== UNASSIGNED_SITE_ID)
-    .map((site) => ({ value: site.site_id, label: site.name }));
+  // Unassigned is offered like any other site: a growing count is how a
+  // naming drift becomes visible, and it has to be listable to be fixed.
+  return (items ?? []).map((site) => ({
+    value: site.site_id,
+    label: site.name,
+  }));
 }
 
 export const VENDORS: readonly Vendor[] = ["dell", "cisco", "hp", "standalone"];

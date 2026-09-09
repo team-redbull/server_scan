@@ -92,6 +92,18 @@ any real collector exists.
   at ingest time from name/serial/model/vendor/tags/MACs (both colon and
   bare-hex forms, so a PXE-script-style bare MAC and a colon-form MAC find
   the same server).
+
+  Each value contributes **every suffix of itself that starts at a word
+  boundary**, not its bare parts, so an anchored query still finds a
+  fragment from the middle of a structured name: `cisco-m6` finds
+  `ocp-cisco-m6-bat-yam-128c-1024gb-CIS0000010`. Matching from inside a
+  word (`isco`) deliberately does not work — it would need an unanchored
+  regex, measured at ~650ms per facet query on 52k servers against ~1-26ms
+  for the anchored one. See
+  `docs/adr/0025-search-tokens-are-word-boundary-suffixes.md`.
+
+  `search_tokens` is written by `IngestService`, so a token-shape change
+  reaches existing documents only on their next collection.
 - **Pagination is keyset (cursor-based), never `skip`/`offset`.** The
   cursor is an opaque, HMAC-signed token
   (`app.domain.services.cursor`) binding the current filter/sort
@@ -727,6 +739,45 @@ Two rules are shared across every one of those mappings:
   still delivering power has not lost redundancy, and counting it would
   raise CRITICAL on a healthy server.
 
+### Cluster membership: a second kind of job, and a reconcile
+
+Every collector above answers "what hardware exists". None can answer "is
+anything using it": a vendor manager sees a blade as `associated` whether
+it runs production or nothing at all. Before 2026-09-09 the only cluster
+signal was `Classification.installation_type`, a regex verdict on the
+hostname — which says what a machine was *named* to be, so a freed server
+and a running one were indistinguishable.
+
+`tools/collect_openshift.py` runs *inside* a cluster and writes
+`Server.openshift` and nothing else. Two sources: `--source nodes` on
+every cluster (its own worker nodes) and `--source agents` on an MCE hub
+(its Agents, `INSTALLED` when bound to a cluster,
+`INSTALLED_TO_INVENTORY` when bound to nothing). Correlation is by
+hostname; `spec.hostname` wins and `status.inventory.hostname` is the
+fallback, which is what makes it work across Cisco and Dell alike.
+
+Three things are worth carrying:
+
+- **It reconciles a set, it does not write what it saw.** Nothing in
+  Kubernetes reports a removal — a freed server just stops appearing — so
+  a job that only wrote observations would leave every server it ever saw
+  `INSTALLED` forever. Each run therefore also frees the servers still
+  naming its cluster that it did *not* see this time.
+- **The scope of that free is the safety property.** A job may only ever
+  release servers that already name its own cluster. That is what lets
+  one job per cluster run independently: a broken one cannot free
+  another cluster's machines.
+- **It refuses twice.** A failed read exits non-zero and writes nothing;
+  a *successful* read returning nothing also refuses, because an empty
+  answer is far more likely a broken selector or an RBAC change than a
+  genuinely emptied cluster — and acting on it would free everything.
+
+Deployment is one Helm release per cluster
+(`deploy/helm/openshift-membership`), separate from the platform's own
+chart because these run somewhere else entirely. Design and the field
+trim that took `OpenShiftLifecycle` to five fields:
+`docs/adr/0024-openshift-cluster-membership.md`.
+
 ### CI supply chain
 
 Every GitHub Action is pinned to a commit SHA rather than a tag, because
@@ -768,4 +819,7 @@ as done.
   of the system and come back here for how a part works.
 - `docs/adr/` — architecture decision records, added as decisions are made
   (not written speculatively ahead of the code).
-- `deploy/` — OpenShift and Helm deployment manifests.
+- `deploy/` — OpenShift and Helm deployment manifests, including
+  `deploy/helm/openshift-membership/README.md` for the per-cluster jobs.
+- `scripts/check_comment_density.py` — the CI gate behind CLAUDE.md's
+  convention 8, with its baseline of pre-existing debt beside it.

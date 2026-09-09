@@ -67,9 +67,7 @@ class TestCleanHostname:
 
     def test_empty_becomes_none_not_empty_string(self) -> None:
         """Load-bearing, not tidiness: `agent_observation` chains the two
-        hostname sources with `or`, and an empty string is falsy but a
-        *present* value — returning "" would still short-circuit correctly
-        here, but would then be written onto a server as its node name.
+        hostname sources with `or` (ADR-0024).
         """
         assert clean_hostname("") is None
         assert clean_hostname("   ") is None
@@ -85,7 +83,7 @@ class TestAgentHostname:
         """
         observation = agent_observation(
             _agent(requested="ocp4-tlv-worker-01", reported="b0-7b-25-1a-44-c0"),
-            mce_id="mce-tlv",
+            mce_name="mce-tlv",
         )
 
         assert observation is not None
@@ -95,9 +93,7 @@ class TestAgentHostname:
         """The Cisco case: nobody set a requested hostname because the
         machine already reports its real name.
         """
-        observation = agent_observation(
-            _agent(reported="ocp4-tlv-worker-02"), mce_id="mce-tlv"
-        )
+        observation = agent_observation(_agent(reported="ocp4-tlv-worker-02"), mce_name="mce-tlv")
 
         assert observation is not None
         assert observation.hostname == "ocp4-tlv-worker-02"
@@ -108,7 +104,7 @@ class TestAgentHostname:
         on a MAC-derived name.
         """
         observation = agent_observation(
-            _agent(requested="   ", reported="ocp4-tlv-worker-03"), mce_id="mce-tlv"
+            _agent(requested="   ", reported="ocp4-tlv-worker-03"), mce_name="mce-tlv"
         )
 
         assert observation is not None
@@ -118,7 +114,7 @@ class TestAgentHostname:
         """An Agent nothing can be correlated on is reported as unmatched,
         never attached to a plausible-looking server.
         """
-        assert agent_observation(_agent(), mce_id="mce-tlv") is None
+        assert agent_observation(_agent(), mce_name="mce-tlv") is None
 
 
 class TestAgentState:
@@ -126,26 +122,24 @@ class TestAgentState:
 
     def test_a_bound_agent_is_installed_and_names_its_cluster(self) -> None:
         observation = agent_observation(
-            _agent(requested="ocp4-tlv-worker-01", cluster="hc-tlv-02"), mce_id="mce-tlv"
+            _agent(requested="ocp4-tlv-worker-01", cluster="hc-tlv-02"), mce_name="mce-tlv"
         )
 
         assert observation is not None
         assert observation.lifecycle_state is OpenShiftState.INSTALLED
         assert observation.cluster_name == "hc-tlv-02"
-        assert observation.mce_id == "mce-tlv"
+        assert observation.mce_name == "mce-tlv"
 
     def test_an_unbound_agent_is_in_inventory_with_no_cluster(self) -> None:
         """`cluster_name` stays None rather than empty: there is no
         cluster, which is a different claim from a name that went unread.
         """
-        observation = agent_observation(
-            _agent(requested="ocp4-tlv-spare-07"), mce_id="mce-tlv"
-        )
+        observation = agent_observation(_agent(requested="ocp4-tlv-spare-07"), mce_name="mce-tlv")
 
         assert observation is not None
         assert observation.lifecycle_state is OpenShiftState.INSTALLED_TO_INVENTORY
         assert observation.cluster_name is None
-        assert observation.mce_id == "mce-tlv"
+        assert observation.mce_name == "mce-tlv"
 
 
 class TestNodes:
@@ -160,22 +154,7 @@ class TestNodes:
         assert observation is not None
         assert observation.lifecycle_state is OpenShiftState.INSTALLED
         assert observation.cluster_name == "ocp4-tlv"
-        assert observation.mce_id is None
-        assert observation.role == "worker"
-
-    def test_a_master_is_labelled_as_one(self) -> None:
-        observation = node_observation(
-            {
-                "metadata": {
-                    "name": "ocp4-tlv-master-01",
-                    "labels": {"node-role.kubernetes.io/master": ""},
-                }
-            },
-            cluster_name="ocp4-tlv",
-        )
-
-        assert observation is not None
-        assert observation.role == "master"
+        assert observation.mce_name is None
 
     def test_a_nameless_node_is_skipped(self) -> None:
         assert node_observation({"metadata": {}}, cluster_name="ocp4-tlv") is None

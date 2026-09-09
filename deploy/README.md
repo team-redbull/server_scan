@@ -207,6 +207,22 @@ A collector's entire connection config is one endpoint and one login per
 manager type, set in `collectors.<vendor>` in `values.yaml`. There are no
 `Manager` documents to create first and no credentials volume to mount.
 
+### The membership jobs are a different chart
+
+`deploy/helm/openshift-membership` is a **separate chart**, not part of
+this one, because its jobs run inside every OpenShift cluster rather than
+beside the API. One release per cluster, deployed by ArgoCD: a UPI
+cluster sets `nodes.enabled` + `nodes.clusterName`, an MCE hub also sets
+`agents.enabled` + `agents.mceName`. Both names are Helm `required`, so a
+misconfigured release fails at template time instead of running a job
+that exits 2 every 15 minutes.
+
+Each cluster needs network to this platform's MongoDB and a copy of the
+`mongo-uri` and `cursor-secret` Secrets — the jobs write directly, like
+every collector here, and never call the API. That chart's own README has
+the values; `docs/adr/0024-openshift-cluster-membership.md` has the
+design.
+
 `collectors.timeZone` (default `Asia/Jerusalem`) sets every CronJob's
 `spec.timeZone` (Kubernetes 1.27+), so a schedule like `"0 2 * * *"` fires
 at 2am local time, DST included, rather than 2am on whatever timezone the
@@ -320,3 +336,7 @@ CI does now build and publish both images to GHCR on every push to main
 (`docs/adr/0010-image-publishing-and-versioning.md`), but nothing
 *deploys* them: there is no CD/GitOps wiring and no automatic manifest
 update, tracked as pending work in `CLAUDE.md`.
+
+`deploy/helm/openshift-membership` is the exception in one respect: it is
+written to be pointed at by an ArgoCD `Application` per cluster, so its
+per-cluster values are the only thing that differs between releases.

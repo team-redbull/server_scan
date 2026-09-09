@@ -19,10 +19,16 @@ from app.utils.timeutil import utcnow
 pytestmark = pytest.mark.unit
 
 
+# A share of every server is seeded AVAILABLE regardless of its name, so
+# a test exercising the installed paths must pin an id that draws past it.
+_INSTALLED_ID = "srv_openshift_test_0"
+_AVAILABLE_ID = "srv_openshift_free_2"
+
+
 def _server(
     name: str,
     *,
-    server_id: str = "srv_openshift_test",
+    server_id: str = _INSTALLED_ID,
     installation_type: InstallationType = InstallationType.UNCLASSIFIED,
     site_id: str | None = "tlv",
 ) -> Server:
@@ -64,7 +70,13 @@ def test_it_is_deterministic_per_server() -> None:
     """
     server = _server("random-server-0001")
 
-    assert openshift_for(server) == openshift_for(server)
+    first, second = openshift_for(server), openshift_for(server)
+
+    # `last_reported_at` is `utcnow()`, so it differs between two calls by
+    # design; everything drawn from the id must not.
+    assert first.model_dump(exclude={"last_reported_at"}) == second.model_dump(
+        exclude={"last_reported_at"}
+    )
 
 
 def test_a_hosted_cluster_node_names_its_cluster_and_its_mce() -> None:
@@ -75,7 +87,7 @@ def test_a_hosted_cluster_node_names_its_cluster_and_its_mce() -> None:
 
     assert state.lifecycle_state is OpenShiftState.INSTALLED
     assert state.cluster_name is not None
-    assert state.mce_id == "mce-tlv"
+    assert state.mce_name == "mce-tlv"
 
 
 def test_a_upi_node_names_a_cluster_but_no_mce() -> None:
@@ -88,7 +100,7 @@ def test_a_upi_node_names_a_cluster_but_no_mce() -> None:
 
     assert state.lifecycle_state is OpenShiftState.INSTALLED
     assert state.cluster_name == "upi-tlv"
-    assert state.mce_id is None
+    assert state.mce_name is None
 
 
 def test_an_agent_in_inventory_has_an_mce_but_no_cluster() -> None:
@@ -100,15 +112,12 @@ def test_an_agent_in_inventory_has_an_mce_but_no_cluster() -> None:
         openshift_for(_server(f"random-server-{i:04d}", server_id=f"srv_avail_{i}"))
         for i in range(40)
     ]
-    in_inventory = [
-        s for s in states if s.lifecycle_state is OpenShiftState.INSTALLED_TO_INVENTORY
-    ]
+    in_inventory = [s for s in states if s.lifecycle_state is OpenShiftState.INSTALLED_TO_INVENTORY]
 
     assert in_inventory, "no server came back in inventory across 40 draws"
     for state in in_inventory:
         assert state.cluster_name is None
-        assert state.mce_id is not None
-        assert state.agent_id is not None
+        assert state.mce_name is not None
 
 
 def test_an_unclaimed_server_carries_no_claims_at_all() -> None:
@@ -125,7 +134,7 @@ def test_an_unclaimed_server_carries_no_claims_at_all() -> None:
     assert available, "no server came back available across 40 draws"
     for state in available:
         assert state.cluster_name is None
-        assert state.mce_id is None
+        assert state.mce_name is None
         assert state.last_reported_at is None
 
 
@@ -143,11 +152,31 @@ def test_a_reported_server_always_carries_a_timestamp() -> None:
 
 
 def test_membership_is_not_forced_to_agree_with_the_classification() -> None:
-    """The point of keeping the two apart. A server whose name classifies
-    UNCLASSIFIED can still be running in a hosted cluster, and that
-    disagreement is the signal — a pass that derived one from the other
-    could never produce it.
+    """The point of keeping the two apart: a name that classifies one way
+    can still be running somewhere else, and that is the signal.
     """
     state = openshift_for(_server("ocp4-hypershift-tlv-05"))
 
     assert state.lifecycle_state is OpenShiftState.INSTALLED
+
+
+def test_every_state_is_reachable_for_every_installation_type() -> None:
+    """Convention 10: a seeded fleet where only junk-named servers are ever
+    free is the opposite of the real one, and would make the Available
+    card and `?openshift_state=AVAILABLE` look broken in every demo.
+    """
+    for installation_type in InstallationType:
+        seen = {
+            openshift_for(
+                _server(
+                    "ocp4-prod-tlv-compute-01",
+                    server_id=f"srv_{installation_type.value}_{index}",
+                    installation_type=installation_type,
+                )
+            ).lifecycle_state
+            for index in range(200)
+        }
+        assert OpenShiftState.AVAILABLE in seen, installation_type
+        assert OpenShiftState.INSTALLED in seen or (
+            installation_type is InstallationType.UNCLASSIFIED
+        ), installation_type

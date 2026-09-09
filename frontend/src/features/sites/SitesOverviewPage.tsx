@@ -46,7 +46,8 @@ function vendorLabel(vendor: string): string {
 }
 
 /**
- * The fleet-wide cards: everything, then each installation type.
+ * The fleet-wide cards: everything, each installation type, then what
+ * OpenShift reports actually holding the fleet.
  *
  * `unassigned` is included in all of them — those servers are in the
  * fleet whatever their hostname says. The numbers come straight off the
@@ -78,18 +79,33 @@ function fleetCards(fleet: FleetSummary): CardSpec[] {
       stats: fleet.by_installation_type.UPI,
     },
     {
+      key: "HOSTED_CLUSTER",
+      name: "Hosted cluster",
+      subtitle: "servers, every site",
+      to: "/servers?installation_type=HOSTED_CLUSTER",
+      stats: fleet.by_installation_type.HOSTED_CLUSTER,
+    },
+    {
       key: "MCE",
       name: "MCE",
       subtitle: "servers, every site",
       to: "/servers?installation_type=MCE",
       stats: fleet.by_installation_type.MCE,
     },
+    // What a cluster reports holding, not what a name claims — ADR-0024.
     {
-      key: "HOSTED_CLUSTER",
-      name: "Hosted cluster",
-      subtitle: "servers, every site",
-      to: "/servers?installation_type=HOSTED_CLUSTER",
-      stats: fleet.by_installation_type.HOSTED_CLUSTER,
+      key: "AVAILABLE",
+      name: "Available",
+      subtitle: "no cluster holds these",
+      to: "/servers?openshift_state=AVAILABLE",
+      stats: fleet.by_openshift_state.AVAILABLE,
+    },
+    {
+      key: "INSTALLED",
+      name: "Installed",
+      subtitle: "in use by a cluster",
+      to: "/servers?openshift_state=INSTALLED",
+      stats: fleet.by_openshift_state.INSTALLED,
     },
   ];
 }

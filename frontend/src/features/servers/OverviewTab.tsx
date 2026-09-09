@@ -147,7 +147,7 @@ export function OverviewTab({
  * server is misnamed or misplaced, and seeing both is the only way to
  * notice — so this never falls back to the classification. */
 function OpenShiftValue({ server }: { server: ServerDetail }) {
-  const { lifecycle_state, cluster_name, mce_id, role } = server.openshift;
+  const { lifecycle_state, cluster_name, mce_name } = server.openshift;
 
   return (
     <div className="flex flex-col gap-1">
@@ -156,7 +156,7 @@ function OpenShiftValue({ server }: { server: ServerDetail }) {
         {cluster_name && <span className="font-medium">{cluster_name}</span>}
       </div>
       <span className="text-xs text-[var(--text-secondary)]">
-        {[mce_id && `MCE ${mce_id}`, role].filter(Boolean).join(" · ") || "—"}
+        {mce_name ? `MCE ${mce_name}` : "—"}
       </span>
     </div>
   );

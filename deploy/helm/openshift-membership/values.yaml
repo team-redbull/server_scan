@@ -1,0 +1,66 @@
+# One release per cluster. A UPI cluster enables `nodes`; an MCE hub
+# enables both — `agents` for the fleet it manages, `nodes` for its own
+# hardware, which is a cluster like any other and would otherwise never
+# be reported as in use.
+
+image:
+  repository: ghcr.io/team-redbull/server_scan-api
+  # Blank means the chart's appVersion. Never `latest`.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+# Where the inventory lives. These jobs write to MongoDB directly, like
+# every collector — they never call the platform's API — so each cluster
+# needs network to it and a copy of these Secrets.
+db:
+  secretName: server-inventory-db
+  mongoUriKey: mongo-uri
+  cursorSecretName: server-inventory-cursor
+  cursorSecretKey: cursor-secret
+
+serviceAccount:
+  name: openshift-membership
+
+nodes:
+  enabled: true
+  # Required when enabled. Written onto every server this job claims, and
+  # the scope it is allowed to release: a job frees only servers already
+  # naming its own cluster, never another's. Templating fails without it
+  # rather than deploying a job that exits 2 every 15 minutes.
+  clusterName: ""
+  # Applied *after* the `node-role.kubernetes.io/worker` label selector,
+  # not instead of it: infra nodes usually carry the worker label too, so
+  # the label alone keeps them, while a name list alone would misfire on
+  # a node called `compute-infra-01`. Add per cluster rather than editing
+  # the code.
+  excludeNameParts: infra,control-plane
+  schedule: "*/15 * * * *"
+  backoffLimit: 1
+  # Well under the schedule, so a hung run is killed before the next is
+  # due rather than blocking it under Forbid.
+  activeDeadlineSeconds: 600
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      memory: 256Mi
+
+agents:
+  # Off by default: a cluster with no Agent CRD would run this every 15
+  # minutes and fail every time, turning a real alert channel into noise.
+  enabled: false
+  # Required when enabled. Same role as nodes.clusterName.
+  mceName: ""
+  schedule: "*/15 * * * *"
+  backoffLimit: 1
+  activeDeadlineSeconds: 600
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      memory: 256Mi
+
+# Set on both CronJobs when non-empty; otherwise the cluster's own zone.
+timeZone: ""

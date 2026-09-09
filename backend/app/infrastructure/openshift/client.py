@@ -39,11 +39,8 @@ _WORKER_SELECTOR = "node-role.kubernetes.io/worker"
 class ClusterUnreadableError(Exception):
     """The cluster could not be read, so nothing may be concluded from it.
 
-    Raised rather than returning an empty list, because the two are
-    opposite claims: the reconcile in
-    `app.application.services.openshift_membership` frees every server it
-    does not see, so "the read failed" must never reach it looking like
-    "the cluster is empty".
+    Raised rather than returning an empty list: the reconcile frees what it
+    does not see, so a failed read must not look like an empty cluster.
     """
 
 
@@ -89,6 +86,8 @@ class InClusterClient:
 
     def __init__(self, http: httpx.AsyncClient) -> None:
         """
+        Build the reader.
+
         Args:
             http (httpx.AsyncClient): An authenticated client, from
                 `in_cluster_client`.
@@ -113,7 +112,6 @@ class InClusterClient:
             response = await self._http.get(path, params=params)
             response.raise_for_status()
             body: dict[str, Any] = response.json()
-            return body
         except httpx.HTTPStatusError as exc:
             raise ClusterUnreadableError(
                 f"{path} returned {exc.response.status_code}. A 403 here means the "
@@ -121,16 +119,15 @@ class InClusterClient:
             ) from exc
         except (httpx.HTTPError, ValueError) as exc:
             raise ClusterUnreadableError(f"{path} could not be read: {exc}") from exc
+        else:
+            return body
 
     async def _list_all(self, path: str, params: dict[str, str] | None = None) -> list[Any]:
         """
         Follow `continue` to the end of a paged collection.
 
-        A partial list is indistinguishable from a shorter one to the
-        caller, and the reconcile frees whatever it does not see — so a
-        truncated read would silently free real servers. Every page is
-        followed, and a failure part-way raises rather than returning what
-        arrived so far.
+        A failure part-way raises rather than returning what arrived: a
+        truncated read would silently free real servers.
 
         Args:
             path (str): Collection path.
@@ -156,10 +153,7 @@ class InClusterClient:
         """
         Every worker node in this cluster, minus the excluded names.
 
-        Both filters apply, not either. The label picks the population;
-        infra nodes usually carry the worker label too, so the name list
-        removes what the label cannot. Names alone would misfire on a node
-        called `compute-infra-01`.
+        Both filters apply, not either — see ADR-0024.
 
         Args:
             exclude_name_parts (tuple[str, ...]): Substrings that

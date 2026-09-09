@@ -441,7 +441,7 @@ class Settings(BaseSettings):
 
     # Which MCE this pod is, on a hub. Same role as the cluster name, for
     # the agents job.
-    openshift_mce_id: str = ""
+    openshift_mce_name: str = ""
 
     # Nodes that do not count as fleet capacity, matched as substrings of
     # the node name, case-insensitively. Applied *after* the

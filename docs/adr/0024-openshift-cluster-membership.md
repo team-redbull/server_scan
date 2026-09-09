@@ -1,0 +1,200 @@
+# ADR-0024: cluster membership is reported by the clusters, per cluster, as a reconcile
+
+Date: 2026-09-10
+Status: Accepted
+
+Supersedes nothing. `Server.openshift` has existed since Phase 1 and only
+the fake seeder ever wrote to it; this is the decision about what fills it
+and what it holds.
+
+## Context
+
+A server's only cluster signal was `Classification.installation_type`, a
+regex verdict on its hostname. That says what a machine was *named* to be,
+never whether anything is using it — a freed server and a running one are
+byte-identical under it. "What can I build on" had no answer.
+
+Nothing already in the platform could answer it either. Vendor managers
+(UCS Central, Intersight, OME, OneView) know hardware, not workloads: to
+UCS, a blade running a production cluster and a blade sitting idle are
+both `associated`. Only the cluster knows.
+
+## Decision
+
+Two CronJobs, `tools/collect_openshift.py --source nodes|agents`, deployed
+**per cluster** by ArgoCD from `deploy/helm/openshift-membership`. Every
+cluster runs the nodes job over its own worker nodes; an MCE hub also runs
+the agents job over its Agents.
+
+They write `Server.openshift` and nothing else, the same discipline
+`MaintenanceService` follows — which is what lets one server be
+simultaneously `HOSTED_CLUSTER`, `CRITICAL`, in maintenance and
+`INSTALLED` without four writers fighting over one document. Deliberately
+not `IngestService`: that rebuilds a whole `Server` from a
+`ProviderServer` and would blank `name`, `identity.external_ids`,
+`network.interfaces` and `connectivity`, none of which a cluster knows.
+
+### Why a reconcile, not a write of what was seen
+
+**Nothing in Kubernetes reports a removal.** A server freed from a cluster
+simply stops appearing in its node list. A job that only wrote its
+observations would leave every server it ever saw `INSTALLED` forever, and
+the inventory would never show free capacity again.
+
+So each run reconciles **the set it owns** — the servers already naming
+*its* cluster — claiming what it sees and freeing what it does not:
+
+```
+for observation in observations:        # on the cluster -> claim
+    seen.add(server.id)
+for server in claimed_by(scope):        # Mongo says this cluster...
+    if server.id not in seen:           # ...but the cluster did not
+        free(server)                    #    -> AVAILABLE
+```
+
+`scope` is `{"openshift.cluster_name": <this cluster>}` for a nodes job
+and `{"openshift.mce_name": <this MCE>}` for an agents job. **That scope
+is what makes per-cluster deployment safe**: a job can only ever release
+servers that name its own cluster, so a broken job in one cluster cannot
+free another's machines. A fleet-wide "anything I did not touch is
+available" sweep would have cluster A's job free every server in clusters
+B and C on every run, because it cannot see them.
+
+### Two refusals
+
+Both matter more than they look, and both exist because the reconcile
+frees on absence:
+
+- **A failed API read exits non-zero and writes nothing.** A read that
+  failed is not evidence of an empty cluster.
+- **A *successful* read returning nothing also refuses.** A cluster with
+  no workers is far more likely a broken selector, an RBAC change or a
+  mid-upgrade blip than a genuinely emptied cluster — and acting on it
+  would free everything that cluster holds.
+
+### Correlation is by hostname, in two steps
+
+`spec.hostname` first, `status.inventory.hostname` as fallback. The order
+is the whole reason it works across vendors: Cisco reports the server's
+real name as its hostname, while Dell reports one derived from a MAC that
+matches nothing — there the real name is only in the **requested**
+hostname an operator set.
+
+`clean_hostname` returns `None` rather than `""` for a blank value. A
+present-but-empty requested hostname would otherwise short-circuit the
+`or` and strand every Dell host.
+
+**`BareMetalHost` is deliberately not read**, even though `bootMACAddress`
+would be a stronger key than a hostname. Not every server has a BMH, so a
+BMH lookup would cover part of the fleet while looking complete.
+
+### Node selection: label *and* name, not either
+
+Nodes are selected by `node-role.kubernetes.io/worker` and then filtered
+by a configurable name list (default `infra,control-plane`). Both, because
+infra nodes usually carry the worker label too — so the label alone keeps
+them — while names alone would misfire on a node called
+`compute-infra-01`.
+
+## Decision 2: `httpx` against `kubernetes.default.svc`, not a Kubernetes SDK
+
+Every SDK worth using drags `google-auth`, `oauthlib`, `requests` and
+`websocket-client` into an air-gapped mirror, and this needs two GETs.
+ADR-0017 rejected a large SDK on the same grounds. In-cluster auth is a
+token file and a CA file, so there is no kubeconfig to parse and **no new
+dependency at all**.
+
+The Agent CRD's version is discovered at runtime rather than pinned, which
+removes the one real advantage `oc get agents` had: the job keeps working
+when MCE moves the CRD to v1.
+
+## Decision 3: three states, and five fields
+
+`OpenShiftState` is `AVAILABLE` / `INSTALLED` / `INSTALLED_TO_INVENTORY`,
+replacing `UNKNOWN` / `UPI_NODE` / `HOSTED_NODE` / `AVAILABLE`.
+
+The old shape encoded *what kind* of node a server is into its status,
+which `InstallationType` already answers, and left the same fact reachable
+two ways with no single value the inventory could filter on.
+
+**There is deliberately no "nobody looked yet".** `AVAILABLE` is the
+default and the only state reached by absence. A separate `UNKNOWN` would
+be indistinguishable from "no cluster holds this" everywhere it is shown,
+and every server has to answer the in-use question somehow.
+
+`OpenShiftLifecycle` carries exactly five fields:
+
+| Field | Why it is here |
+|---|---|
+| `lifecycle_state` | The question this model exists to answer |
+| `cluster_name` | Which cluster. Unique across this estate, including across MCEs |
+| `mce_name` | Which MCE reported it; `None` on a plain cluster node |
+| `last_reported_at` | Diagnostic. The reconcile is set-based, so nothing infers availability from this going stale |
+| `reported_by_agent_id` | Which job instance wrote this, for tracing a wrong value back |
+
+An earlier shape carried five more. Each was dropped for its own reason:
+
+- **`cluster_id`** — cluster names are unique across this estate, so an id
+  disambiguates nothing.
+- **`role`** — every server this platform tracks is a worker.
+- **`node_name`** — it is the server's name, which is what the hostname
+  correlation just proved.
+- **`agent_id`, `bmh_name`, `boot_mac`** — cluster-side handles this
+  inventory never follows. `bmh_name` and `boot_mac` were never populated
+  at all, since BareMetalHost is not read.
+
+Existing documents carrying the old values decode as-is; the jobs
+overwrite them on first run, and the sites aggregation counts an
+unrecognized state under `AVAILABLE` so slice totals still add up.
+
+## Decision 4: kept separate from `Classification`, on purpose
+
+`InstallationType` says what kind of server this is; `OpenShiftState` says
+whether it is in use. **When they disagree the server is misnamed or
+misplaced, and that disagreement is the signal.** Reconciling them
+silently would destroy it. `IngestService` therefore carries the whole
+`openshift` object forward untouched on every ingest, exactly as it does
+`maintenance`: hardware and cluster membership are observed by different
+systems on different schedules, and neither is entitled to blank the
+other's findings.
+
+## Deployment
+
+A Helm chart, one release per cluster, replacing an earlier kustomize
+base/overlay tree — ArgoCD points an `Application` per cluster at the
+chart path and carries the few values that differ:
+
+```yaml
+# UPI cluster                    # MCE hub
+nodes:                           nodes:
+  enabled: true                    enabled: true
+  clusterName: ocp4-tlv            clusterName: mce-tlv
+                                 agents:
+                                   enabled: true
+                                   mceName: mce-tlv
+```
+
+`clusterName`/`mceName` are Helm `required` — a release without them fails
+at template time rather than deploying a job that exits 2 on every
+schedule. `agents.enabled` is off by default: a cluster with no Agent CRD
+would run the job every 15 minutes and fail every time, turning a real
+alert channel into noise. RBAC renders only the rule an enabled job needs,
+so a UPI cluster gets no `agents` grant.
+
+`concurrencyPolicy: Forbid`, not `Replace`: two overlapping reconciles
+would race on the same servers, and the loser's release would undo the
+winner's claim.
+
+## Consequences
+
+- Free capacity is a first-class, filterable fact
+  (`?openshift_state=AVAILABLE`), and the sites landing page can show it.
+- Every cluster needs network to the platform's MongoDB and a copy of the
+  `mongo-uri` and `cursor-secret` Secrets. The jobs write directly, like
+  every collector; they never call the platform's API.
+- A cluster that stops running its job leaves its servers `INSTALLED`
+  indefinitely. Nothing detects that yet — it is the same gap as
+  collector staleness detection, still item 0 of the not-done list, and
+  this feature adds two more CronJobs that it will need to cover.
+- `INSTALLED_TO_INVENTORY` is only ever produced by the agents job, so an
+  estate with no MCE will never see that state.

@@ -33,9 +33,9 @@ from app.api.v1.sites_schemas import (
 )
 from app.config import Settings, get_settings
 from app.dependencies import get_mongo_holder, get_redis_holder
-from app.domain.enums import HealthSeverity, InstallationType, Vendor
+from app.domain.enums import HealthSeverity, InstallationType, OpenShiftState, Vendor
 from app.domain.ports.repository import SiteBreakdownRow
-from app.domain.value_objects.site import SiteCatalog, site_catalog
+from app.domain.value_objects.site import UNASSIGNED_SITE_ID, SiteCatalog, site_catalog
 from app.infrastructure.mongodb.client import MongoClientHolder
 from app.infrastructure.mongodb.server_repository import MongoServerRepository
 from app.infrastructure.redis.cache import CacheClient
@@ -60,16 +60,14 @@ _STATS_TTL_SECONDS = 30
 # validate fine and render as zeroes; `fleet` is a new required field, so
 # an old payload without it would fail validation outright rather than
 # degrade quietly — this version bump is what avoids that.
-_STATS_CACHE_KEY = "si:3:sites:stats"
-
-# The key servers are counted under when their name carries no site.
-UNASSIGNED_SITE_ID = "unassigned"
+_STATS_CACHE_KEY = "si:4:sites:stats"
 
 # Fixed presentation order for the per-vendor breakdown, so the three
 # columns never reorder between renders.
 _VENDOR_ORDER: tuple[str, ...] = tuple(v.value for v in Vendor)
 _HEALTH_ORDER: tuple[str, ...] = tuple(s.value for s in HealthSeverity)
 _INSTALLATION_ORDER: tuple[str, ...] = tuple(t.value for t in InstallationType)
+_OPENSHIFT_ORDER: tuple[str, ...] = tuple(s.value for s in OpenShiftState)
 
 _VENDOR_INDEX = {vendor: position for position, vendor in enumerate(_VENDOR_ORDER)}
 
@@ -136,6 +134,7 @@ def _empty_stats(site_id: str, *, name: str) -> SiteStats:
         by_installation_type={
             installation: _empty_breakdown() for installation in _INSTALLATION_ORDER
         },
+        by_openshift_state={state: _empty_breakdown() for state in _OPENSHIFT_ORDER},
     )
 
 
@@ -162,6 +161,18 @@ def _accumulate(entry: Breakdown, row: SiteBreakdownRow) -> None:
     position = _VENDOR_INDEX.get(row.vendor or "")
     if position is not None:
         entry.by_vendor[position].count += row.count
+
+
+def _fallback_state(entry: SiteStats | FleetSummary) -> Breakdown:
+    """The slice an unrecognized OpenShift state counts under.
+
+    Args:
+        entry (SiteStats | FleetSummary): The record being folded into.
+
+    Returns:
+        Breakdown: The `AVAILABLE` slice.
+    """
+    return entry.by_openshift_state[OpenShiftState.AVAILABLE.value]
 
 
 def _pivot(
@@ -203,6 +214,7 @@ def _pivot(
         by_installation_type={
             installation: _empty_breakdown() for installation in _INSTALLATION_ORDER
         },
+        by_openshift_state={state: _empty_breakdown() for state in _OPENSHIFT_ORDER},
     )
 
     for row in rows:
@@ -226,6 +238,11 @@ def _pivot(
         if fleet_installation is None:
             fleet_installation = fleet.by_installation_type[InstallationType.UNCLASSIFIED.value]
         _accumulate(fleet_installation, row)
+
+        # A pre-ADR-0024 state counts as AVAILABLE, so totals still add up.
+        state = row.openshift_state or ""
+        _accumulate(entry.by_openshift_state.get(state) or _fallback_state(entry), row)
+        _accumulate(fleet.by_openshift_state.get(state) or _fallback_state(fleet), row)
 
     return list(stats.values()), fleet
 

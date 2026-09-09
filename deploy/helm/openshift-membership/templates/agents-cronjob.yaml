@@ -1,0 +1,43 @@
+{{- if .Values.agents.enabled }}
+{{- $_ := required "agents.mceName is required when agents.enabled: it is written onto every server this MCE holds and scopes what it may release." .Values.agents.mceName }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ .Release.Name }}-openshift-agents
+  labels:
+    app.kubernetes.io/name: {{ .Release.Name }}-openshift-agents
+    app.kubernetes.io/component: membership
+    app.kubernetes.io/part-of: server-inventory
+spec:
+  schedule: {{ .Values.agents.schedule | quote }}
+  {{- with .Values.timeZone }}
+  timeZone: {{ . | quote }}
+  {{- end }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 5
+  jobTemplate:
+    spec:
+      backoffLimit: {{ .Values.agents.backoffLimit }}
+      activeDeadlineSeconds: {{ .Values.agents.activeDeadlineSeconds }}
+      template:
+        spec:
+          restartPolicy: Never
+          serviceAccountName: {{ .Values.serviceAccount.name }}
+          automountServiceAccountToken: true
+          containers:
+            - name: membership
+              image: {{ include "openshiftMembership.image" . | quote }}
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              command: ["python3", "-m", "tools.collect_openshift", "--source", "agents"]
+              env:
+                - name: INVENTORY_ENVIRONMENT
+                  value: production
+                - name: INVENTORY_OPENSHIFT_MCE_NAME
+                  value: {{ .Values.agents.mceName | quote }}
+                {{- include "openshiftMembership.dbEnv" . | nindent 16 }}
+              resources:
+                {{- toYaml .Values.agents.resources | nindent 16 }}
+              securityContext:
+                {{- include "openshiftMembership.securityContext" . | nindent 16 }}
+{{- end }}

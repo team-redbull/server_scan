@@ -1,0 +1,9 @@
+apiVersion: v2
+name: openshift-membership
+description: CronJobs that report which servers each OpenShift cluster is using
+type: application
+version: 0.1.0
+# The API image these jobs run from — they are the same image as the
+# platform, invoked with a different entrypoint. Keep this in step with
+# the server-inventory chart's appVersion.
+appVersion: "11.2.0"

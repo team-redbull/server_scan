@@ -121,6 +121,7 @@ async def test_list_returns_expected_items(
         "classification",
         "health",
         "maintenance",
+        "openshift",
         "connectivity",
         "last_seen_at",
         "updated_at",
@@ -188,6 +189,29 @@ async def test_filter_by_site_id(app_context: tuple[AsyncClient, MongoServerRepo
     body = resp.json()
     assert len(body["items"]) == 3
     assert all(item["site_id"] == "tlv" for item in body["items"])
+
+
+async def test_filter_by_unassigned_site(
+    app_context: tuple[AsyncClient, MongoServerRepository],
+) -> None:
+    """`?site_id=unassigned` lists the servers whose name carries no site.
+
+    Absence of a site is stored as null, so it has no value a filter could
+    match on — without the translation in `build_filter_query` the site
+    overview's own Unassigned card linked to an always-empty list.
+    """
+    client, repo = app_context
+    for i in range(3):
+        await repo.upsert(_make_server(i, site_id="tlv"))
+    for i in range(3, 5):
+        await repo.upsert(_make_server(i, site_id=None))
+
+    resp = await client.get("/api/v1/servers", params={"site_id": "unassigned"})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body["items"]) == 2
+    assert all(item["site_id"] is None for item in body["items"])
 
 
 async def test_filter_by_maintenance_bool(

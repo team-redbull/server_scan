@@ -75,6 +75,8 @@ class OpenShiftMembershipService:
         actor: Actor,
     ) -> None:
         """
+        Build the service.
+
         Args:
             server_repo (ServerRepository): The servers collection.
             audit (AuditService): Records state transitions.
@@ -100,7 +102,7 @@ class OpenShiftMembershipService:
                 cluster reported this run.
             scope (dict[str, object]): The Mongo filter identifying the
                 servers this job owns — `openshift.cluster_name` for a
-                nodes job, `openshift.mce_id` for an agents job. Only
+                nodes job, `openshift.mce_name` for an agents job. Only
                 servers inside it may be freed, which is what stops one
                 cluster's job releasing another cluster's machines.
             reported_by (str): The cluster or MCE doing the reporting.
@@ -144,10 +146,8 @@ class OpenShiftMembershipService:
         """
         The server a reported hostname names, if any.
 
-        Matches `name_normalized`, which is stored and indexed. This is a
-        different key from `IngestService`'s `(vendor, serial_normalized)`
-        — a cluster knows a hostname and nothing about serials — so this
-        service does its own lookup rather than reusing that path.
+        Matches `name_normalized`, not `IngestService`'s
+        `(vendor, serial_normalized)` — a cluster knows no serials.
 
         Args:
             hostname (str): A cleaned hostname.
@@ -215,12 +215,8 @@ class OpenShiftMembershipService:
         """
         updated = OpenShiftLifecycle(
             lifecycle_state=observation.lifecycle_state,
-            mce_id=observation.mce_id,
             cluster_name=observation.cluster_name,
-            cluster_id=server.openshift.cluster_id,
-            role=observation.role,
-            node_name=observation.node_name,
-            agent_id=observation.agent_id,
+            mce_name=observation.mce_name,
             last_reported_at=utcnow(),
             reported_by_agent_id=reported_by,
         )
@@ -243,16 +239,12 @@ class OpenShiftMembershipService:
             dry_run=dry_run,
         )
 
-    async def _write(
-        self, server: Server, updated: OpenShiftLifecycle, *, dry_run: bool
-    ) -> bool:
+    async def _write(self, server: Server, updated: OpenShiftLifecycle, *, dry_run: bool) -> bool:
         """
         Persist a new membership, skipping a write that changes nothing.
 
-        The jobs run every 15 minutes over an unchanging fleet, so writing
-        unconditionally would bump `revision` and `updated_at` on every
-        server four times an hour and fill the audit trail with
-        non-events.
+        Writing unconditionally would bump every server's `revision` four
+        times an hour and fill the audit trail with non-events.
 
         Args:
             server (Server): The server to update.
@@ -266,10 +258,7 @@ class OpenShiftMembershipService:
         if (
             before.lifecycle_state is updated.lifecycle_state
             and before.cluster_name == updated.cluster_name
-            and before.mce_id == updated.mce_id
-            and before.node_name == updated.node_name
-            and before.role == updated.role
-            and before.agent_id == updated.agent_id
+            and before.mce_name == updated.mce_name
         ):
             return False
         if dry_run:

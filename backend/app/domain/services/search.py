@@ -28,6 +28,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 
 from app.domain.models.server import Server
+from app.domain.value_objects.site import UNASSIGNED_SITE_ID
 from app.errors import (
     SearchQueryTooLongError,
     SearchQueryTooShortError,
@@ -117,7 +118,12 @@ def build_filter_query(filters: dict[str, object]) -> dict[str, object]:
                 f"Unknown filter: {key!r}",
                 details={"filter": key, "allowed": sorted(FILTER_FIELDS)},
             )
-        query[FILTER_FIELDS[key]] = value
+        # Absence of a site is stored as null, so it has no spelling to
+        # match on: `?site_id=unassigned` names the state instead.
+        if key == "site_id" and value == UNASSIGNED_SITE_ID:
+            query[FILTER_FIELDS[key]] = None
+        else:
+            query[FILTER_FIELDS[key]] = value
     return query
 
 

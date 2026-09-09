@@ -30,6 +30,7 @@ class SiteBreakdownRow:
     health: str | None
     maintenance: bool
     installation_type: str | None
+    openshift_state: str | None
     count: int
 
 

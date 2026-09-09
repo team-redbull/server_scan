@@ -45,19 +45,13 @@ class ClusterObservation:
         hostname (str): The cleaned hostname to correlate on.
         lifecycle_state (OpenShiftState): What this observation claims.
         cluster_name (str | None): The cluster holding it, if any.
-        mce_id (str | None): The reporting MCE, on the agents path only.
-        node_name (str | None): What the cluster calls the node.
-        role (str | None): The node's role, where reported.
-        agent_id (str | None): The `Agent` resource, on the agents path.
+        mce_name (str | None): The reporting MCE, on the agents path only.
     """
 
     hostname: str
     lifecycle_state: OpenShiftState
     cluster_name: str | None = None
-    mce_id: str | None = None
-    node_name: str | None = None
-    role: str | None = None
-    agent_id: str | None = None
+    mce_name: str | None = None
 
 
 def node_observation(node: dict[str, Any], *, cluster_name: str) -> ClusterObservation | None:
@@ -77,30 +71,23 @@ def node_observation(node: dict[str, Any], *, cluster_name: str) -> ClusterObser
     hostname = clean_hostname(metadata.get("name"))
     if hostname is None:
         return None
-    labels = metadata.get("labels") or {}
     return ClusterObservation(
         hostname=hostname,
         lifecycle_state=OpenShiftState.INSTALLED,
         cluster_name=cluster_name,
-        node_name=str(metadata.get("name")),
-        role="master" if "node-role.kubernetes.io/master" in labels else "worker",
     )
 
 
-def agent_observation(agent: dict[str, Any], *, mce_id: str) -> ClusterObservation | None:
+def agent_observation(agent: dict[str, Any], *, mce_name: str) -> ClusterObservation | None:
     """
     Read one `Agent` as an observation.
 
-    The hostname is read in two steps, and the order is the whole point.
-    Vendors disagree about what a host calls itself: on Cisco the reported
-    hostname *is* the server's name, while on Dell it is derived from a MAC
-    and matches nothing — there, the server's name is only in the
-    **requested** hostname an operator set. So the requested one wins, and
-    the reported one is the fallback.
+    The requested hostname wins and the reported one is the fallback; the
+    order is what makes this work across vendors (ADR-0024).
 
     Args:
         agent (dict[str, Any]): An `Agent` custom resource.
-        mce_id (str): The MCE this job runs in.
+        mce_name (str): The MCE this job runs in.
 
     Returns:
         ClusterObservation | None: `INSTALLED` with the cluster when the
@@ -110,27 +97,21 @@ def agent_observation(agent: dict[str, Any], *, mce_id: str) -> ClusterObservati
     spec = agent.get("spec") or {}
     inventory = (agent.get("status") or {}).get("inventory") or {}
 
-    # `clean_hostname` returns None rather than "" for a blank value, so a
-    # present-but-empty `spec.hostname` falls through to the reported one
-    # instead of short-circuiting this `or` — which is exactly the Dell
-    # case this two-step read exists for.
+    # `clean_hostname` returns None, never "", so a present-but-empty
+    # requested hostname falls through instead of short-circuiting.
     hostname = clean_hostname(spec.get("hostname")) or clean_hostname(inventory.get("hostname"))
     if hostname is None:
         return None
 
     cluster = spec.get("clusterDeploymentName") or {}
     cluster_name = cluster.get("name") if isinstance(cluster, dict) else None
-    agent_id = (agent.get("metadata") or {}).get("name")
 
     if cluster_name:
         return ClusterObservation(
             hostname=hostname,
             lifecycle_state=OpenShiftState.INSTALLED,
             cluster_name=str(cluster_name),
-            mce_id=mce_id,
-            node_name=str(spec.get("hostname") or inventory.get("hostname") or ""),
-            role=str(spec.get("role")) if spec.get("role") else None,
-            agent_id=str(agent_id) if agent_id else None,
+            mce_name=mce_name,
         )
 
     # Registered to the MCE, bound to nothing: the spare pool cluster
@@ -139,6 +120,5 @@ def agent_observation(agent: dict[str, Any], *, mce_id: str) -> ClusterObservati
     return ClusterObservation(
         hostname=hostname,
         lifecycle_state=OpenShiftState.INSTALLED_TO_INVENTORY,
-        mce_id=mce_id,
-        agent_id=str(agent_id) if agent_id else None,
+        mce_name=mce_name,
     )

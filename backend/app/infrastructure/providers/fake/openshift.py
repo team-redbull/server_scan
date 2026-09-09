@@ -26,20 +26,14 @@ from app.domain.models.openshift import OpenShiftLifecycle
 from app.domain.models.server import Server
 from app.utils.timeutil import utcnow
 
-# Servers no cluster and no MCE holds. Not an error state and not a gap in
-# the data: a machine racked but not yet handed to OpenShift looks exactly
-# like this, and so does one just freed. It is the fleet's spare capacity,
-# and the seeded share exists so the inventory's "available" filter has
-# something to find.
+# Seeded share of servers no cluster and no MCE holds, so the inventory's
+# "available" filter and the sites page's Available card have data.
 _AVAILABLE_SHARE = 0.2
 
 
 def _mce_for(site_id: str | None) -> str:
     """
-    The MCE that manages one site.
-
-    One per site, which is the shape an estate running a hub per location
-    takes.
+    The MCE that manages one site, one per site.
 
     Args:
         site_id (str | None): The server's site, or None.
@@ -54,13 +48,8 @@ def openshift_for(server: Server) -> OpenShiftLifecycle:
     """
     What OpenShift would report about one server.
 
-    Derived from the server's own name and classification so the seeded
-    result is coherent with the rest of the fleet — but *not* forced to
-    agree with it. A `random-server-...` classified `UNCLASSIFIED` can
-    still come back `INSTALLED` on a hosted cluster, which is the
-    disagreement the model exists to surface: a regex on a hostname is not
-    proof of cluster membership, and a misnamed server is exactly the case
-    worth seeing.
+    Coherent with the server's name and classification but not forced to
+    agree with it — that disagreement is the signal (ADR-0024).
 
     Args:
         server (Server): The stored server to report on.
@@ -75,49 +64,41 @@ def openshift_for(server: Server) -> OpenShiftLifecycle:
     mce = _mce_for(server.site_id)
     draw = rng.random()
 
+    # Before the classification branches, not after: a freed server keeps
+    # the `ocp4-...` name it was installed under, so a fleet where only
+    # junk-named servers are ever free is the opposite of the real one.
+    if draw < _AVAILABLE_SHARE:
+        return OpenShiftLifecycle()
+
     if "hypershift" in server.name.lower() or (
         server.classification.installation_type is InstallationType.HOSTED_CLUSTER
     ):
         cluster = f"hc-{server.site_id or 'unassigned'}-{rng.randint(1, 3):02d}"
         return OpenShiftLifecycle(
             lifecycle_state=OpenShiftState.INSTALLED,
-            mce_id=mce,
             cluster_name=cluster,
-            cluster_id=f"{cluster}-{rng.randrange(16**8):08x}",
-            role=rng.choice(("worker", "worker", "master")),
-            node_name=server.name,
-            agent_id=f"agent-{rng.randrange(16**12):012x}",
+            mce_name=mce,
             last_reported_at=now,
             reported_by_agent_id=mce,
         )
 
-    # An MCE's own hub nodes are themselves cluster nodes — the
-    # classification rule naming them exists to pull them out of the UPI
-    # bucket for reporting, not because they run differently. Both are
-    # simply INSTALLED here; which kind of cluster holds them is what
-    # `InstallationType` already answers.
+    # A hub's own nodes are cluster nodes like any other, so both are
+    # simply INSTALLED; `InstallationType` answers which kind.
     if server.classification.installation_type in (InstallationType.UPI, InstallationType.MCE):
         cluster = f"upi-{server.site_id or 'unassigned'}"
         return OpenShiftLifecycle(
             lifecycle_state=OpenShiftState.INSTALLED,
             cluster_name=cluster,
-            cluster_id=f"{cluster}-{rng.randrange(16**8):08x}",
-            role=rng.choice(("worker", "worker", "master")),
-            node_name=server.name,
             last_reported_at=now,
             reported_by_agent_id=cluster,
         )
-
-    if draw < _AVAILABLE_SHARE:
-        return OpenShiftLifecycle()
 
     # Registered to an MCE and bound to nothing. `cluster_name` stays None
     # rather than empty: there is no cluster, which is a different claim
     # from a cluster whose name went unread.
     return OpenShiftLifecycle(
         lifecycle_state=OpenShiftState.INSTALLED_TO_INVENTORY,
-        mce_id=mce,
-        agent_id=f"agent-{rng.randrange(16**12):012x}",
+        mce_name=mce,
         last_reported_at=now,
         reported_by_agent_id=mce,
     )

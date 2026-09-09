@@ -1,0 +1,42 @@
+{{- if or .Values.nodes.enabled .Values.agents.enabled }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Values.serviceAccount.name }}
+  labels:
+    app.kubernetes.io/part-of: server-inventory
+---
+# ClusterRole rather than Role: nodes are cluster-scoped, and Agents live
+# in one namespace per managed cluster on a hub, so a namespaced Role
+# would need a binding per cluster and would silently miss any added
+# later.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ .Release.Name }}-membership-reader
+rules:
+  {{- if .Values.nodes.enabled }}
+  # `get` is not needed — nothing here fetches a node by name.
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["list"]
+  {{- end }}
+  {{- if .Values.agents.enabled }}
+  - apiGroups: ["agent-install.openshift.io"]
+    resources: ["agents"]
+    verbs: ["list"]
+  {{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ .Release.Name }}-membership-reader
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ .Release.Name }}-membership-reader
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Values.serviceAccount.name }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}

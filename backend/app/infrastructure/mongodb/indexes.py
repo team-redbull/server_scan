@@ -155,7 +155,7 @@ SERVER_INDEXES: list[IndexModel] = [
     ),
     IndexModel(
         [
-            ("openshift.mce_id", ASCENDING),
+            ("openshift.mce_name", ASCENDING),
             ("name_normalized", ASCENDING),
             ("_id", ASCENDING),
         ],

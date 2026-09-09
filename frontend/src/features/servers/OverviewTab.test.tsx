@@ -45,15 +45,9 @@ function makeServer(overrides: Partial<ServerDetail> = {}): ServerDetail {
     unread_fields: [],
     nic_os_names: {},
     openshift: {
-      lifecycle_state: "UNKNOWN",
-      mce_id: null,
+      lifecycle_state: "AVAILABLE",
+      mce_name: null,
       cluster_name: null,
-      cluster_id: null,
-      role: null,
-      node_name: null,
-      bmh_name: null,
-      agent_id: null,
-      boot_mac: null,
       last_reported_at: null,
       reported_by_agent_id: null,
     },
@@ -131,9 +125,8 @@ describe("OverviewTab OpenShift membership", () => {
     server.openshift = {
       ...server.openshift,
       lifecycle_state: "INSTALLED",
-      mce_id: "mce-tlv",
+      mce_name: "mce-tlv",
       cluster_name: "hc-tlv-02",
-      role: "worker",
     };
 
     render(<OverviewTab server={server} />);
@@ -149,7 +142,6 @@ describe("OverviewTab OpenShift membership", () => {
       ...server.openshift,
       lifecycle_state: "INSTALLED",
       cluster_name: "upi-tlv",
-      role: "master",
     };
 
     render(<OverviewTab server={server} />);
@@ -164,7 +156,7 @@ describe("OverviewTab OpenShift membership", () => {
     server.openshift = {
       ...server.openshift,
       lifecycle_state: "INSTALLED_TO_INVENTORY",
-      mce_id: "mce-nyc",
+      mce_name: "mce-nyc",
     };
 
     render(<OverviewTab server={server} />);
@@ -183,7 +175,7 @@ describe("OverviewTab OpenShift membership", () => {
       ...server.openshift,
       lifecycle_state: "INSTALLED",
       cluster_name: "hc-nyc-01",
-      mce_id: "mce-nyc",
+      mce_name: "mce-nyc",
     };
 
     render(<OverviewTab server={server} />);

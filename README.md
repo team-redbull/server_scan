@@ -81,6 +81,38 @@ physical manager. On a schedule, a CronJob's pod:
    (`app.application.services.ingest.IngestService`) — classify, health-
    evaluate, audit, and upsert into MongoDB, all in one write per server.
 
+### The clusters report what they are using
+
+The vendor collectors above answer "what hardware exists". They cannot
+answer "is anything using it" — to UCS, a blade running production and a
+blade sitting idle both read `associated`. Only the cluster knows.
+
+So a **second kind of job** runs *inside* each OpenShift cluster and
+writes `Server.openshift`:
+
+| Job | Runs on | Reports |
+|---|---|---|
+| `--source nodes` | every cluster | its own worker nodes |
+| `--source agents` | MCE hubs | its Agents, bound to a cluster or not |
+
+They correlate to inventory **by hostname**, and each run reconciles only
+the servers already naming *its* cluster — claiming what it sees and
+freeing what it does not. Nothing in Kubernetes reports a *removal*, so
+that reconcile is the only thing that can ever return a server to
+`AVAILABLE`. Scoping it per cluster is what makes it safe: a broken job
+in one cluster cannot free another's machines.
+
+Deployed by ArgoCD, one Helm release per cluster, from
+`deploy/helm/openshift-membership` — a UPI cluster enables the nodes job,
+an MCE hub enables both. `docs/adr/0024-openshift-cluster-membership.md`
+has the design; the chart's own README has the values.
+
+This is deliberately kept apart from classification: `installation_type`
+is a regex verdict on a hostname (what a machine was *named* to be),
+`openshift.lifecycle_state` is a cluster reporting what it actually
+holds. **When they disagree, the server is misnamed or misplaced — and
+that disagreement is the signal**, so nothing reconciles them.
+
 A server's **site** is not configured *per manager*: it is parsed from
 the server's own name (`ocp4-prod-tlv-infra-01` -> site `tlv`), so a
 misconfigured manager cannot mislabel everything it collects. A name with
@@ -465,7 +497,9 @@ tests/           unit / integration / api tests
 tools/           operational CLIs: fake-data seeder, index/load verification,
                  the real-collector runner (tools/run_collector.py)
 scripts/         dev environment helpers
-deploy/          Helm chart (API, and per-vendor collector CronJobs)
+deploy/          Helm charts: server-inventory (API, frontend, per-vendor
+                 collector CronJobs) and openshift-membership (the two
+                 per-cluster jobs that report what each cluster is using)
 docs/            architecture notes, ADRs, cisco-collectors.md (the
                  verified implementation facts the Cisco collectors rest on)
                  and test-ucs-collector.md (runbook for proving the

@@ -165,8 +165,8 @@ async def _seed_openshift(repo: MongoServerRepository) -> int:
         repo (MongoServerRepository): Where the fleet was just written.
 
     Returns:
-        int: How many servers a cluster or an MCE reported on — servers
-            left `UNKNOWN` are not counted, since nothing reported them.
+        int: How many servers a cluster or an MCE reported on — the
+            `AVAILABLE` ones are not counted, since nothing holds them.
     """
     reported = 0
     cursor: str | None = None
@@ -182,7 +182,7 @@ async def _seed_openshift(repo: MongoServerRepository) -> int:
         )
         for server in page.items:
             server.openshift = openshift_for(server)
-            if server.openshift.lifecycle_state is not OpenShiftState.UNKNOWN:
+            if server.openshift.lifecycle_state is not OpenShiftState.AVAILABLE:
                 reported += 1
             await repo.upsert(server)
         if not page.has_more or page.next_cursor is None:

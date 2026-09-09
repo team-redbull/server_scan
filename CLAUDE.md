@@ -88,6 +88,8 @@ is a real mistake, not a style preference.
    both clean. Run the real gate locally, on every touched file, before
    considering a change finished:
    `uv run ruff check . && uv run ruff format --check . && uv run ty check backend/app tools tests`
+   plus `uv run python scripts/check_comment_density.py`, which is a
+   fourth CI step since 2026-09-10 (see convention 8).
    (add `cd frontend && npm run lint && npm run typecheck && npm run build`
    for any frontend change). If `ruff format --check` fails, run
    `uv run ruff format .` and re-verify — don't hand-fix formatting.
@@ -166,8 +168,35 @@ is a real mistake, not a style preference.
    2026-09-07 as `refactor: give every backend function a Google-style
    docstring` (`docs/notes/2026-09-refactor-plan.md`'s Phase 10) and `D`
    (pydocstyle) is now part of the `ruff check .` gate, so a genuinely
-   missing or malformed docstring fails CI. `ruff` cannot enforce the two
-   rules below, though — both are still on the honor system:
+   missing or malformed docstring fails CI.
+
+   **The two rules below used to be on the honor system. Since 2026-09-10
+   they are a CI gate**, because the honor system did not work: a scan
+   that day found **723 violations across 147 files** — comment runs up to
+   30 lines — in a codebase where this convention had been written down
+   for three weeks. `scripts/check_comment_density.py` runs in CI's `lint`
+   job, right before `import-linter`, and fails the build on:
+
+   - **more than 3 consecutive whole-line comments** (`#` or `//`), and
+   - **a docstring summary longer than 3 lines** — everything before
+     `Args:`/`Returns:`/`Raises:`/`Yields:`/`Attributes:`.
+
+   It covers `backend/app`, `tools`, `tests` and `frontend/src`. The 701
+   pre-existing violations are recorded in
+   `scripts/comment-density-baseline.txt` with a per-file allowance.
+   **That file may only ever shrink.** A file listed there may not get
+   worse; a file not listed there may not have a single violation. Do
+   **not** add a line to it to make a new violation pass — that is the
+   one thing it exists to prevent. When you clean a file up, run
+   `uv run python scripts/check_comment_density.py --regenerate` to bank
+   the improvement.
+
+   The rule the gate is enforcing, in one line: **the code is for code.**
+   If an explanation needs more than three lines, it belongs in `docs/` —
+   an ADR for a decision, a `docs/<vendor>-collectors.md` for verified
+   implementation facts — and the code carries a one-line pointer to it.
+   That is not a new rule; it is the rule this convention has always
+   stated, now with something checking it.
 
    - **The docstring summary — everything before `Args:`/`Returns:`/
      `Raises:` — is 1-3 lines, not more, unless the function genuinely
@@ -508,7 +537,9 @@ for the full write-up and the two open questions it could not settle
 ### What's explicitly NOT done yet (in rough priority order the user has confirmed)
 
 0. **Staleness detection**, for every collector rather than only Redfish
-   now that five CronJobs exist. A CronJob pod is
+   — and, since 2026-09-10, for the **two OpenShift membership CronJobs
+   too**, which make it worse: a cluster that stops running its job leaves
+   its servers `INSTALLED` forever, and nothing notices. A CronJob pod is
    never scraped by Prometheus, so no collector-side metric can report
    its own absence — the only thing that can answer "40 hosts have been
    failing for two weeks" is the API exposing gauges derived from
@@ -578,6 +609,35 @@ for the full write-up and the two open questions it could not settle
 Full detail lives in `docs/adr/`; this is just the index of what's
 non-obvious enough to bite you.
 
+- **`Server.openshift` is written by two CronJobs and by nothing else,
+  and the reconcile frees on absence.** Read
+  `docs/adr/0024-openshift-cluster-membership.md` before touching
+  `app.application.services.openshift_membership`. Three things bite:
+  each run may only free servers already naming **its own** cluster (that
+  scope is the whole safety property of per-cluster deployment); a read
+  that fails **and** a successful read returning nothing both refuse to
+  write, because either one reaching the reconcile would free everything
+  the cluster holds; and `IngestService` carries the whole `openshift`
+  object forward untouched, so a vendor collector can never blank it.
+  `OpenShiftState` has **no "nobody looked yet"** — `AVAILABLE` is the
+  default and the only state reached by absence. `OpenShiftLifecycle` is
+  five fields on purpose (`cluster_id`, `role`, `node_name`, `agent_id`,
+  `bmh_name`, `boot_mac` were all removed 2026-09-10); the ADR says why
+  each went.
+- **These jobs are a *separate* Helm chart**, `deploy/helm/openshift-
+  membership`, one release per cluster — they run inside every OpenShift
+  cluster, not beside the API. `deploy/helm/server-inventory` is still
+  the platform itself. A kustomize `cronjobs/` tree used to hold this and
+  is deleted; don't resurrect it.
+- **Search tokens are word-boundary suffixes, not bare parts**
+  (`docs/adr/0025-search-tokens-are-word-boundary-suffixes.md`). That is
+  what lets an *anchored* `^` query find `cisco-m6` inside
+  `ocp-cisco-m6-bat-yam-...`. Do not "fix" mid-word search by dropping
+  the anchor: measured on 52,087 servers, an unanchored regex costs
+  ~650ms per facet query against ~1-26ms, flat, because it scans the
+  whole multikey index instead of one range. `search_tokens` is written
+  by `IngestService`, so a change here reaches existing documents only on
+  their next collection.
 - **A server's site is parsed from its name**
   (`app.domain.value_objects.site.parse_site_code`), never taken from
   configuration — `ocp4-prod-tlv-infra-01` -> `tlv`. An ambiguous name
@@ -829,6 +889,7 @@ uv run python -m tools.seed_inventory --count 1000 --seed 42
 
 uv run pytest -q                                   # backend: unit + integration + api
 uv run ruff check . && uv run ruff format --check . && uv run ty check backend/app tools tests
+uv run python scripts/check_comment_density.py    # CLAUDE.md convention 8
 
 cd frontend && npm run lint && npm run typecheck && npm run test -- --run && npm run build
 npm run test:e2e                                    # needs backend + frontend dev server running
@@ -1001,8 +1062,30 @@ quarterly, or before any release you care about:
 
 ## Where to continue right now
 
-The most recent user direction was: real vendor collectors first,
-deployment/CD gaps and auth deliberately parked. **Every planned vendor
+**Most recent work, 2026-09-10** — cluster membership, finished and
+documented. `Server.openshift` is now written by two real CronJobs
+(`docs/adr/0024-openshift-cluster-membership.md`), `OpenShiftLifecycle`
+was trimmed from ten fields to five at the user's direction,
+`OpenShiftState` narrowed to AVAILABLE / INSTALLED /
+INSTALLED_TO_INVENTORY, and the kustomize tree at `cronjobs/` was replaced
+by a Helm chart at `deploy/helm/openshift-membership` (one release per
+cluster, for ArgoCD). Three UI changes landed with it: search now finds
+mid-name fragments (`docs/adr/0025-...`), the sites landing page gained
+Available/Installed cards, and `?site_id=unassigned` works — it never had,
+so the site overview's own Unassigned card had always linked to an empty
+list.
+
+That commit also fixed the five CI failures the previous one shipped red,
+plus a real runtime bug `ty` caught only because CI never got that far:
+`AuditService(...)` called positionally against a keyword-only parameter,
+which would have raised `TypeError` on every real collector run.
+
+**Convention 8 is now a CI gate**, not the honor system — see the
+convention itself. `scripts/check_comment_density.py` with a baseline of
+701 pre-existing violations that may only shrink.
+
+The most recent user direction before that was: real vendor collectors
+first, deployment/CD gaps and auth deliberately parked. **Every planned vendor
 collector now exists, and as of 2026-09-08 every one of them has had a
 live field pass against real hardware, every one finding at least one
 real defect** — `UCS_MANAGER`/`UCS_CENTRAL` against UCSPE, `ONEVIEW`

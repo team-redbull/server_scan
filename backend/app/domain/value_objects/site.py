@@ -70,6 +70,10 @@ _VALID_CODE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 # and never edits this file.
 DEFAULT_SITES_SPEC = "nyc:New York City,tlv:Tel Aviv,bat-yam:Bat Yam,five:Site Five"
 
+# Wire spelling for a server whose name carries no site token; stored as
+# `None` on the document.
+UNASSIGNED_SITE_ID = "unassigned"
+
 
 class SiteConfigurationError(ValueError):
     """`INVENTORY_SITES` could not be read.

@@ -7,6 +7,10 @@ unanchored/unescaped pattern that could turn into a collection scan or a
 ReDoS vector. This module only builds the token set; the query itself is
 built in `app.domain.services.search`.
 
+Every token is a suffix of its source value starting at a word boundary,
+so an anchored query finds a fragment from the middle of a name — why,
+and what it costs, in `docs/adr/0025-search-tokens-are-word-boundary-suffixes.md`.
+
 Token sources: name, hostname-ish identity fields, serial, model, vendor,
 site/manager references, tags, the BMC's own address
 (`network.bmc.host` — the same value `NetworkTab.tsx` shows as
@@ -22,21 +26,26 @@ import re
 
 from app.domain.models.server import Server
 
-_SPLIT_RE = re.compile(r"[^a-z0-9]+")
+_PART_RE = re.compile(r"[a-z0-9]+")
 _MAX_TOKENS = 64
 _MIN_TOKEN_LEN = 2
 _MAX_TOKEN_LEN = 64
 
 
 def _add(tokens: set[str], value: str | None) -> None:
+    """Index every word-boundary suffix of one value.
+
+    Args:
+        tokens (set[str]): The token set being built, mutated in place.
+        value (str | None): The source value, or None to skip.
+    """
     if not value:
         return
     lowered = value.lower()
-    if len(lowered) >= _MIN_TOKEN_LEN:
-        tokens.add(lowered[:_MAX_TOKEN_LEN])
-    for part in _SPLIT_RE.split(lowered):
-        if len(part) >= _MIN_TOKEN_LEN:
-            tokens.add(part[:_MAX_TOKEN_LEN])
+    for part in _PART_RE.finditer(lowered):
+        suffix = lowered[part.start() :]
+        if len(suffix) >= _MIN_TOKEN_LEN:
+            tokens.add(suffix[:_MAX_TOKEN_LEN])
 
 
 def _add_mac(tokens: set[str], mac: str | None) -> None:

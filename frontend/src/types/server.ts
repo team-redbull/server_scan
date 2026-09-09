@@ -363,19 +363,13 @@ export type OpenShiftState =
  * One server's observed OpenShift membership.
  *
  * Read `lifecycle_state` before trusting anything else: `cluster_name` is
- * set only when a cluster claims the server, and `mce_id` only by the MCE
- * job.
+ * set only when a cluster claims the server, and `mce_name` only by the
+ * MCE job.
  */
 export interface OpenShiftLifecycle {
   lifecycle_state: OpenShiftState;
-  mce_id: string | null;
   cluster_name: string | null;
-  cluster_id: string | null;
-  role: string | null;
-  node_name: string | null;
-  bmh_name: string | null;
-  agent_id: string | null;
-  boot_mac: string | null;
+  mce_name: string | null;
   /** Nothing reports a *removal*, so a membership nobody has confirmed in
    * weeks is indistinguishable from a live one except by this. */
   last_reported_at: string | null;

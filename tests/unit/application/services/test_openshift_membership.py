@@ -20,7 +20,6 @@ import pytest
 from app.application.services.openshift_membership import OpenShiftMembershipService
 from app.domain.enums import OpenShiftState, Vendor
 from app.domain.models.audit_event import Actor, ActorType
-from app.domain.models.common import AuditFields
 from app.domain.models.openshift import OpenShiftLifecycle
 from app.domain.models.server import Identity, Server
 from app.domain.ports.repository import Page
@@ -48,7 +47,6 @@ def _server(name: str, *, openshift: OpenShiftLifecycle | None = None) -> Server
         name_normalized=name.lower(),
         identity=Identity(vendor=Vendor.DELL),
         openshift=openshift or OpenShiftLifecycle(),
-        audit=AuditFields.new(),
         created_at=now,
         updated_at=now,
     )
@@ -86,8 +84,8 @@ class FakeRepo:
             return server.name_normalized == filters["name_normalized"]
         if "openshift.cluster_name" in filters:
             return server.openshift.cluster_name == filters["openshift.cluster_name"]
-        if "openshift.mce_id" in filters:
-            return server.openshift.mce_id == filters["openshift.mce_id"]
+        if "openshift.mce_name" in filters:
+            return server.openshift.mce_name == filters["openshift.mce_name"]
         return False
 
     async def upsert_with_revision_check(self, server: Server, **_: Any) -> Server:
@@ -131,8 +129,8 @@ def _service(repo: FakeRepo, audit: FakeAudit) -> OpenShiftMembershipService:
         OpenShiftMembershipService: The service under test.
     """
     return OpenShiftMembershipService(
-        server_repo=repo,  # type: ignore[arg-type]
-        audit=audit,  # type: ignore[arg-type]
+        server_repo=repo,  # type: ignore
+        audit=audit,  # type: ignore
         actor=Actor(type=ActorType.SYSTEM, id="openshift:test"),
     )
 
@@ -152,8 +150,6 @@ def _seen(hostname: str, *, cluster: str = "ocp4-tlv") -> ClusterObservation:
         hostname=hostname,
         lifecycle_state=OpenShiftState.INSTALLED,
         cluster_name=cluster,
-        node_name=hostname,
-        role="worker",
     )
 
 
@@ -189,18 +185,14 @@ class TestClaiming:
         assert repo.written == []
 
     async def test_an_unchanged_server_is_not_rewritten(self) -> None:
-        """These jobs run every 15 minutes over a fleet that rarely
-        changes. Writing unconditionally would bump `revision` on every
-        server four times an hour and fill the audit trail with
-        non-events.
+        """Writing unconditionally would bump `revision` on every server
+        four times an hour and fill the audit trail with non-events.
         """
         stored = _server(
             "ocp4-tlv-worker-01",
             openshift=OpenShiftLifecycle(
                 lifecycle_state=OpenShiftState.INSTALLED,
                 cluster_name="ocp4-tlv",
-                node_name="ocp4-tlv-worker-01",
-                role="worker",
             ),
         )
         repo = FakeRepo([stored])
@@ -240,10 +232,8 @@ class TestFreeing:
         assert freed[0].openshift.cluster_name is None
 
     async def test_another_cluster_s_servers_are_never_touched(self) -> None:
-        """The property that makes per-cluster deployment safe. A job sees
-        only its own cluster, so it may only ever release servers already
-        naming that cluster — otherwise every job would free every other
-        cluster's machines on every run.
+        """The property that makes per-cluster deployment safe: a job may
+        only release servers already naming its own cluster (ADR-0024).
         """
         other = _server(
             "ocp4-nyc-worker-01",
@@ -301,18 +291,14 @@ class TestAudit:
         assert payload["data"]["to"] == "INSTALLED"
 
     async def test_a_cluster_rename_writes_without_an_event(self) -> None:
-        """The server moved cluster but not state. Worth persisting, not
-        worth an audit entry — `OPENSHIFT_STATE_CHANGED` means the state
-        changed, and firing it for a field that did not would make the
-        event useless for alerting.
+        """Moved cluster but not state: worth persisting, not worth an
+        event — `OPENSHIFT_STATE_CHANGED` must mean the state changed.
         """
         stored = _server(
             "ocp4-tlv-worker-01",
             openshift=OpenShiftLifecycle(
                 lifecycle_state=OpenShiftState.INSTALLED,
                 cluster_name="ocp4-tlv-old",
-                node_name="ocp4-tlv-worker-01",
-                role="worker",
             ),
         )
         repo = FakeRepo([stored])

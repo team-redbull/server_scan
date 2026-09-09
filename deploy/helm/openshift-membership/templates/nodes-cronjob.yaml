@@ -1,0 +1,50 @@
+{{- if .Values.nodes.enabled }}
+{{- $_ := required "nodes.clusterName is required when nodes.enabled: it is written onto every server this job claims and scopes what it may release." .Values.nodes.clusterName }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ .Release.Name }}-openshift-nodes
+  labels:
+    app.kubernetes.io/name: {{ .Release.Name }}-openshift-nodes
+    app.kubernetes.io/component: membership
+    app.kubernetes.io/part-of: server-inventory
+spec:
+  schedule: {{ .Values.nodes.schedule | quote }}
+  {{- with .Values.timeZone }}
+  timeZone: {{ . | quote }}
+  {{- end }}
+  # Forbid, not Replace: two overlapping reconciles would race on the same
+  # servers, and the loser's release would undo the winner's claim.
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 5
+  jobTemplate:
+    spec:
+      backoffLimit: {{ .Values.nodes.backoffLimit }}
+      activeDeadlineSeconds: {{ .Values.nodes.activeDeadlineSeconds }}
+      template:
+        spec:
+          restartPolicy: Never
+          serviceAccountName: {{ .Values.serviceAccount.name }}
+          # The one workload in this platform that needs its token: it
+          # reads its own cluster's API. Every collector CronJob in the
+          # server-inventory chart sets this false.
+          automountServiceAccountToken: true
+          containers:
+            - name: membership
+              image: {{ include "openshiftMembership.image" . | quote }}
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              command: ["python3", "-m", "tools.collect_openshift", "--source", "nodes"]
+              env:
+                - name: INVENTORY_ENVIRONMENT
+                  value: production
+                - name: INVENTORY_OPENSHIFT_CLUSTER_NAME
+                  value: {{ .Values.nodes.clusterName | quote }}
+                - name: INVENTORY_OPENSHIFT_EXCLUDE_NAME_PARTS
+                  value: {{ .Values.nodes.excludeNameParts | quote }}
+                {{- include "openshiftMembership.dbEnv" . | nindent 16 }}
+              resources:
+                {{- toYaml .Values.nodes.resources | nindent 16 }}
+              securityContext:
+                {{- include "openshiftMembership.securityContext" . | nindent 16 }}
+{{- end }}

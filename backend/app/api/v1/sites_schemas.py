@@ -48,6 +48,10 @@ class SiteStats(Breakdown):
     # Keyed by `InstallationType` value, always containing every one.
     by_installation_type: dict[str, Breakdown] = Field(default_factory=dict)
 
+    # Keyed by `OpenShiftState` value, always containing every one. What
+    # a cluster reports holding, not what a name claims — ADR-0024.
+    by_openshift_state: dict[str, Breakdown] = Field(default_factory=dict)
+
 
 class FleetSummary(Breakdown):
     """Every site summed together, sliced further by installation type.
@@ -60,6 +64,7 @@ class FleetSummary(Breakdown):
     """
 
     by_installation_type: dict[str, Breakdown] = Field(default_factory=dict)
+    by_openshift_state: dict[str, Breakdown] = Field(default_factory=dict)
 
 
 class SiteStatsListResponse(BaseModel):

@@ -360,15 +360,16 @@ class MongoServerRepository:
 
     async def site_breakdown(self) -> list[SiteBreakdownRow]:
         """
-        Per-(site, vendor, health, maintenance, installation type) counts.
+        Per-(site, vendor, health, maintenance, installation, OpenShift) counts.
 
         Server counts for the whole estate, in one round trip. A single
         `$group` over every server rather than one count query
         per cell: the grouping key has a bounded cardinality (sites x 4
-        vendors x 5 severities x 2 maintenance states x 3 installation
-        types), so the four shipped sites plus the unassigned bucket give
-        at most 600 small rows — and that stays bounded by the configured
-        site count, never by the size of the estate. The caller pivots
+        vendors x 6 severities x 2 maintenance states x 4 installation
+        types x 3 OpenShift states), so the four shipped sites plus the
+        unassigned bucket give a few thousand small rows at absolute
+        worst and far fewer in practice — and that stays bounded by the
+        configured site count, never by the size of the estate. The caller pivots
         them in Python. The alternative — a `count_documents` per cell —
         would be that many round trips to build one screen.
 
@@ -388,6 +389,7 @@ class MongoServerRepository:
                         "health": "$health.overall",
                         "maintenance": "$maintenance.enabled",
                         "installation_type": "$classification.installation_type",
+                        "openshift_state": "$openshift.lifecycle_state",
                     },
                     "count": {"$sum": 1},
                 }
@@ -403,6 +405,7 @@ class MongoServerRepository:
                     health=key.get("health"),
                     maintenance=bool(key.get("maintenance")),
                     installation_type=key.get("installation_type"),
+                    openshift_state=key.get("openshift_state"),
                     count=int(doc["count"]),
                 )
             )

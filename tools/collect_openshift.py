@@ -68,9 +68,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     Returns:
         argparse.Namespace: Parsed arguments.
     """
-    parser = argparse.ArgumentParser(
-        description="Report which servers this cluster is using."
-    )
+    parser = argparse.ArgumentParser(description="Report which servers this cluster is using.")
     parser.add_argument(
         "--source",
         required=True,
@@ -83,9 +81,9 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Cluster name to record. Defaults to INVENTORY_OPENSHIFT_CLUSTER_NAME.",
     )
     parser.add_argument(
-        "--mce-id",
+        "--mce-name",
         default=None,
-        help="MCE to record, for --source agents. Defaults to INVENTORY_OPENSHIFT_MCE_ID.",
+        help="MCE to record, for --source agents. Defaults to INVENTORY_OPENSHIFT_MCE_NAME.",
     )
     parser.add_argument(
         "--dry-run",
@@ -100,7 +98,7 @@ async def _observe(
     *,
     source: str,
     cluster_name: str,
-    mce_id: str,
+    mce_name: str,
     exclude_name_parts: tuple[str, ...],
 ) -> list[ClusterObservation]:
     """
@@ -110,7 +108,7 @@ async def _observe(
         client (InClusterClient): Reader for this pod's own cluster.
         source (str): `nodes` or `agents`.
         cluster_name (str): Cluster to record on node observations.
-        mce_id (str): MCE to record on agent observations.
+        mce_name (str): MCE to record on agent observations.
         exclude_name_parts (tuple[str, ...]): Node-name substrings to drop.
 
     Returns:
@@ -127,7 +125,7 @@ async def _observe(
         seen = [node_observation(node, cluster_name=cluster_name) for node in nodes]
     else:
         agents = await client.agents()
-        seen = [agent_observation(agent, mce_id=mce_id) for agent in agents]
+        seen = [agent_observation(agent, mce_name=mce_name) for agent in agents]
     return [observation for observation in seen if observation is not None]
 
 
@@ -169,16 +167,14 @@ def _report(summary: MembershipSummary, *, reported_by: str, dry_run: bool) -> i
     return 3
 
 
-async def _run(
-    *, source: str, cluster: str | None, mce_id: str | None, dry_run: bool
-) -> int:
+async def _run(*, source: str, cluster: str | None, mce_name: str | None, dry_run: bool) -> int:
     """
     Read this cluster and reconcile the inventory against it.
 
     Args:
         source (str): `nodes` or `agents`.
         cluster (str | None): Cluster name override.
-        mce_id (str | None): MCE override.
+        mce_name (str | None): MCE override.
         dry_run (bool): Read and correlate, write nothing.
 
     Returns:
@@ -192,7 +188,7 @@ async def _run(
     )
 
     cluster_name = (cluster or settings.openshift_cluster_name).strip()
-    mce = (mce_id or settings.openshift_mce_id).strip()
+    mce = (mce_name or settings.openshift_mce_name).strip()
 
     # Checked before any connection, so a half-configured deployment gets
     # the variable to set rather than a run that reports zero and frees
@@ -208,8 +204,8 @@ async def _run(
     if source == "agents" and not mce:
         print(
             "--source agents needs this MCE's name, to record on the servers it "
-            "holds and to scope what it may release. Set --mce-id or "
-            "INVENTORY_OPENSHIFT_MCE_ID.",
+            "holds and to scope what it may release. Set --mce-name or "
+            "INVENTORY_OPENSHIFT_MCE_NAME.",
             file=sys.stderr,
         )
         return 2
@@ -230,21 +226,18 @@ async def _run(
                 InClusterClient(http),
                 source=source,
                 cluster_name=cluster_name,
-                mce_id=mce,
+                mce_name=mce,
                 exclude_name_parts=exclude,
             )
     except ClusterUnreadableError as exc:
-        # Deliberately fatal, and deliberately *before* any write. The
-        # reconcile frees every server this cluster does not report, so a
-        # failed read must never reach it looking like an empty cluster.
-        logger.error("openshift.cluster_unreadable", error=str(exc))
+        # Fatal, and before any write: the reconcile frees what this
+        # cluster does not report, so a failed read must not reach it.
+        logger.exception("openshift.cluster_unreadable", error=str(exc))
         print(f"cluster could not be read: {exc}", file=sys.stderr)
         return 1
 
-    # A cluster with no workers, or a hub with no agents, is far more
-    # likely a broken selector, an RBAC change or a mid-upgrade blip than
-    # a genuinely emptied cluster — and acting on it would free every
-    # server this cluster holds.
+    # An empty answer is far more likely a broken selector or an RBAC
+    # change than an emptied cluster, and acting on it frees everything.
     if not observations:
         logger.error("openshift.nothing_reported", reported_by=reported_by)
         print(
@@ -258,7 +251,7 @@ async def _run(
     scope: dict[str, object] = (
         {"openshift.cluster_name": cluster_name}
         if source == "nodes"
-        else {"openshift.mce_id": mce}
+        else {"openshift.mce_name": mce}
     )
 
     mongo = MongoClientHolder(settings)
@@ -267,7 +260,7 @@ async def _run(
         await ensure_indexes(mongo.db)
         service = OpenShiftMembershipService(
             server_repo=MongoServerRepository(mongo, cursor_secret=settings.cursor_secret),
-            audit=AuditService(MongoAuditEventRepository(mongo)),
+            audit=AuditService(repo=MongoAuditEventRepository(mongo)),
             actor=Actor(type=ActorType.SYSTEM, id=f"openshift:{reported_by}"),
         )
         summary = await service.reconcile(
@@ -298,7 +291,7 @@ def main(argv: list[str] | None = None) -> None:
             _run(
                 source=args.source,
                 cluster=args.cluster,
-                mce_id=args.mce_id,
+                mce_name=args.mce_name,
                 dry_run=args.dry_run,
             )
         )

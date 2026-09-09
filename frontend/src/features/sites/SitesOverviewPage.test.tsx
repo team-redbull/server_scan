@@ -24,10 +24,15 @@ function breakdown(overrides: Partial<Breakdown> = {}): Breakdown {
 function site(
   site_id: string,
   name: string,
-  slices: { UPI: Partial<Breakdown>; HOSTED_CLUSTER: Partial<Breakdown> },
+  slices: {
+    UPI: Partial<Breakdown>;
+    HOSTED_CLUSTER: Partial<Breakdown>;
+    AVAILABLE?: Partial<Breakdown>;
+  },
 ): SiteStats {
   const upi = breakdown(slices.UPI);
   const hosted = breakdown(slices.HOSTED_CLUSTER);
+  const available = breakdown(slices.AVAILABLE);
   return {
     site_id,
     name,
@@ -47,6 +52,11 @@ function site(
       HOSTED_CLUSTER: hosted,
       MCE: breakdown(),
       UNCLASSIFIED: breakdown(),
+    },
+    by_openshift_state: {
+      AVAILABLE: available,
+      INSTALLED: breakdown({ total: upi.total + hosted.total - available.total }),
+      INSTALLED_TO_INVENTORY: breakdown(),
     },
   };
 }
@@ -76,10 +86,12 @@ const SITE_ITEMS = [
   site("tlv", "Tel Aviv", {
     UPI: { total: 30, by_health: { UNKNOWN: 0, HEALTHY: 28, INFO: 0, WARNING: 0, MAJOR: 0, CRITICAL: 2 } },
     HOSTED_CLUSTER: { total: 12 },
+    AVAILABLE: { total: 7 },
   }),
   site("nyc", "New York City", {
     UPI: { total: 5 },
     HOSTED_CLUSTER: { total: 3, by_health: { UNKNOWN: 0, HEALTHY: 2, INFO: 0, WARNING: 0, MAJOR: 0, CRITICAL: 1 } },
+    AVAILABLE: { total: 2 },
   }),
 ];
 
@@ -92,6 +104,13 @@ const SITES_RESPONSE = {
       HOSTED_CLUSTER: sumBreakdowns(SITE_ITEMS.map((s) => s.by_installation_type.HOSTED_CLUSTER)),
       MCE: sumBreakdowns(SITE_ITEMS.map((s) => s.by_installation_type.MCE)),
       UNCLASSIFIED: sumBreakdowns(SITE_ITEMS.map((s) => s.by_installation_type.UNCLASSIFIED)),
+    },
+    by_openshift_state: {
+      AVAILABLE: sumBreakdowns(SITE_ITEMS.map((s) => s.by_openshift_state.AVAILABLE)),
+      INSTALLED: sumBreakdowns(SITE_ITEMS.map((s) => s.by_openshift_state.INSTALLED)),
+      INSTALLED_TO_INVENTORY: sumBreakdowns(
+        SITE_ITEMS.map((s) => s.by_openshift_state.INSTALLED_TO_INVENTORY),
+      ),
     },
   },
 };
@@ -164,6 +183,41 @@ describe("SitesOverviewPage", () => {
       "href",
       "/servers?installation_type=HOSTED_CLUSTER",
     );
+    expect(card("MCE")).toHaveAttribute("href", "/servers?installation_type=MCE");
+    expect(card("Available")).toHaveAttribute(
+      "href",
+      "/servers?openshift_state=AVAILABLE",
+    );
+    expect(card("Installed")).toHaveAttribute(
+      "href",
+      "/servers?openshift_state=INSTALLED",
+    );
+  });
+
+  it("orders the fleet-wide cards so the grid's two rows read as intended", async () => {
+    // Three per row, so this order is what makes the two rows read.
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: "Available" })).toBeInTheDocument();
+    });
+
+    const names = ["Across all sites", "UPI", "Hosted cluster", "MCE", "Available", "Installed"];
+    const positions = names.map((name) =>
+      Array.prototype.indexOf.call(document.querySelectorAll("a"), card(name)),
+    );
+    expect(positions).toEqual([...positions].sort((a, b) => a - b));
+  });
+
+  it("counts the OpenShift cards off the backend's own slice", async () => {
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: "Available" })).toBeInTheDocument();
+    });
+
+    // 7 in Tel Aviv + 2 in New York, summed backend-side.
+    expect(within(card("Available")).getByText("9")).toBeInTheDocument();
   });
 
   it("trusts the backend's fleet field rather than recomputing it from items", async () => {
@@ -187,6 +241,11 @@ describe("SitesOverviewPage", () => {
                   HOSTED_CLUSTER: breakdown(),
                   MCE: breakdown(),
                   UNCLASSIFIED: breakdown(),
+                },
+                by_openshift_state: {
+                  AVAILABLE: breakdown(),
+                  INSTALLED: breakdown(),
+                  INSTALLED_TO_INVENTORY: breakdown(),
                 },
               },
             }),
