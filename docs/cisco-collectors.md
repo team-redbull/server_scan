@@ -357,6 +357,34 @@ fabric interconnect and is never visible inside the OS.
 MACs reported as `not applicable` or `derived` are UCS placeholders and
 are skipped.
 
+### The per-interface view, and its OS-level names (2026-09-10)
+
+`nic_macs` (the flat, correlation-key MAC list) is not the whole story
+any more — `..ucs_manager.mapping._nics`/`..intersight.mapping._nics`
+build one `ProviderNic` per counted MAC, the same vNIC-preferred/
+physical-fallback rule as `nic_macs` itself, so the two always agree in
+count and order. `name` is `adaptorHostEthIf.name`/`.id` (UCS Manager) or
+`HostEthInterface.Name`/`.ExtEthInterfaceId` (Intersight) — a Cisco vNIC
+carries no FQDD, so `location` stays `None` and `speed_mbps` stays `None`
+(neither API reports a numeric interface speed). `link_state` reuses
+`_oper_state`/`normalize_oper_state`, so it reads `UNKNOWN` on the same
+~99.75% of vNICs the fabric-attachment `oper_state` field already does
+(ADR-0009's dated update) — this is a real limitation of what the field
+measures, not a mapping gap.
+
+**The OS-level name is a fixed, operator-confirmed rule, not derived per
+model like Dell's.** The operator confirmed against real UCS hardware
+(`ip link` on a booted host) that a service profile's own vNICs start at
+`eno5` and count up — onboard/shared management interfaces already claim
+`eno1`-`eno4`. `app.domain.value_objects.nic_names.cisco_eno_names`
+implements exactly that: the Nth interface in `NetworkInfo.interfaces`
+(in order) is named `eno{4+N}`, computed positionally at the API-response
+layer (`ServerDetail.from_server`, gated on `identity.vendor ==
+Vendor.CISCO`) rather than stored — same shape as Dell's
+`NicNameCatalog`, but a hardcoded fleet-wide rule instead of configured,
+per-model operator knowledge, since this one convention does hold across
+every Cisco model in this estate.
+
 ### Operational state mapping
 
 ADR-0009 records that passing UCS's own vocabulary (`operable`,

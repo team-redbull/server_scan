@@ -18,7 +18,7 @@ from app.domain.enums import HealthSeverity, InstallationType, Vendor
 from app.domain.models.classification import Classification
 from app.domain.models.health import Health
 from app.domain.models.maintenance import Maintenance
-from app.domain.models.network import BmcInfo, NetworkInfo
+from app.domain.models.network import BmcInfo, NetworkInfo, NetworkInterface
 from app.domain.models.server import Identity, Server
 from app.domain.services.normalize import normalize_text
 from app.domain.services.search_tokens import build_search_tokens
@@ -40,6 +40,7 @@ def _make_server(
     maintenance_enabled: bool = False,
     name: str | None = None,
     bmc_host: str | None = None,
+    interfaces: tuple[NetworkInterface, ...] = (),
 ) -> Server:
     now = utcnow()
     nm = name if name is not None else f"api-test-srv-{index:04d}"
@@ -58,7 +59,7 @@ def _make_server(
         classification=Classification(installation_type=installation_type),
         health=Health(overall=health),
         maintenance=Maintenance(enabled=maintenance_enabled),
-        network=NetworkInfo(bmc=BmcInfo(host=bmc_host)),
+        network=NetworkInfo(bmc=BmcInfo(host=bmc_host), interfaces=list(interfaces)),
         created_at=now,
         updated_at=now,
         last_seen_at=now,
@@ -342,6 +343,28 @@ async def test_get_detail_200_for_existing_server(
     assert body["id"] == server.id
     assert body["name"] == "detail-test-server"
     assert "hardware" in body  # detail is a superset, unlike the list summary
+
+
+async def test_get_detail_derives_cisco_eno_names(
+    app_context: tuple[AsyncClient, MongoServerRepository],
+) -> None:
+    """Cisco's one computed OS-name rule — see `cisco_eno_names`."""
+    client, repo = app_context
+    server = _make_server(
+        1,
+        name="cisco-eno-test-server",
+        vendor=Vendor.CISCO,
+        interfaces=(
+            NetworkInterface(name="eth0", mac="00:11:22:33:44:00"),
+            NetworkInterface(name="eth1", mac="00:11:22:33:44:01"),
+        ),
+    )
+    await repo.upsert(server)
+
+    resp = await client.get(f"/api/v1/servers/{server.id}")
+
+    assert resp.status_code == 200
+    assert resp.json()["nic_os_names"] == {"eth0": "eno5", "eth1": "eno6"}
 
 
 async def test_get_detail_200_is_cache_stable_on_second_read(

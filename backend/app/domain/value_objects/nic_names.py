@@ -22,6 +22,7 @@ booting a host and reading `ip link`.
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import lru_cache
 
@@ -126,3 +127,26 @@ def nic_name_catalog(spec: str) -> NicNameCatalog:
         NicNameConfigurationError: On a malformed entry.
     """
     return NicNameCatalog.from_spec(spec)
+
+
+# 5, not 1: confirmed by the operator against real Cisco UCS hardware
+# fleet-wide (onboard/management interfaces claim eno1-4). Unlike the
+# rest of this module, this one is a computed rule, not stated knowledge.
+_CISCO_ENO_START = 5
+
+
+def cisco_eno_names(interface_names: Sequence[str]) -> dict[str, str]:
+    """
+    The OS-level `enoN` name for each of a Cisco server's vNICs, in order.
+
+    Args:
+        interface_names (Sequence[str]): `NetworkInterface.name` for each
+            of a server's interfaces, in the order they are stored/shown.
+
+    Returns:
+        dict[str, str]: `interface_names[i]` -> `f"eno{5 + i}"`. A name
+            repeated in the input keeps only its last index, same as any
+            dict built this way — real Cisco vNIC names are unique per
+            server in practice.
+    """
+    return {name: f"eno{_CISCO_ENO_START + i}" for i, name in enumerate(interface_names)}

@@ -12,7 +12,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Any
 
-from app.domain.ports.provider import ProviderAttachment, ProviderServer
+from app.domain.ports.provider import ProviderAttachment, ProviderNic, ProviderServer
 from app.infrastructure.providers.ucs_common import (
     is_equipped,
     normalize_admin_state,
@@ -164,6 +164,50 @@ def _nic_macs(*, host_eth_ifs: list[Any], ext_eth_ifs: list[Any]) -> tuple[str, 
     """
     host_macs = _extract_macs(host_eth_ifs)
     return host_macs if host_macs else _extract_macs(ext_eth_ifs)
+
+
+def _extract_nics(adapter_ifs: list[Any]) -> tuple[ProviderNic, ...]:
+    """
+    Build one `ProviderNic` per real MAC off a list of adapter interfaces.
+
+    Args:
+        adapter_ifs (list[Any]): `adaptorHostEthIf` or `adaptorExtEthIf` MOs.
+
+    Returns:
+        tuple[ProviderNic, ...]: Same filtering as `_extract_macs`, in the
+            same order — `speed_mbps` is always `None`, UCS Manager
+            reports no numeric interface speed.
+    """
+    nics: list[ProviderNic] = []
+    for mo in adapter_ifs:
+        mac = getattr(mo, "mac", None)
+        if not mac or mac.lower() in ("not applicable", "derived"):
+            continue
+        nics.append(
+            ProviderNic(
+                name=getattr(mo, "name", None) or getattr(mo, "id", None) or "",
+                mac=mac,
+                speed_mbps=None,
+                link_state=_oper_state(mo),
+            )
+        )
+    return tuple(nics)
+
+
+def _nics(*, host_eth_ifs: list[Any], ext_eth_ifs: list[Any]) -> tuple[ProviderNic, ...]:
+    """
+    The interfaces themselves, mirroring `_nic_macs`'s vNIC-first rule.
+
+    Args:
+        host_eth_ifs (list[Any]): `adaptorHostEthIf` (logical vNIC) MOs.
+        ext_eth_ifs (list[Any]): `adaptorExtEthIf` (physical port) MOs.
+
+    Returns:
+        tuple[ProviderNic, ...]: One entry per MAC `_nic_macs` would have
+            counted, in the same order, so interface and MAC counts agree.
+    """
+    host_nics = _extract_nics(host_eth_ifs)
+    return host_nics if host_nics else _extract_nics(ext_eth_ifs)
 
 
 # The vocabulary itself lives in `..ucs_common`: Intersight reports the
@@ -675,6 +719,7 @@ def compute_unit_to_provider_server(
         serial=getattr(server_mo, "serial", None) or None,
         system_uuid=getattr(server_mo, "uuid", None) or None,
         nic_macs=_nic_macs(host_eth_ifs=host_eth_ifs, ext_eth_ifs=ext_eth_ifs),
+        nics=_nics(host_eth_ifs=host_eth_ifs, ext_eth_ifs=ext_eth_ifs),
         bmc_address_raw=_bmc_address(mgmt_if, mgmt_ip_addr),
         bmc_mac=getattr(mgmt_if, "mac", None) if mgmt_if is not None else None,
         manager_id=manager_id,

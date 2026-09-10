@@ -11,6 +11,7 @@ import pytest
 from app.domain.value_objects.nic_names import (
     NicNameCatalog,
     NicNameConfigurationError,
+    cisco_eno_names,
     nic_name_catalog,
 )
 
@@ -68,3 +69,26 @@ def test_a_malformed_entry_fails_loudly(spec: str) -> None:
 def test_the_catalog_is_cached_per_spec() -> None:
     """Built once per unique spec rather than per request."""
     assert nic_name_catalog(_SPEC) is nic_name_catalog(_SPEC)
+
+
+# --- Cisco eno naming: the one computed rule in this module -----------
+
+
+def test_a_two_nic_server_gets_eno5_and_eno6() -> None:
+    """The confirmed rule: the first vNIC is eno5, not eno1 — onboard/
+    management interfaces already claim 1-4.
+    """
+    assert cisco_eno_names(["eth0", "eth1"]) == {"eth0": "eno5", "eth1": "eno6"}
+
+
+def test_a_four_nic_server_keeps_counting_up() -> None:
+    assert cisco_eno_names(["eth0", "eth1", "eth2", "eth3"]) == {
+        "eth0": "eno5",
+        "eth1": "eno6",
+        "eth2": "eno7",
+        "eth3": "eno8",
+    }
+
+
+def test_no_interfaces_names_nothing() -> None:
+    assert cisco_eno_names([]) == {}

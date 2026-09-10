@@ -274,6 +274,24 @@ def test_physical_macs_stand_in_when_there_are_no_vnics() -> None:
     assert server.nic_macs == ("00:11:22:33:44:00",)
 
 
+def test_nics_carry_name_mac_and_link_state_matching_nic_macs() -> None:
+    """`nics` is the richer view behind `nic_macs` — same vNIC-first
+    preference, one entry per counted MAC, named and stated too.
+    """
+    server = mapping.to_provider_server(
+        _summary(),
+        provider_type="INTERSIGHT",
+        manager_id="mgr_intersight",
+        ext_interfaces=[{"SwitchId": "A", "MacAddress": "00:11:22:33:44:00"}],
+        host_interfaces=[{"Name": "eth0", "MacAddress": "00:AA:BB:CC:DD:EE", "OperState": "down"}],
+    )
+    [nic] = server.nics
+    assert nic.name == "eth0"
+    assert nic.mac == "00:AA:BB:CC:DD:EE"
+    assert nic.link_state == "DOWN"
+    assert nic.speed_mbps is None
+
+
 # --- the None-versus-empty contract -----------------------------------
 
 

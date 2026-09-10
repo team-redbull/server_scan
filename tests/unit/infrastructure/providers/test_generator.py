@@ -601,12 +601,10 @@ def test_every_readable_server_reports_power_supplies() -> None:
     assert any(psu["health"] == "DOWN" for s in readable for psu in (s.psus or ()))
 
 
-def test_only_redfish_sourced_collectors_report_per_interface_nics() -> None:
-    """A UCS or Intersight server's networking is a fabric attachment, not
-    a NIC an OS would see, so those collectors leave `nics` empty exactly
-    as the real ones do.
+def test_every_collector_with_macs_reports_per_interface_nics() -> None:
+    """Every collector populates `nics` now (2026-09-10) — UCS Central and
+    Intersight report a vNIC's own name, Redfish an FQDD.
     """
-    fabric = {ManagerType.UCS_CENTRAL.value, ManagerType.INTERSIGHT.value}
     by_collector: dict[str, list[bool]] = {}
     for server in generate_servers(seed=42, count=400, sites=SITES):
         # A server whose MACs went unread (an iLO 4) has nothing to report
@@ -617,10 +615,20 @@ def test_only_redfish_sourced_collectors_report_per_interface_nics() -> None:
 
     assert by_collector, "the generator produced nothing to check"
     for collector, has_nics in by_collector.items():
-        if collector in fabric:
-            assert not any(has_nics), f"{collector} should report attachments, not nics"
-        else:
-            assert all(has_nics), f"{collector} should report per-interface nics"
+        assert all(has_nics), f"{collector} should report per-interface nics"
+
+
+def test_ucs_and_intersight_nics_are_eno_named_vnics() -> None:
+    """The one shape unique to Cisco: no FQDD, no location — just the
+    vNIC name `cisco_eno_names` keys its derived `enoN` label off.
+    """
+    fabric = {ManagerType.UCS_CENTRAL.value, ManagerType.INTERSIGHT.value}
+    for server in generate_servers(seed=42, count=400, sites=SITES):
+        if provider_type_for(server) not in fabric or not server.nics:
+            continue
+        assert [n.name for n in server.nics] == [f"eth{i}" for i in range(len(server.nics))]
+        assert all(n.location is None for n in server.nics)
+        assert all(n.speed_mbps is None for n in server.nics)
 
 
 def test_a_nics_mac_is_one_the_server_reports_for_identity() -> None:

@@ -967,6 +967,17 @@ non-obvious enough to bite you.
   `computeBlade.name`, which is empty in practice. Getting this wrong
   names every server after its chassis slot, which carries neither a
   site token nor a classifiable pattern.
+- **Cisco collectors (`UCS_CENTRAL`, `INTERSIGHT`) now populate
+  `ProviderServer.nics`, not just the flat `nic_macs` list (2026-09-10).**
+  Previously only Redfish-sourced collectors did — a UCS/Intersight
+  server's `network.interfaces` was always empty. Each vNIC carries no
+  FQDD, so `location`/`speed_mbps` stay `None`; `link_state` reads
+  `UNKNOWN` on ~99.75% of real vNICs, same as the fabric-attachment
+  `oper_state` field. **`cisco_eno_names`
+  (`app.domain.value_objects.nic_names`) names them `eno5`, `eno6`, …
+  positionally** — a fixed, operator-confirmed rule (`ip link` on real
+  hardware), unlike Dell's per-model-configured `NicNameCatalog`. See
+  `docs/cisco-collectors.md`'s "The per-interface view" section.
 - Every repository stores `datetime` fields as ISO 8601 **strings**
   (`model_dump(mode="json")`), never native BSON dates. Any range/cursor
   query must compare against that stored string type, not a parsed

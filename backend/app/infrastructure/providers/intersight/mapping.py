@@ -16,7 +16,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from typing import Any
 
-from app.domain.ports.provider import ProviderAttachment, ProviderServer
+from app.domain.ports.provider import ProviderAttachment, ProviderNic, ProviderServer
 from app.infrastructure.providers.ucs_common import (
     normalize_admin_state,
     normalize_oper_state,
@@ -454,6 +454,42 @@ def _macs(interfaces: Iterable[Mapping[str, Any]]) -> tuple[str, ...]:
     return tuple(seen)
 
 
+def _nics(interfaces: Iterable[Mapping[str, Any]]) -> tuple[ProviderNic, ...]:
+    """
+    One `ProviderNic` per real, non-duplicate MAC these interfaces report.
+
+    Args:
+        interfaces (Iterable[Mapping[str, Any]]): Adapter interfaces —
+            `adapter.ExtEthInterface` or `adapter.HostEthInterface`.
+
+    Returns:
+        tuple[ProviderNic, ...]: Same order and dedup as `_macs`.
+            `speed_mbps` is always `None` — neither interface class
+            carries a numeric speed (ADR-0017, "Decision 5").
+    """
+    nics: list[ProviderNic] = []
+    seen: set[str] = set()
+    for interface in interfaces:
+        mac = _text(interface.get("MacAddress"))
+        if not mac or mac.lower() in seen:
+            continue
+        seen.add(mac.lower())
+        nics.append(
+            ProviderNic(
+                name=(
+                    _text(interface.get("Name"))
+                    or _text(interface.get("ExtEthInterfaceId"))
+                    or _text(interface.get("HostEthInterfaceId"))
+                    or ""
+                ),
+                mac=mac,
+                speed_mbps=None,
+                link_state=normalize_oper_state(interface.get("OperState")),
+            )
+        )
+    return tuple(nics)
+
+
 def to_provider_server(
     summary: Mapping[str, Any],
     *,
@@ -527,6 +563,12 @@ def to_provider_server(
     elif host is not None and ext is not None:
         macs = ()
 
+    # `nics` has no "not queried" state, unlike `macs` above — same
+    # vNIC-preferred rule, so the two counts always agree.
+    host_nics = _nics(host) if host is not None else ()
+    ext_nics = _nics(ext) if ext is not None else ()
+    nics = host_nics or ext_nics
+
     # An uplink reporting no fabric is not cabled to one. Skipped rather
     # than emitted with a null fabric, matching UCS Manager.
     attachments: list[ProviderAttachment] = [
@@ -556,6 +598,7 @@ def to_provider_server(
         serial=_text(summary.get("Serial")),
         system_uuid=_text(summary.get("Uuid")),
         nic_macs=macs,
+        nics=nics,
         bmc_address_raw=bmc_address(summary, management_interface),
         bmc_mac=_text(management_interface.get("MacAddress")) if management_interface else None,
         manager_id=manager_id,

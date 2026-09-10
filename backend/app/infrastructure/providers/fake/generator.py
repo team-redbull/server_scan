@@ -960,18 +960,9 @@ def _nics_for(
     """
     Build the per-interface view for one server, in its collector's shape.
 
-    Only the Redfish-sourced collectors populate this. A UCS or Intersight
-    server's networking is a link to a fabric interconnect rather than a
-    NIC as an OS would see it, so those report `attachments` and leave this
-    empty — mirroring the real collectors exactly.
-
-    Redfish names come out FQDD-shaped because that is what iDRAC and most
-    BMCs put in `EthernetInterface.Id`, and it is the only thing
-    distinguishing one interface from another: `Name` is the same generic
-    "System Ethernet Interface" on every one of them. The
-    `Integrated`-vs-`Slot` kind is what an OS-level name is derived from
-    downstream (`NIC.Integrated.1` -> `eno...`, `NIC.Slot.8` -> `ens8...`),
-    so both kinds are generated rather than only the simple one.
+    Every collector populates this: UCS Central/Intersight report a
+    vNIC's own name (`eth0`), Redfish an FQDD — see
+    `..ucs_manager.mapping._nics`/`..intersight.mapping._nics`.
 
     Args:
         rng (random.Random): The seeded generator.
@@ -980,11 +971,15 @@ def _nics_for(
         slot (int | None): Its add-in NIC's slot, or None for onboard only.
 
     Returns:
-        tuple[ProviderNic, ...]: One entry per physical port, empty for a
-            collector that reports fabric attachments instead.
+        tuple[ProviderNic, ...]: One entry per physical port.
     """
     if collector in (ManagerType.UCS_CENTRAL, ManagerType.INTERSIGHT):
-        return ()
+        # No FQDD, no location, no speed — matching real UCS/Intersight
+        # mapping. UNKNOWN link_state matches ADR-0009's 99.75% figure.
+        return tuple(
+            ProviderNic(name=f"eth{i}", mac=mac, speed_mbps=None, link_state="UNKNOWN")
+            for i, mac in enumerate(macs)
+        )
     if collector is ManagerType.ONEVIEW:
         # HPE names a port by its adapter and port number, not an FQDD.
         return tuple(

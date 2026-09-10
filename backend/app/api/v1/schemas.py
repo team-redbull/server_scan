@@ -40,7 +40,7 @@ from app.domain.models.maintenance import Maintenance
 from app.domain.models.network import NetworkInfo
 from app.domain.models.openshift import OpenShiftLifecycle
 from app.domain.models.server import Identity, ProfileTemplate, Server
-from app.domain.value_objects.nic_names import NicNameCatalog
+from app.domain.value_objects.nic_names import NicNameCatalog, cisco_eno_names
 from app.infrastructure.mongodb.server_repository import FacetRow
 
 
@@ -193,6 +193,18 @@ class ServerDetail(BaseModel):
         Returns:
             ServerDetail: The response model.
         """
+        nic_os_names = {
+            interface.name: os_name
+            for interface in server.network.interfaces
+            if (os_name := nic_names.os_name_for(interface.name)) is not None
+        }
+        if server.identity.vendor == Vendor.CISCO:
+            # Positional, not configured — see `cisco_eno_names`'s
+            # docstring for why this one case is a computed rule rather
+            # than operator-stated knowledge like Dell's FQDD mapping.
+            nic_os_names.update(
+                cisco_eno_names([interface.name for interface in server.network.interfaces])
+            )
         return cls(
             id=server.id,
             schema_version=server.schema_version,
@@ -215,11 +227,7 @@ class ServerDetail(BaseModel):
             search_tokens=server.search_tokens,
             source_provider=server.source_provider,
             unread_fields=server.unread_fields,
-            nic_os_names={
-                interface.name: os_name
-                for interface in server.network.interfaces
-                if (os_name := nic_names.os_name_for(interface.name)) is not None
-            },
+            nic_os_names=nic_os_names,
             last_seen_at=server.last_seen_at,
             reachable=server.reachable,
             unreachable_since=server.unreachable_since,
