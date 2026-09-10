@@ -280,13 +280,18 @@ class SiteCatalog:
            whole tokens; see the module docstring for why and what it
            trades away.
 
-        If a name's tokens resolve to two *different* sites within one
-        tier the result is `None` rather than a guess — an ambiguous name
-        is a naming bug worth surfacing, not worth resolving by picking
-        the leftmost match or falling through to the other tier. A name
-        carrying two different tokens (or substrings) that both alias the
-        *same* site is not ambiguous — it resolves to that one canonical
-        code, same as repeating the code itself would.
+        Two *real codes* named at once is still `None` rather than a
+        guess — that tier's ambiguity is a naming bug worth surfacing,
+        never resolved by picking a side. **Two different *aliases* named
+        at once picks the leftmost one instead** (2026-09-10, at the
+        operator's request, reversing what this docstring said until
+        then): `fn`/`prep` both configured, `fn-data-prep-ocp-compute-01`
+        resolves through `fn` (`five`), not `None` — no real code is ever
+        in play here to make the pick actually risky the way it would be
+        for two real codes. A name carrying two different tokens (or
+        substrings) that both alias the *same* site is not ambiguous
+        either way — it resolves to that one canonical code, same as
+        repeating the code itself would.
 
         Args:
             name (str | None): A hostname, or a UCS org/profile DN.
@@ -303,7 +308,7 @@ class SiteCatalog:
         codes_only = {definition.code: definition.code for definition in self.definitions}
         found = self._matches(tokens, codes_only)
         if len(found) == 1:
-            return found.pop()
+            return next(iter(found))
         if found:
             return None  # 2+ real codes named at once — ambiguous, no alias tier can help
 
@@ -313,10 +318,15 @@ class SiteCatalog:
             for token in (definition.code, *definition.aliases)
         }
         found = self._matches(tokens, with_aliases)
-        return found.pop() if len(found) == 1 else None
+        if not found:
+            return None
+        # 2+ aliases at once picks whichever matched the earliest token —
+        # see the docstring above for why this is safe where two real
+        # codes at once deliberately is not.
+        return min(found.items(), key=lambda item: item[1])[0]
 
     @staticmethod
-    def _matches(tokens: list[str], by_value: dict[str, str]) -> set[str]:
+    def _matches(tokens: list[str], by_value: dict[str, str]) -> dict[str, int]:
         """
         Every site `tokens` names, against one code/alias -> code mapping.
 
@@ -327,29 +337,31 @@ class SiteCatalog:
                 scoped by the caller to just codes or codes-plus-aliases.
 
         Returns:
-            set[str]: Every canonical code matched — 0, 1 (a clean
-                result) or 2+ (ambiguous; `parse` treats both the same).
+            dict[str, int]: Canonical code -> the earliest token index it
+                matched at. Empty (nothing matched), one entry (a clean
+                result) or 2+ (ambiguous within this tier — `parse`
+                decides what "ambiguous" means for the tier it called
+                this with).
         """
         max_tokens = max((len(_SEPARATORS.split(code)) for code in by_value), default=1)
-        found = {
-            by_value[candidate]
-            for size in range(1, max_tokens + 1)
-            for start in range(len(tokens) - size + 1)
-            if (candidate := "-".join(tokens[start : start + size])) in by_value
-        }
+        positions: dict[str, int] = {}
+        for size in range(1, max_tokens + 1):
+            for start in range(len(tokens) - size + 1):
+                candidate = "-".join(tokens[start : start + size])
+                code = by_value.get(candidate)
+                if code is not None:
+                    positions[code] = min(positions.get(code, start), start)
         # A code/alias appearing anywhere inside one token, not just a
         # token that equals it outright — e.g. "zn" inside "computezn". A
         # multi-token code (containing its own "-") can never be a
         # substring of one token, since splitting already removed every
         # "-" from each token, so this only ever fires for single-token
         # codes/aliases — exactly the short ones this exists for.
-        found |= {
-            code
-            for hostname_token in tokens
-            for candidate, code in by_value.items()
-            if candidate in hostname_token
-        }
-        return found
+        for index, hostname_token in enumerate(tokens):
+            for candidate, code in by_value.items():
+                if candidate in hostname_token:
+                    positions[code] = min(positions.get(code, index), index)
+        return positions
 
 
 def _title_case(code: str) -> str:

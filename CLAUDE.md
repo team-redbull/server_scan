@@ -781,6 +781,13 @@ non-obvious enough to bite you.
   canonical code first and only consults aliases when that finds
   nothing; ambiguity *within* the canonical tier is still final, it does
   not fall through looking for an alias to break the tie.
+  **Two aliases at once picks the leftmost, since 2026-09-10** — unlike
+  two real codes, which stays final ambiguity: `fn-data-prep-ocp-
+  compute-01` with both `fn` and `prep` configured as aliases (no real
+  code present) resolves through `fn` (it reads first), not `None`. No
+  real code is ever in play in that case to make picking one a guess the
+  way it would be for two canonical codes. See ADR-0018's second
+  2026-09-10 update.
 
   **Which sites exist is `INVENTORY_SITES`, not code** (ADR-0018).
   `SiteCode` is gone; the set is a `SiteCatalog` parsed from

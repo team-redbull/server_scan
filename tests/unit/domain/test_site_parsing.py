@@ -348,10 +348,24 @@ def test_two_real_codes_at_once_stays_ambiguous_even_with_an_alias_present() -> 
     assert parse_site_code("ocp4-prep-five-nyc-01", catalog) is None
 
 
-def test_two_different_aliases_with_no_real_code_is_still_ambiguous() -> None:
+def test_two_different_aliases_at_once_picks_the_leftmost_one() -> None:
+    """Reversed 2026-09-10, at the operator's request: two real codes at
+    once stays ambiguous (the test above), but two *aliases* at once no
+    longer is — no real code is ever in play to make the pick risky.
+    """
     catalog = SiteCatalog.from_spec("znif|prep:Znif,five|fn:Site Five")
 
-    assert parse_site_code("ocp4-prep-fn-01", catalog) is None
+    assert parse_site_code("ocp4-prep-fn-01", catalog) == "znif"  # "prep" (index 1) < "fn" (2)
+    assert parse_site_code("ocp4-fn-prep-01", catalog) == "five"  # order in the name flips it
+
+
+def test_the_operators_own_reported_case() -> None:
+    """The exact hostname that motivated leftmost-wins: `fn` (index 0)
+    beats `prep` (index 2), so this resolves to `five`, not Unassigned.
+    """
+    catalog = SiteCatalog.from_spec("znif|prep:Znif,five|fn:Site Five")
+
+    assert parse_site_code("FN-Data-prep-ocp-compute-01", catalog) == "five"
 
 
 def test_an_alias_reused_as_another_sites_code_is_rejected() -> None:

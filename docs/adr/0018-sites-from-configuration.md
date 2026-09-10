@@ -219,5 +219,27 @@ one. Ambiguity *within* the canonical tier (two real codes named at once)
 is still final — it does not fall through hoping an alias breaks the tie,
 since no alias could disambiguate two real codes anyway.
 `tests/unit/domain/test_site_parsing.py` pins both the fixed case and the
-still-ambiguous ones (two real codes together; two different sites'
-aliases with no real code present).
+still-ambiguous one (two real codes together). **Two different aliases
+at once is no longer in that ambiguous set — see the next update.**
+
+## Update (2026-09-10): two aliases at once picks the leftmost, not `None`
+
+The second half of the same real hostname, `FN-Data-prep-ocp-compute-01`,
+with `znif|prep:Znif` and `five|fn:Site Five` both configured: `fn`
+(index 0) and `prep` (index 2) are both aliases, no real code is present
+at all, so this landed in the still-ambiguous case the update above left
+alone — Unassigned, even though the name plainly leads with `fn`.
+
+At the operator's request, `SiteCatalog._matches` now returns each
+matched code's *earliest* token position, not just the set of codes
+matched, and `parse` uses it only for the alias tier: 2+ aliases at once
+resolves to whichever one matched first, left to right in the name,
+rather than `None`. **The canonical tier is deliberately unchanged** —
+two real codes at once is still final, unresolved ambiguity, because
+picking one over the other there really would be a guess about which
+site the server is actually in. Two aliases is a different risk
+entirely: neither reading is "more real" than the other, so taking the
+one that reads first in the name is a reasonable tiebreak, not a guess
+in the sense the canonical-tier rule exists to prevent.
+`tests/unit/domain/test_site_parsing.py::test_two_different_aliases_at_once_picks_the_leftmost_one`
+and `::test_the_operators_own_reported_case` pin this.
