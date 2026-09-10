@@ -134,17 +134,17 @@ class MongoClassificationRuleRepository:
 # All four are broad prefix/substring catch-alls, none site-validated
 # (2026-09-08, at the operator's request — this used to be four narrower,
 # mutually-exclusive, site-anchored shapes; see git history for those).
-# `^ocp-` and `^ocp4-hypershift` both also start with characters `^ocp4`
-# matches, and `mce` can appear inside any of them — so this makes
-# classification genuinely ORDER-DEPENDENT: `order` below (0/1/2/3) is
-# what keeps a name from being swallowed by a broader catch-all it also
-# happens to match — HOSTED_CLUSTER and MCE must both sort ahead of UPI,
-# not just have distinct patterns. See `classify()`'s `_sort_key` for how
-# `order` breaks a same-priority tie.
+# UPI's pattern matches every name, unconditionally (2026-09-10, also at
+# the operator's request — it used to be `^ocp4`) — so classification is
+# now genuinely ORDER-DEPENDENT, not just pattern-dependent: `order`
+# below (0/1/2/3) is the *only* thing keeping a HOSTED_CLUSTER/MCE name
+# from being swallowed by UPI, since UPI's own pattern would otherwise
+# claim it too. See `classify()`'s `_sort_key` for how `order` breaks a
+# same-priority tie.
 _HOSTED_CLUSTER_HYPERSHIFT_PATTERN = r"^ocp4-hypershift"
 _HOSTED_CLUSTER_HARDWARE_PATTERN = r"^ocp-"
 _MCE_PATTERN = "mce"
-_UPI_PATTERN = r"^ocp4"
+_UPI_PATTERN = r".*"
 
 
 def default_system_rules(sites: SiteCatalog) -> list[ClassificationRule]:
@@ -153,8 +153,8 @@ def default_system_rules(sites: SiteCatalog) -> list[ClassificationRule]:
 
     Covers this estate's real hostname conventions: two prefix shapes of
     hosted cluster, one substring match for an MCE hub's own nodes, and
-    one UPI catch-all. Order matters here — see the comment above
-    `_UPI_PATTERN`.
+    UPI as the unconditional catch-all for everything else. Order matters
+    here — see the comment above `_UPI_PATTERN`.
 
     All four are `system=True` (locked to enabled-only edits after
     creation) because they encode a naming convention that holds fleet-
@@ -242,8 +242,8 @@ def default_system_rules(sites: SiteCatalog) -> list[ClassificationRule]:
             id=new_id("classification_rule"),
             name="system-default-upi",
             description=(
-                'User-provisioned infrastructure: any "ocp4"-prefixed name not '
-                "already claimed by a hosted-cluster or MCE rule above."
+                "User-provisioned infrastructure: everything not already "
+                "claimed by a hosted-cluster or MCE rule above."
             ),
             enabled=True,
             system=True,

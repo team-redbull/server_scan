@@ -552,15 +552,26 @@ def test_some_dell_servers_are_seeded_unreachable() -> None:
     assert reachable_dell
 
 
-def test_installation_types_are_a_visible_four_way_split() -> None:
-    """The sites overview shows one card per installation type. Two of
-    them landing on the same count reads as a bug in the page rather than
-    a property of the fleet, and an empty one shows nothing at all.
+def test_installation_types_are_a_visible_three_way_split() -> None:
+    """Two landing on the same count reads as a bug, not a fleet property.
+    Three, not four — UPI is unconditional since 2026-09-10.
     """
     counts = Counter(_installation_type(s.name) for s in generate_servers(seed=42, count=1000))
-    assert set(counts) == {"HOSTED_CLUSTER", "MCE", "UPI", "UNCLASSIFIED"}
+    assert set(counts) == {"HOSTED_CLUSTER", "MCE", "UPI"}
     assert all(count > 50 for count in counts.values())
-    assert len(set(counts.values())) == 4
+    assert len(set(counts.values())) == 3
+
+
+def test_the_unclassified_shaped_family_is_upi_now() -> None:
+    """The siteless `random-server-*` minority still exercises "Unassigned
+    site" — it just classifies UPI now, not UNCLASSIFIED.
+    """
+    unclassified_shaped = [
+        s for s in generate_servers(seed=42, count=1000) if s.name.startswith("random-server-")
+    ]
+    assert unclassified_shaped
+    assert all(_installation_type(s.name) == "UPI" for s in unclassified_shaped)
+    assert all(parse_site_code(s.name, SITES) is None for s in unclassified_shaped)
 
 
 def test_every_readable_server_reports_power_supplies() -> None:

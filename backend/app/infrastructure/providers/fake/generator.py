@@ -322,10 +322,14 @@ _FQDD_COLLECTORS = (ManagerType.OPENMANAGE, ManagerType.REDFISH_STANDALONE)
 _NAME_ENVIRONMENTS = ("prod", "prep", None)
 
 # (pattern-family, weight) — weighted so "unclassified-shaped" names stay
-# a small minority, matching a realistic mixed estate. The unclassified
-# family deliberately carries no site token either, so the UI's
-# "Unclassified" and "Unassigned site" states both get real fixtures
-# instead of being unreachable in dev.
+# a small minority, matching a realistic mixed estate. This family
+# deliberately carries no site token, exercising the UI's "Unassigned
+# site" state — it does NOT exercise "Unclassified" any more, since UPI's
+# system-default pattern became unconditional 2026-09-10; every one of
+# these names classifies UPI too, same as everything else that isn't
+# hosted-cluster or MCE. Kept under its original name rather than
+# renamed, since the shape (siteless, non-`ocp`-prefixed) is still what
+# it is generating — see `docs/architecture.md`'s classification section.
 #
 # UPI outweighs hosted-cluster rather than tying it, so the sites
 # overview's fleet cards read as different numbers rather than several

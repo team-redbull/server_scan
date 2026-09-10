@@ -6,8 +6,9 @@ patterns are checked against the estate's *real* hostnames, resolved
 through the actual `classify()` engine rather than a naive "which
 patterns match" check. That distinction matters since 2026-09-08: every
 default is now a broad prefix/substring catch-all (`^ocp4-hypershift`,
-`^ocp-`, `mce`, `^ocp4`) rather than a narrow, mutually-exclusive shape,
-so several of them textually match the same hostname — only
+`^ocp-`, `mce`, and, since 2026-09-10, UPI's unconditional `.*`) rather
+than a narrow, mutually-exclusive shape, so several of them textually
+match the same hostname — only
 `classify()`'s real priority/order resolution, not raw pattern matching,
 says which one actually wins. A test that only asserted "there are three
 rules with these names" would have happily passed the previous
@@ -124,32 +125,33 @@ def test_mce_hostnames_classify_as_mce(name: str) -> None:
         # specific patterns are still checked for structure at all.
         "ocp4-tlvx-01",  # "tlv" is a substring, not a real site token
         "ocp4-prod-infra-01",  # no site token
+        # Broadened again 2026-09-10: UPI is now unconditional, so a name
+        # that used to fall through every pattern to UNCLASSIFIED is UPI
+        # too — see `test_nothing_classifies_as_unclassified_any_more`.
+        "random-server-0009",
+        "some-unmanaged-box",
+        "",
     ],
 )
 def test_upi_hostnames_classify_as_upi(name: str) -> None:
     assert _classify(name) == InstallationType.UPI
 
 
-@pytest.mark.parametrize(
-    "name",
-    [
-        "random-server-0009",
-        "some-unmanaged-box",
-        "",
-    ],
-)
-def test_unrecognized_hostnames_match_nothing(name: str) -> None:
-    assert _classify(name) == InstallationType.UNCLASSIFIED
+def test_nothing_classifies_as_unclassified_any_more() -> None:
+    """UPI's pattern matches every string, `""` included, so under the
+    system defaults `InstallationType.UNCLASSIFIED` is now unreachable.
+    """
+    for name in ("random-server-0009", "some-unmanaged-box", ""):
+        assert _classify(name) != InstallationType.UNCLASSIFIED
 
 
 def test_hosted_cluster_and_mce_outrank_the_upi_catch_all() -> None:
-    """UPI's pattern is a broad `ocp4` prefix that textually matches every
-    HOSTED_CLUSTER and MCE hostname too — this is deliberate (2026-09-08),
-    not a regression of the mutual-exclusivity the previous design had.
-    `order` is what keeps the more specific rules winning: HOSTED_CLUSTER
-    (order 0-1) and MCE (order 2) both sort ahead of UPI (order 3), so
-    `classify()`'s first-match-wins never reaches UPI for these names even
-    though UPI's own pattern matches every one of them too.
+    """UPI's pattern matches every hostname unconditionally, HOSTED_CLUSTER
+    and MCE names included — deliberate (2026-09-10), not a regression of
+    the mutual-exclusivity the previous design had. `order` is what keeps
+    the more specific rules winning: HOSTED_CLUSTER (order 0-1) and MCE
+    (order 2) both sort ahead of UPI (order 3), so `classify()`'s
+    first-match-wins never reaches UPI for these names.
     """
     names_and_expected = [
         ("ocp4-hypershift-five-01", InstallationType.HOSTED_CLUSTER),

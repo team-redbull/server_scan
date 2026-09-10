@@ -348,7 +348,12 @@ default classification rules became broad, overlapping, order-dependent
 prefix/substring catch-alls rather than mutually exclusive by
 construction (`app.infrastructure.mongodb.classification_rule_repository.
 default_system_rules`) — read that module's own comment before touching
-it, the ordering is load-bearing now in a way it wasn't before.
+it, the ordering is load-bearing now in a way it wasn't before. **UPI's
+own pattern became unconditional (`.*`) 2026-09-10** — it used to require
+an `ocp4` prefix; now it matches every name that isn't already claimed by
+a hosted-cluster or MCE rule, so `InstallationType.UNCLASSIFIED` is
+unreachable through the system defaults (it still exists as the enum's
+zero value and as what a fully custom ruleset can produce).
 
 **Every planned vendor collector now exists.** Cisco Intersight
 (ADR-0017), Dell OpenManage (ADR-0020) and HPE OneView (ADR-0022) all

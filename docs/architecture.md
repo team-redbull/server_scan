@@ -242,8 +242,9 @@ now" without waiting for the next ingest cycle. `app.application.services.
 bootstrap` seeds the platform spec's own acceptance-scenario rules and
 policies (four `InstallationType` system defaults — `^ocp4-hypershift`
 and `^ocp-` prefixes for `HOSTED_CLUSTER`, an `mce` substring for `MCE`,
-an `^ocp4` catch-all for `UPI`, checked in that order — Dell vendor
-overrides, the Cisco one-path-down/two-paths-down fabric policies)
+and an unconditional `.*` catch-all for `UPI` (2026-09-10 — used to be
+`^ocp4`), checked in that order — Dell vendor overrides, the Cisco
+one-path-down/two-paths-down fabric policies)
 idempotently at startup — "seed only if missing, by name" specifically so
 an admin's edit to a system default's `enabled` flag survives every
 restart rather than being silently re-armed. See
