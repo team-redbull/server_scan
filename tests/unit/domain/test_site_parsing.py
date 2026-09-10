@@ -320,6 +320,40 @@ def test_two_aliases_of_the_same_site_in_one_name_is_not_ambiguous() -> None:
     assert parse_site_code("ocp4-znif-prep-infra-01", catalog) == "znif"
 
 
+def test_a_real_site_code_wins_over_an_unrelated_sites_alias() -> None:
+    """The real bug, reproduced — see `SiteCatalog.parse`'s own docstring
+    for why canonical codes are tried before aliases at all.
+    """
+    catalog = SiteCatalog.from_spec("znif|prep:Znif,five:Site Five")
+
+    assert parse_site_code("ocp4-prep-five-compute-01", catalog) == "five"
+
+
+def test_an_alias_still_resolves_when_no_real_code_is_present() -> None:
+    """The other half of the same fix: `prep` alone, with no `five`/
+    `znif`/... token anywhere in the name, still falls through to the
+    alias tier exactly as before.
+    """
+    catalog = SiteCatalog.from_spec("znif|prep:Znif,five:Site Five")
+
+    assert parse_site_code("ocp4-prep-compute-01", catalog) == "znif"
+
+
+def test_two_real_codes_at_once_stays_ambiguous_even_with_an_alias_present() -> None:
+    """Ambiguity at the canonical tier is final - it does not fall
+    through to aliases looking for a tiebreaker that cannot exist.
+    """
+    catalog = SiteCatalog.from_spec("znif|prep:Znif,five:Site Five,nyc:New York City")
+
+    assert parse_site_code("ocp4-prep-five-nyc-01", catalog) is None
+
+
+def test_two_different_aliases_with_no_real_code_is_still_ambiguous() -> None:
+    catalog = SiteCatalog.from_spec("znif|prep:Znif,five|fn:Site Five")
+
+    assert parse_site_code("ocp4-prep-fn-01", catalog) is None
+
+
 def test_an_alias_reused_as_another_sites_code_is_rejected() -> None:
     """Would make it ambiguous which site a hostname carrying the shared
     token names.

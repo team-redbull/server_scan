@@ -720,6 +720,14 @@ non-obvious enough to bite you.
   ambiguous (two sites "matched") rather than landing on the intended
   one — avoiding common role words when picking a code/alias is now the
   operator's job. See the module docstring and ADR-0018's dated update.
+  **Canonical codes beat aliases, since 2026-09-10** — a second real
+  collision: with `znif|prep:Znif` and `five:Site Five` both configured,
+  `ocp4-prep-five-compute-01` carries `five` (a real code) and `prep`
+  (someone else's alias) at once, and treating both as one pool dropped
+  a name that plainly says `five` to Unassigned. `parse` now tries every
+  canonical code first and only consults aliases when that finds
+  nothing; ambiguity *within* the canonical tier is still final, it does
+  not fall through looking for an alias to break the tie.
 
   **Which sites exist is `INVENTORY_SITES`, not code** (ADR-0018).
   `SiteCode` is gone; the set is a `SiteCatalog` parsed from

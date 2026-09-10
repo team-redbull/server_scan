@@ -201,3 +201,23 @@ code or alias is now the operator's job — startup validation cannot
 catch this the way it catches an unusable character, because the
 collision depends on every other code/alias configured and on hostnames
 that do not exist yet.
+
+## Update (2026-09-10): canonical codes beat aliases, not just each other
+
+A real collision the previous update's own risk did not cover: with
+`znif|prep:Znif` and `five:Site Five` both configured,
+`ocp4-prep-five-compute-01` carries `five` (a real, unrelated site's own
+code) and `prep` (an alias of a *different* site) at once. Treating every
+code and alias as one flat pool — the 2026-09-09 design — made this
+ambiguous and dropped a name that plainly says `five` to Unassigned.
+
+`SiteCatalog.parse` now tries canonical codes first, across the whole
+catalog, and only consults aliases when that tier matched nothing at
+all. A real code is never in question the way an alias borrowed from
+another site can be, so it wins outright rather than sharing a tier with
+one. Ambiguity *within* the canonical tier (two real codes named at once)
+is still final — it does not fall through hoping an alias breaks the tie,
+since no alias could disambiguate two real codes anyway.
+`tests/unit/domain/test_site_parsing.py` pins both the fixed case and the
+still-ambiguous ones (two real codes together; two different sites'
+aliases with no real code present).

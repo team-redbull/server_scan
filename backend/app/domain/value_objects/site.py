@@ -254,8 +254,22 @@ class SiteCatalog:
         The site code embedded in `name`, or `None` if it holds none.
 
         Case-insensitive, because hostnames arrive from vendor APIs with
-        inconsistent casing. Two ways a code or alias can match, both
-        active at once:
+        inconsistent casing. **Canonical codes are tried first, aliases
+        only if that finds nothing at all** — added 2026-09-10, after a
+        real collision: with `znif|prep:Znif` and `five:Site Five`
+        both configured, `ocp4-prep-five-compute-01` carries `five` (a
+        real site's own code) and `prep` (someone else's alias) at once.
+        Treating both tiers as one pool made that name ambiguous — two
+        sites "matched" — and dropped it to Unassigned, even though
+        `five` alone is exactly what a name with no alias in it would
+        have resolved to. A canonical code is never in question the way
+        an alias can be, so it wins outright; aliases are consulted only
+        when no real code named anything, which is the case they exist
+        for (`ocp4-prep-compute-01`, no `five`/`znif`/... token at all,
+        still resolves through `prep` to `znif`).
+
+        Two ways a code or alias can match, within whichever tier is
+        being tried:
 
         1. As a run of one or more whole, consecutive tokens, exactly —
            what makes a multi-token code (`bat-yam`) match its own
@@ -266,12 +280,13 @@ class SiteCatalog:
            whole tokens; see the module docstring for why and what it
            trades away.
 
-        If a name's tokens resolve to two *different* sites the result is
-        `None` rather than a guess — an ambiguous name is a naming bug
-        worth surfacing, not worth resolving by picking the leftmost
-        match. A name carrying two different tokens (or substrings) that
-        both alias the *same* site is not ambiguous — it resolves to that
-        one canonical code, same as repeating the code itself would.
+        If a name's tokens resolve to two *different* sites within one
+        tier the result is `None` rather than a guess — an ambiguous name
+        is a naming bug worth surfacing, not worth resolving by picking
+        the leftmost match or falling through to the other tier. A name
+        carrying two different tokens (or substrings) that both alias the
+        *same* site is not ambiguous — it resolves to that one canonical
+        code, same as repeating the code itself would.
 
         Args:
             name (str | None): A hostname, or a UCS org/profile DN.
@@ -283,14 +298,39 @@ class SiteCatalog:
         """
         if not name:
             return None
-        by_value = {
+        tokens = [token for token in _SEPARATORS.split(name.strip().lower()) if token]
+
+        codes_only = {definition.code: definition.code for definition in self.definitions}
+        found = self._matches(tokens, codes_only)
+        if len(found) == 1:
+            return found.pop()
+        if found:
+            return None  # 2+ real codes named at once — ambiguous, no alias tier can help
+
+        with_aliases = {
             token: definition.code
             for definition in self.definitions
             for token in (definition.code, *definition.aliases)
         }
-        max_tokens = max((len(_SEPARATORS.split(code)) for code in by_value), default=1)
-        tokens = [token for token in _SEPARATORS.split(name.strip().lower()) if token]
+        found = self._matches(tokens, with_aliases)
+        return found.pop() if len(found) == 1 else None
 
+    @staticmethod
+    def _matches(tokens: list[str], by_value: dict[str, str]) -> set[str]:
+        """
+        Every site `tokens` names, against one code/alias -> code mapping.
+
+        Args:
+            tokens (list[str]): The hostname's own `-`/`_`/`.`/`/`-split
+                tokens, already lowercased.
+            by_value (dict[str, str]): Candidate token -> canonical code,
+                scoped by the caller to just codes or codes-plus-aliases.
+
+        Returns:
+            set[str]: Every canonical code matched — 0, 1 (a clean
+                result) or 2+ (ambiguous; `parse` treats both the same).
+        """
+        max_tokens = max((len(_SEPARATORS.split(code)) for code in by_value), default=1)
         found = {
             by_value[candidate]
             for size in range(1, max_tokens + 1)
@@ -309,10 +349,7 @@ class SiteCatalog:
             for candidate, code in by_value.items()
             if candidate in hostname_token
         }
-
-        if len(found) != 1:
-            return None
-        return found.pop()
+        return found
 
 
 def _title_case(code: str) -> str:
