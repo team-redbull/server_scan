@@ -272,15 +272,24 @@ invisible for weeks. For a fleet of independent BMCs it is the *normal*
 outcome — which is why the guidance is to alert on staleness, never on
 Job status.
 
-**One exception, added 2026-09-10**: `OPENMANAGE` does not count a single
-BMC's plain connection failure toward exit 3 any more. Unlike every other
-per-host failure, OME already knows that server's identity before its BMC
-is ever contacted, so the collector writes it as a real,
-`reachable=False` document (see `Server.reachable` in §12) instead of
-just naming it in a log line — the CronJob's own exit code is no longer
-the only place that fact lives. Auth failures, TLS failures, a disabled
-credential and every other vendor's per-host misses are unaffected and
-still drive PARTIAL exactly as before.
+**Two exceptions, both added 2026-09-10**: neither `OPENMANAGE` nor
+`REDFISH_STANDALONE` counts a single BMC's plain connection failure
+toward exit 3 any more — see `tools.run_collector._is_benign_unreachable`
+and `..redfish.provider.UNREACHABLE_MARKER`. Auth failures, TLS failures,
+a disabled credential and every other per-host miss are unaffected and
+still drive PARTIAL exactly as before; this is narrower than "any
+failure," on purpose.
+
+They differ in what replaces the signal. `OPENMANAGE` gets the fuller
+treatment: OME already knows a server's identity before its BMC is ever
+contacted, so the collector writes a real `reachable=False` document (see
+`Server.reachable` in §12) instead of just naming it in a log line —
+Mongo carries the fact, not just the exit code. `REDFISH_STANDALONE` has
+no such identity source (its inventory file names a host, never a
+serial), so a never-reached host gets no document — only the log line,
+now at ERROR instead of WARNING since it is what is left. See
+ADR-0016's dated update for why closing that gap is a real design change,
+not implemented yet.
 
 ### 6.2 A list request
 

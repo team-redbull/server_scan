@@ -65,7 +65,10 @@ from app.infrastructure.mongodb.site_repository import MongoSiteRepository
 from app.infrastructure.providers.intersight.provider import IntersightProvider
 from app.infrastructure.providers.oneview.provider import OneViewProvider
 from app.infrastructure.providers.openmanage.provider import OpenManageProvider
-from app.infrastructure.providers.redfish.provider import RedfishStandaloneProvider
+from app.infrastructure.providers.redfish.provider import (
+    UNREACHABLE_MARKER,
+    RedfishStandaloneProvider,
+)
 from app.infrastructure.providers.redfish.targets import (
     RedfishCredential,
     RedfishTarget,
@@ -868,6 +871,23 @@ def _format_duration(seconds: float) -> str:
     return f"{minutes}m {remainder}s"
 
 
+def _is_benign_unreachable(message: str) -> bool:
+    """
+    Whether a `collection_errors` entry is a plain host-did-not-answer failure.
+
+    See `..redfish.provider`'s module docstring for why that alone no
+    longer makes a run PARTIAL.
+
+    Args:
+        message (str): One entry from `ProviderServer.collection_errors`.
+
+    Returns:
+        bool: `True` when `message` carries `UNREACHABLE_MARKER`, which
+            only a plain `RedfishUnreachableError` ever writes.
+    """
+    return UNREACHABLE_MARKER in message
+
+
 async def _dry_run_one_manager(
     manager: Manager,
     *,
@@ -1348,7 +1368,11 @@ async def _run(
                 seconds=run_duration,
                 took=_format_duration(run_duration),
             )
-            if outcome.collection_errors or summary.errors:
+            # A plain host-did-not-answer no longer makes the run PARTIAL —
+            # see `_is_benign_unreachable`.
+            hard_errors = [m for m in outcome.collection_errors if not _is_benign_unreachable(m)]
+            benign_unreachable = len(outcome.collection_errors) - len(hard_errors)
+            if hard_errors or summary.errors:
                 # Exit 3, not 0: some servers were written, but this run did
                 # not see the whole fleet. Reported as success it is
                 # indistinguishable from a healthy run against a smaller
@@ -1366,6 +1390,18 @@ async def _run(
                 if summary.errors:
                     print(f"  - {summary.errors} server(s) failed to ingest (see logs)")
                 return 3
+            if benign_unreachable:
+                logger.warning(
+                    "collector.hosts_unreachable",
+                    manager_id=manager.id,
+                    unreachable=benign_unreachable,
+                )
+                print(
+                    f"manager={manager.name} completed — {benign_unreachable} "
+                    "host(s) unreachable (see logs), not counted as PARTIAL:"
+                )
+                for message in outcome.collection_errors:
+                    print(f"  - {message}")
             return 0
         finally:
             await mongo.close()

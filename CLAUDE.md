@@ -557,6 +557,17 @@ credential) is unaffected and still drives PARTIAL. See
 `docs/dell-collectors.md`'s "Collection flow" and the `Server.reachable`
 entry below.
 
+**`REDFISH_STANDALONE` shares the exit-code relaxation, not the Mongo
+document.** Same day, same shared `..redfish.provider._collect_host`: a
+plain connection failure now logs at ERROR (was WARNING) and is excluded
+from the PARTIAL decision via `UNREACHABLE_MARKER`/`tools.run_collector.
+_is_benign_unreachable`. It stops there — a standalone target's inventory
+file carries only a host and an optional name, never a serial, so there
+is no stable `(vendor, serial_normalized)` key to write a placeholder
+against without risking a new duplicate document on every unreachable
+run. See ADR-0016's dated update for exactly why, and what closing that
+gap would require.
+
 **`ONEVIEW` (HPE) deliberately does *not* copy that split, and this is
 the thing a future session is most likely to get wrong.** The estate runs
 iLO 4, 5 and 6 in the same racks, and iLO 4 predates useful Redfish

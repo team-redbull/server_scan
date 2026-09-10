@@ -53,6 +53,10 @@ logger = structlog.get_logger(__name__)
 
 _PROVIDER_TYPE = ManagerType.REDFISH_STANDALONE.value
 
+# The separator `_collect_host` writes for a plain `RedfishUnreachableError`
+# only — exported so a caller can recognize it without re-deriving it.
+UNREACHABLE_MARKER = ": unreachable — "
+
 
 @dataclass(slots=True)
 class _AuthGuard:
@@ -383,8 +387,10 @@ class RedfishStandaloneProvider(ServerInventoryProvider):
                 logger.exception("redfish.tls_verify_failed", host=target.host, error=str(exc))
                 self._record_error(f"{target.host}: TLS verification failed — {exc}")
             except RedfishUnreachableError as exc:
-                logger.warning("redfish.host_unreachable", host=target.host, error=str(exc))
-                self._record_error(f"{target.host}: unreachable — {exc}")
+                # ERROR: a caller may not fail the run over this (see
+                # UNREACHABLE_MARKER), so the log is the only signal left.
+                logger.exception("redfish.host_unreachable", host=target.host, error=str(exc))
+                self._record_error(f"{target.host}{UNREACHABLE_MARKER}{exc}")
             except (RedfishError, ValueError) as exc:
                 logger.warning("redfish.host_failed", host=target.host, error=str(exc))
                 self._record_error(f"{target.host}: {exc}")

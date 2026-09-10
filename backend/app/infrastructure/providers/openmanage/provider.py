@@ -45,6 +45,7 @@ from app.infrastructure.providers.openmanage.mapping import (
     dell_port_nics,
     identity_from_profile,
 )
+from app.infrastructure.providers.redfish.provider import UNREACHABLE_MARKER
 from app.infrastructure.providers.redfish.targets import RedfishCredential, RedfishTarget
 
 logger = structlog.get_logger(__name__)
@@ -65,7 +66,7 @@ def _is_unreachable(message: str, host: str) -> bool:
     Returns:
         bool: `True` when `message` is exactly that host's unreachable error.
     """
-    return message.startswith(f"{host}: unreachable — ")
+    return message.startswith(f"{host}{UNREACHABLE_MARKER}")
 
 
 class OpenManageProvider(ServerInventoryProvider):

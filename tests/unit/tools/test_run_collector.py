@@ -1363,6 +1363,42 @@ class TestRunExitCodes:
         # operator still has to go log-diving to learn which one broke.
         assert "10.0.0.2" in out
 
+    async def test_a_plain_unreachable_host_alone_exits_zero(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: Any
+    ) -> None:
+        """A down BMC is normal fleet-wide — see `..redfish.provider`'s
+        module docstring — so it no longer fails the pod.
+        """
+        code = await self._run_with(
+            monkeypatch,
+            _outcome(collection_errors=("10.0.0.9: unreachable — Connection refused",)),
+        )
+
+        assert code == 0
+        out = capsys.readouterr().out
+        assert "PARTIAL —" not in out
+        assert "10.0.0.9" in out
+
+    async def test_a_mix_of_unreachable_and_a_real_failure_still_exits_three(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: Any
+    ) -> None:
+        """One benign miss must not hide a real one riding along with it."""
+        code = await self._run_with(
+            monkeypatch,
+            _outcome(
+                collection_errors=(
+                    "10.0.0.9: unreachable — Connection refused",
+                    "10.0.0.2: TLS verification failed — bad cert",
+                )
+            ),
+        )
+
+        assert code == 3
+        out = capsys.readouterr().out
+        assert "PARTIAL" in out
+        assert "10.0.0.9" in out
+        assert "10.0.0.2" in out
+
     async def test_failed_ingests_alone_exit_three(
         self, monkeypatch: pytest.MonkeyPatch, capsys: Any
     ) -> None:

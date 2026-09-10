@@ -626,3 +626,36 @@ or recreate the database, either before or right after deploying this
 change. A future rename of any *other* index should not assume the same
 call without asking, since it trades the self-healing property every
 other index here still has.
+
+## Update (2026-09-10): a plain unreachable host no longer makes the run PARTIAL
+
+At the operator's request, matching the same-day change to `OPENMANAGE`
+(ADR-0020's dated update): `_collect_host`'s `RedfishUnreachableError`
+branch now logs at ERROR (was WARNING — with fewer collector-side signals
+than OpenManage gets, the log is the only one left) and writes its
+`collection_errors` entry with a new, exported marker,
+`UNREACHABLE_MARKER`. `tools.run_collector._is_benign_unreachable` reads
+it at the exit-code decision: a run whose only `collection_errors` are
+plain-unreachable hosts now exits 0, not 3 — every other failure (auth
+rejected, TLS, budget exceeded, a guard-disabled credential) is
+unaffected and still drives PARTIAL, since those can mean a problem
+across many hosts, not one dead server. The benign hosts are still
+printed in the run's own output, just not under a `PARTIAL` banner.
+
+**Deliberately does NOT extend `OPENMANAGE`'s other half — writing a
+`reachable=False` server document.** OME can name a profile (service tag,
+name, template) before ever touching its iDRAC, which is what makes a
+stable `(vendor, serial_normalized)` correlation key possible without
+contacting the dead host. A standalone target has no such source: its
+inventory file carries only `host`, an optional `name`, and login —
+never a serial. Writing a placeholder for a host this collector has
+*never* reached would have no stable key to correlate future collections
+against, and would create a new document every single run rather than
+one durable record. A host that *was* previously collected does have a
+real serial, but it lives only in its own already-stored document, which
+this collector has no path to read — providers deliberately have no
+database access; only `IngestService` does. Closing that gap means either
+teaching this provider to look servers up by BMC host (a new dependency
+this layer has never had) or teaching `IngestService` a second,
+address-based correlation path alongside `(vendor, serial_normalized)` —
+both real design changes, not implemented here pending direction.
