@@ -117,12 +117,15 @@ intent, not leaving verification off forever.
 **Partial runs stay honest.** A profile OME gives no iDRAC address for
 lands in `collection_errors`, so `tools.run_collector` reports PARTIAL
 rather than a complete success over a fleet it only half reached. **Since
-2026-09-10, one specific per-host failure is the exception**: a profile
-whose BMC simply did not answer is instead written as a `reachable=False`
+2026-09-10, a plain unreachable host is the exception**: a profile whose
+BMC simply did not answer is instead written as a `reachable=False`
 server document (see the dated update below) — the per-server record is
-now that failure's signal, not the exit code. Every other per-host
-failure (auth, TLS, budget, a guard-disabled credential) still lands in
-`collection_errors` exactly as before.
+now that failure's signal, not the exit code. **Widened the same day**:
+a rejected/disabled BMC credential no longer drives PARTIAL either,
+though it gets no Mongo record — see `docs/dell-collectors.md`'s
+"Collection flow". TLS failures, a per-host time budget exceeded, and
+any other unrecognized error still land in `collection_errors` and still
+drive PARTIAL.
 
 **Correlation is unchanged in mechanism, wrong in its field, and now
 fixed.** `IngestService` correlates on `(vendor, serial_normalized)`.

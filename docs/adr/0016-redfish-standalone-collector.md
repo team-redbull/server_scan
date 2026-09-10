@@ -634,13 +634,27 @@ At the operator's request, matching the same-day change to `OPENMANAGE`
 branch now logs at ERROR (was WARNING — with fewer collector-side signals
 than OpenManage gets, the log is the only one left) and writes its
 `collection_errors` entry with a new, exported marker,
-`UNREACHABLE_MARKER`. `tools.run_collector._is_benign_unreachable` reads
-it at the exit-code decision: a run whose only `collection_errors` are
-plain-unreachable hosts now exits 0, not 3 — every other failure (auth
-rejected, TLS, budget exceeded, a guard-disabled credential) is
-unaffected and still drives PARTIAL, since those can mean a problem
-across many hosts, not one dead server. The benign hosts are still
-printed in the run's own output, just not under a `PARTIAL` banner.
+`UNREACHABLE_MARKER`. `tools.run_collector._is_benign_collection_error`
+reads it at the exit-code decision: a run whose only `collection_errors`
+are plain-unreachable hosts now exits 0, not 3. The benign hosts are
+still printed in the run's own output, just not under a `PARTIAL` banner.
+
+**Widened the same day, still 2026-09-10, after a real OME run hit auth
+failures too**: a rejected BMC credential, a credential the auth guard
+disabled after repeated rejections, and the run-wide auth-failure budget
+being spent (`AUTH_REJECTED_MARKER`/`AUTH_CREDENTIAL_DISABLED_MARKER`/
+`AUTH_BUDGET_EXHAUSTED_MARKER`, all exported from this module) are now
+just as benign as a plain unreachable host — none of the four marks the
+pod failed. This reverses the original reasoning in the paragraph above,
+which treated auth failures as a fleet-wide signal worth failing loudly
+over; in practice, on a real fleet, they show up often enough (one bad
+password, one locked-out account) that PARTIAL had stopped meaning
+anything unusual, exactly the operator's complaint. **What's left as
+genuinely PARTIAL-worthy**: a TLS failure, a per-host time budget
+exceeded, and any error `RedfishError`/`ValueError` doesn't recognize —
+none of those are collector-side auth/reachability outcomes the same way,
+and none has an established real-world "happens on a normal Tuesday"
+rate the way the first four do.
 
 **Deliberately does NOT extend `OPENMANAGE`'s other half — writing a
 `reachable=False` server document.** OME can name a profile (service tag,

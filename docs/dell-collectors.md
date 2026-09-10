@@ -176,12 +176,20 @@ server's last-known hardware forward rather than blanking it, and sets
 recovery). The one thing that changes operationally: this specific
 failure no longer counts toward `collection_errors`, so the CronJob pod
 exits 0 instead of 3 for it — the per-server document is now the signal,
-not the exit code. Every *other* per-host failure (auth rejected, TLS,
-budget exceeded, a guard-disabled credential) is unaffected and still
-drives PARTIAL, since those can indicate a problem across many hosts, not
-just one dead server. See `docs/arc42.md` §6.1 and §12
-(`Server.reachable`), and `_is_unreachable`/`_unreachable_server` in
-`provider.py` for the exact matching rule.
+not the exit code. See `docs/arc42.md` §6.1 and §12 (`Server.reachable`),
+and `_is_unreachable`/`_unreachable_server` in `provider.py` for the
+exact matching rule.
+
+**Widened the same day: a rejected/disabled BMC credential is exit-0-safe
+too**, after a real OME run hit auth failures often enough that PARTIAL
+stopped meaning anything unusual — `tools.run_collector.
+_is_benign_collection_error` treats `AUTH_REJECTED_MARKER`/
+`AUTH_CREDENTIAL_DISABLED_MARKER`/`AUTH_BUDGET_EXHAUSTED_MARKER` (all
+`..redfish.provider` exports) the same as `UNREACHABLE_MARKER`. No Mongo
+placeholder is written for these — only the plain-unreachable case gets
+that treatment, since OME's identity is what makes it safe (see above).
+Still PARTIAL-worthy: TLS failures, a per-host time budget exceeded, and
+any other unrecognized error. See ADR-0016's second 2026-09-10 update.
 
 ## Profile template
 

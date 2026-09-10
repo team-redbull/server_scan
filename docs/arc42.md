@@ -273,12 +273,17 @@ outcome — which is why the guidance is to alert on staleness, never on
 Job status.
 
 **Two exceptions, both added 2026-09-10**: neither `OPENMANAGE` nor
-`REDFISH_STANDALONE` counts a single BMC's plain connection failure
-toward exit 3 any more — see `tools.run_collector._is_benign_unreachable`
-and `..redfish.provider.UNREACHABLE_MARKER`. Auth failures, TLS failures,
-a disabled credential and every other per-host miss are unaffected and
-still drive PARTIAL exactly as before; this is narrower than "any
-failure," on purpose.
+`REDFISH_STANDALONE` counts a single BMC's plain connection failure, nor
+a rejected/disabled BMC credential, toward exit 3 any more — see
+`tools.run_collector._is_benign_collection_error` and
+`..redfish.provider`'s exported markers (`UNREACHABLE_MARKER`,
+`AUTH_REJECTED_MARKER`, `AUTH_CREDENTIAL_DISABLED_MARKER`,
+`AUTH_BUDGET_EXHAUSTED_MARKER`). Widened to cover auth the same day, at
+the operator's request, after a real OME run hit rejected credentials
+often enough that PARTIAL had stopped meaning anything unusual. TLS
+failures, a per-host time budget exceeded, and any other error are
+unaffected and still drive PARTIAL; this is narrower than "any failure,"
+on purpose.
 
 They differ in what replaces the signal. `OPENMANAGE` gets the fuller
 treatment: OME already knows a server's identity before its BMC is ever

@@ -66,6 +66,9 @@ from app.infrastructure.providers.intersight.provider import IntersightProvider
 from app.infrastructure.providers.oneview.provider import OneViewProvider
 from app.infrastructure.providers.openmanage.provider import OpenManageProvider
 from app.infrastructure.providers.redfish.provider import (
+    AUTH_BUDGET_EXHAUSTED_MARKER,
+    AUTH_CREDENTIAL_DISABLED_MARKER,
+    AUTH_REJECTED_MARKER,
     UNREACHABLE_MARKER,
     RedfishStandaloneProvider,
 )
@@ -871,21 +874,31 @@ def _format_duration(seconds: float) -> str:
     return f"{minutes}m {remainder}s"
 
 
-def _is_benign_unreachable(message: str) -> bool:
-    """
-    Whether a `collection_errors` entry is a plain host-did-not-answer failure.
+# Neither an unreachable host nor a rejected credential marks the CronJob
+# pod failed any more — added 2026-09-10 after real OME runs.
+_BENIGN_COLLECTION_ERROR_MARKERS = (
+    UNREACHABLE_MARKER,
+    AUTH_REJECTED_MARKER,
+    AUTH_CREDENTIAL_DISABLED_MARKER,
+    AUTH_BUDGET_EXHAUSTED_MARKER,
+)
 
-    See `..redfish.provider`'s module docstring for why that alone no
-    longer makes a run PARTIAL.
+
+def _is_benign_collection_error(message: str) -> bool:
+    """
+    Whether a `collection_errors` entry must not make the run PARTIAL.
 
     Args:
         message (str): One entry from `ProviderServer.collection_errors`.
 
     Returns:
-        bool: `True` when `message` carries `UNREACHABLE_MARKER`, which
-            only a plain `RedfishUnreachableError` ever writes.
+        bool: `True` for a plain unreachable host or any of the three
+            credential-rejection shapes `_BENIGN_COLLECTION_ERROR_MARKERS`
+            names. `False` for everything else (TLS, budget-exceeded, a
+            generic `RedfishError`) — those can still signal a problem
+            worth a human looking at across many hosts.
     """
-    return UNREACHABLE_MARKER in message
+    return any(marker in message for marker in _BENIGN_COLLECTION_ERROR_MARKERS)
 
 
 async def _dry_run_one_manager(
@@ -1368,16 +1381,18 @@ async def _run(
                 seconds=run_duration,
                 took=_format_duration(run_duration),
             )
-            # A plain host-did-not-answer no longer makes the run PARTIAL —
-            # see `_is_benign_unreachable`.
-            hard_errors = [m for m in outcome.collection_errors if not _is_benign_unreachable(m)]
-            benign_unreachable = len(outcome.collection_errors) - len(hard_errors)
+            # A dead BMC or a rejected credential no longer makes the run
+            # PARTIAL — see `_is_benign_collection_error`.
+            hard_errors = [
+                m for m in outcome.collection_errors if not _is_benign_collection_error(m)
+            ]
+            benign_count = len(outcome.collection_errors) - len(hard_errors)
             if hard_errors or summary.errors:
                 # Exit 3, not 0: some servers were written, but this run did
-                # not see the whole fleet. Reported as success it is
-                # indistinguishable from a healthy run against a smaller
-                # estate, which is how a bad credential on one domain stays
-                # invisible for weeks.
+                # not see the whole fleet, for a reason worth a human
+                # looking at across many hosts (TLS, a per-host budget, an
+                # unrecognized error) — not just one dead BMC or credential,
+                # which `_is_benign_collection_error` already excluded above.
                 logger.error(
                     "collector.partial_run",
                     manager_id=manager.id,
@@ -1390,15 +1405,15 @@ async def _run(
                 if summary.errors:
                     print(f"  - {summary.errors} server(s) failed to ingest (see logs)")
                 return 3
-            if benign_unreachable:
+            if benign_count:
                 logger.warning(
-                    "collector.hosts_unreachable",
+                    "collector.hosts_skipped",
                     manager_id=manager.id,
-                    unreachable=benign_unreachable,
+                    skipped=benign_count,
                 )
                 print(
-                    f"manager={manager.name} completed — {benign_unreachable} "
-                    "host(s) unreachable (see logs), not counted as PARTIAL:"
+                    f"manager={manager.name} completed — {benign_count} "
+                    "host(s) unreachable or auth-rejected (see logs), not counted as PARTIAL:"
                 )
                 for message in outcome.collection_errors:
                     print(f"  - {message}")

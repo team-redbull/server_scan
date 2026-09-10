@@ -552,21 +552,31 @@ placeholder (`OpenManageProvider._unreachable_server`) instead of nothing.
 carries the server's last-known hardware forward, never blanks it — and
 sets `Server.reachable`/`unreachable_since`. This one failure mode no
 longer counts toward `collection_errors`, so the CronJob pod exits 0 for
-it; every other per-host failure (auth, TLS, budget, a guard-disabled
-credential) is unaffected and still drives PARTIAL. See
-`docs/dell-collectors.md`'s "Collection flow" and the `Server.reachable`
-entry below.
+it. See `docs/dell-collectors.md`'s "Collection flow" and the
+`Server.reachable` entry below.
 
 **`REDFISH_STANDALONE` shares the exit-code relaxation, not the Mongo
 document.** Same day, same shared `..redfish.provider._collect_host`: a
 plain connection failure now logs at ERROR (was WARNING) and is excluded
-from the PARTIAL decision via `UNREACHABLE_MARKER`/`tools.run_collector.
-_is_benign_unreachable`. It stops there — a standalone target's inventory
-file carries only a host and an optional name, never a serial, so there
-is no stable `(vendor, serial_normalized)` key to write a placeholder
-against without risking a new duplicate document on every unreachable
-run. See ADR-0016's dated update for exactly why, and what closing that
-gap would require.
+from the PARTIAL decision. It stops there — a standalone target's
+inventory file carries only a host and an optional name, never a serial,
+so there is no stable `(vendor, serial_normalized)` key to write a
+placeholder against without risking a new duplicate document on every
+unreachable run. See ADR-0016's dated update for exactly why, and what
+closing that gap would require.
+
+**Widened the same day to cover auth failures too, both collectors**,
+after a real OME run hit rejected credentials often enough that PARTIAL
+stopped meaning anything unusual: a rejected login, a credential the auth
+guard disabled after repeated rejections, and the run-wide auth-failure
+budget being spent are now all exit-0-safe, via
+`tools.run_collector._is_benign_collection_error` and three new exported
+markers on `..redfish.provider` (`AUTH_REJECTED_MARKER`/
+`AUTH_CREDENTIAL_DISABLED_MARKER`/`AUTH_BUDGET_EXHAUSTED_MARKER`). **Still
+PARTIAL-worthy**: TLS failures, a per-host time budget exceeded, and any
+other unrecognized error — none of those are auth/reachability outcomes
+in the same "happens on a normal Tuesday" sense as the four markers
+above. See ADR-0016's second 2026-09-10 update for the full reasoning.
 
 **`ONEVIEW` (HPE) deliberately does *not* copy that split, and this is
 the thing a future session is most likely to get wrong.** The estate runs

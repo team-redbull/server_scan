@@ -57,6 +57,13 @@ _PROVIDER_TYPE = ManagerType.REDFISH_STANDALONE.value
 # only — exported so a caller can recognize it without re-deriving it.
 UNREACHABLE_MARKER = ": unreachable — "
 
+# The three auth-failure shapes `_record_auth_failure`/`_collect_host`
+# write, exported for the same reason — see
+# `tools.run_collector._is_benign_collection_error`.
+AUTH_REJECTED_MARKER = ": login failed for credential "
+AUTH_CREDENTIAL_DISABLED_MARKER = ": skipped, credential "
+AUTH_BUDGET_EXHAUSTED_MARKER = ": skipped, the run's authentication failure budget was spent"
+
 
 @dataclass(slots=True)
 class _AuthGuard:
@@ -349,14 +356,12 @@ class RedfishStandaloneProvider(ServerInventoryProvider):
         async with semaphore:
             credential = target.credential.name
             if self._guard.exhausted():
-                self._record_error(
-                    f"{target.host}: skipped, the run's authentication failure budget was spent"
-                )
+                self._record_error(f"{target.host}{AUTH_BUDGET_EXHAUSTED_MARKER}")
                 return []
             if self._guard.is_open(credential):
                 self._record_error(
-                    f"{target.host}: skipped, credential {credential!r} was disabled after "
-                    f"{self._guard.threshold} rejections"
+                    f"{target.host}{AUTH_CREDENTIAL_DISABLED_MARKER}{credential!r} was disabled "
+                    f"after {self._guard.threshold} rejections"
                 )
                 return []
 
@@ -414,9 +419,7 @@ class RedfishStandaloneProvider(ServerInventoryProvider):
             threshold=self._guard.threshold,
             run_failures=self._guard.total_failures,
         )
-        self._record_error(
-            f"{target.host}: login failed for credential {credential!r} — not retried"
-        )
+        self._record_error(f"{target.host}{AUTH_REJECTED_MARKER}{credential!r} — not retried")
         if self._guard.is_open(credential):
             logger.error(
                 "redfish.credential_circuit_open",
