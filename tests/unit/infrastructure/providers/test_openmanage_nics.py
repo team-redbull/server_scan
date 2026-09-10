@@ -73,12 +73,12 @@ class TestPartitionFiltering:
         )
         assert [nic.location for nic in dell_port_nics(nics)] == ["1/1/1", "2/4/1"]
 
-    def test_ports_keep_the_order_the_bmc_reported(self) -> None:
-        """Nothing here sorts. A reordering would make two runs of the same
-        unchanged server produce different documents.
+    def test_ports_sort_by_controller_port_partition_not_bmc_order(self) -> None:
+        """Changed 2026-09-10: iDRAC's own report order is not documented
+        as stable, so the FQDD's own numbers are the sort key instead.
         """
         nics = (_nic("NIC.Slot.3-2-1"), _nic("NIC.Integrated.1-1-1"))
-        assert [nic.location for nic in dell_port_nics(nics)] == ["3/2/1", "1/1/1"]
+        assert [nic.location for nic in dell_port_nics(nics)] == ["1/1/1", "3/2/1"]
 
 
 class TestWhatIsNeverDropped:
@@ -86,13 +86,14 @@ class TestWhatIsNeverDropped:
 
     def test_an_unparseable_identifier_is_kept_as_is(self) -> None:
         """A BMC naming its NICs some other way must not lose them. This is
-        the difference between a filter and a data-loss bug.
+        the difference between a filter and a data-loss bug. Appended
+        last: it has no controller/port/partition to sort by.
         """
         nics = (_nic("SomeOtherScheme"), _nic("NIC.Integrated.1-1-1"))
         kept = dell_port_nics(nics)
         assert len(kept) == 2
-        assert kept[0].location == "SomeOtherScheme"
-        assert kept[0].name == "System Ethernet Interface"
+        assert kept[-1].location == "SomeOtherScheme"
+        assert kept[-1].name == "System Ethernet Interface"
 
     def test_a_missing_identifier_is_kept_as_is(self) -> None:
         """`location` is None whenever the BMC reported no `Id`."""

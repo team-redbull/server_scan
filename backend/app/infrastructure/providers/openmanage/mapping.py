@@ -121,9 +121,17 @@ def dell_port_nics(nics: tuple[ProviderNic, ...]) -> tuple[ProviderNic, ...]:
     interface with a real MAC rather than a synthesized summary.
 
     An interface whose identifier is not a recognizable FQDD is kept
-    untouched. A BMC that names its NICs some other way must not have them
-    silently dropped — this filter can only ever remove something it
-    positively identified as a non-first partition.
+    untouched, appended after every FQDD-named one. A BMC that names its
+    NICs some other way must not have them silently dropped — this filter
+    can only ever remove something it positively identified as a non-first
+    partition.
+
+    **Sorted by controller/port/partition, not by BMC report order**
+    (changed 2026-09-10, at the operator's request): iDRAC's own
+    `EthernetInterfaces` order is not documented as stable, so sorting on
+    the FQDD's own numbers is what actually makes repeated collections of
+    an unchanged server agree, and it is what an operator expects —
+    `NIC.Integrated.1-1-1` before `1-2-1` before `1-3-1`, never by MAC.
 
     Args:
         nics (tuple[ProviderNic, ...]): Every interface the BMC reported,
@@ -133,29 +141,34 @@ def dell_port_nics(nics: tuple[ProviderNic, ...]) -> tuple[ProviderNic, ...]:
     Returns:
         tuple[ProviderNic, ...]: One entry per physical port, each named by
             its FQDD and located as `controller/port/partition` (`1/1/1`),
-            plus any interface whose identifier could not be parsed, all in
-            the order the BMC reported them.
+            sorted by that triple, plus any interface whose identifier
+            could not be parsed, appended last in the order reported.
     """
-    kept: list[ProviderNic] = []
+    kept: list[tuple[tuple[int, int, int], ProviderNic]] = []
+    unparsed: list[ProviderNic] = []
     for nic in nics:
         match = _FQDD_RE.match(nic.location or "")
         if match is None:
-            kept.append(nic)
+            unparsed.append(nic)
             continue
         controller, port, partition = match.groups()
         if int(partition) != 1:
             continue
         kept.append(
-            replace(
-                nic,
-                # The FQDD, not iDRAC's "System Ethernet Interface", which
-                # is the same string on every interface and so names none
-                # of them.
-                name=nic.location or nic.name,
-                location=f"{controller}/{port}/{partition}",
+            (
+                (int(controller), int(port), int(partition)),
+                replace(
+                    nic,
+                    # The FQDD, not iDRAC's "System Ethernet Interface",
+                    # which is the same string on every interface and so
+                    # names none of them.
+                    name=nic.location or nic.name,
+                    location=f"{controller}/{port}/{partition}",
+                ),
             )
         )
-    return tuple(kept)
+    kept.sort(key=lambda entry: entry[0])
+    return tuple(nic for _, nic in kept) + tuple(unparsed)
 
 
 @dataclass(frozen=True, slots=True)
