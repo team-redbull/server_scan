@@ -326,9 +326,9 @@ OpenShift namespace
 ├── Deployment  backend API (N replicas)  ── Service ── Route
 │      envFrom: <release>-api-config (ConfigMap)   ← INVENTORY_SITES lives here
 │      env:     Mongo/Redis URIs from a Secret
-├── CronJob  collector-ucs-central          (hourly, opt-in)
-├── CronJob  collector-intersight           (hourly, opt-in)
-├── CronJob  collector-oneview              (4-hourly, opt-in)
+├── CronJob  collector-ucs-central          (6-hourly, opt-in)
+├── CronJob  collector-intersight           (6-hourly, opt-in)
+├── CronJob  collector-oneview              (6-hourly, opt-in)
 ├── CronJob  collector-openmanage           (6-hourly, opt-in)
 ├── CronJob  collector-redfish-standalone   (6-hourly, opt-in, ships suspended)
 │      all five: envFrom the SAME api-config ConfigMap + the collector Secret

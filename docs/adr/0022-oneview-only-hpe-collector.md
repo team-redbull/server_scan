@@ -541,10 +541,12 @@ pending its own decision.
   does except `UCS_MANAGER` — whose `NotImplementedError` is a *different*
   message saying the collector exists and is reached through
   `UCS_CENTRAL`, not that it is unbuilt.
-- A Helm CronJob ships disabled, on a 4-hour cadence — between Cisco's
-  hourly and the BMC-touching collectors' 6-hourly, because this is three
-  bulk calls per appliance rather than thousands of requests against
-  embedded hardware.
+- A Helm CronJob ships disabled. Originally on a 4-hour cadence — between
+  Cisco's hourly and the BMC-touching collectors' 6-hourly, because this
+  is three bulk calls per appliance rather than thousands of requests
+  against embedded hardware — **changed to 6 hours 2026-09-10**, at the
+  operator's request, matching a uniform cadence across every collector;
+  see `deploy/README.md`.
 - `INVENTORY_ONEVIEW_IP` is one endpoint like every other vendor's, so
   nothing about `EnvConnectionResolver`, the collector Secret or the
   `Manager` projection is special-cased for HPE.

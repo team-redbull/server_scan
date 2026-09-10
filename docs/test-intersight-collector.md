@@ -284,10 +284,11 @@ Keep the PEM out of a committed values file —
 `tests/unit/test_no_committed_secrets.py` fails the build if one lands
 there.
 
-The default schedule is hourly, which is affordable here in a way it is
-not for the Redfish collector: one run costs on the order of a hundred
-requests regardless of fleet size, because every sub-resource is listed
-once for the whole estate and joined in memory.
+The default schedule is every 6 hours, matching every other collector
+(2026-09-10, at the operator's request — this used to be hourly, and the
+wire cost would still support that: one run costs on the order of a
+hundred requests regardless of fleet size, because every sub-resource is
+listed once for the whole estate and joined in memory).
 
 **Do not add `UCSM` to `managementModes`** unless your UCS domains are
 genuinely not registered with UCS Central. Those servers are exactly the

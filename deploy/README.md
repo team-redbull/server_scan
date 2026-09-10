@@ -241,9 +241,11 @@ its Pod) is deleted that many seconds after it completes, success or
 failure. This is independent of, and in addition to, the count-based
 `successfulJobsHistoryLimit: 3`/`failedJobsHistoryLimit: 5` every
 CronJob template also sets — whichever cleanup condition is met first
-wins. 8 hours keeps at most two finished Jobs visible at once for the
-slowest collector here (every 6 hours); an hourly collector is pruned by
-the count limits well before 8 hours in practice. Set it to `0` to
+wins. Every collector here defaults to the same `"0 */6 * * *"` schedule
+(2026-09-10, at the operator's request — a uniform cadence across the
+whole fleet), so 8 hours keeps at most two finished Jobs visible at once
+per collector: the just-finished one and the previous one, not yet
+TTL'd. Set it to `0` to
 disable and rely on the count limits alone.
 
 `collectors.ucsManager` is the one carve-out and has no `ip` at all: the

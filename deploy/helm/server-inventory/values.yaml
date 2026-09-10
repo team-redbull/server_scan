@@ -401,10 +401,12 @@ collectors:
     # are independent, so this bounds wall-clock time without bounding
     # what gets collected.
     domainConcurrency: 4
-    # Hourly. One run covers the whole fleet, opening a session against
-    # every collected domain, so it is the more expensive job on both
-    # sides of the wire.
-    schedule: "0 * * * *"
+    # Every 6 hours, matching every other collector here — a shared,
+    # uniform cadence across the whole fleet, at the operator's request
+    # (2026-09-10). Nothing here needs sub-6h freshness on its own; this
+    # opens a session against every collected domain, so it is also the
+    # more expensive job on both sides of the wire.
+    schedule: "0 */6 * * *"
     backoffLimit: 1
     # Generous: one run covers every domain, several at a time.
     activeDeadlineSeconds: 1800
@@ -603,10 +605,12 @@ collectors:
     # Appliances ship a self-signed certificate in an air-gapped estate.
     verifyTls: false
 
-    # Every 4 hours. Between Cisco's hourly cadence and the BMC-touching
-    # collectors' 6-hourly one: this is three bulk calls per appliance,
-    # not thousands of requests against embedded hardware.
-    schedule: "0 */4 * * *"
+    # Every 6 hours, matching every other collector here — a shared,
+    # uniform cadence across the whole fleet, at the operator's request
+    # (2026-09-10; this used to be 4 hours). Three bulk calls per
+    # appliance, so the wire cost would support more often than this if
+    # a future need for tighter freshness ever outweighs the uniformity.
+    schedule: "0 */6 * * *"
     backoffLimit: 1
     activeDeadlineSeconds: 3600
     resources:
@@ -652,9 +656,11 @@ collectors:
     # each), not per appliance.
     bmcConcurrency: 16
 
-    # Every 6 hours, matching redfishStandalone. Deliberately NOT the
-    # Cisco collector's hourly cadence: every sweep is thousands of
-    # requests against embedded hardware that degrades when polled.
+    # Every 6 hours, matching redfishStandalone and every other collector
+    # here — a shared, uniform cadence across the whole fleet, at the
+    # operator's request (2026-09-10). Every sweep is thousands of
+    # requests against embedded hardware that degrades when polled, so
+    # this one specifically should not go tighter even if others do.
     schedule: "0 */6 * * *"
     backoffLimit: 1
     # Generous: one run sweeps the whole Dell estate a batch of BMCs at a
@@ -730,10 +736,13 @@ collectors:
     # reaching the endpoint at all.
     readTimeoutSeconds: 60
 
-    # Hourly. One run covers the whole tenant in a flat number of
-    # requests, so this is cheap on both sides of the wire — unlike the
-    # per-BMC Redfish sweep, which must not be scheduled this often.
-    schedule: "0 * * * *"
+    # Every 6 hours, matching every other collector here — a shared,
+    # uniform cadence across the whole fleet, at the operator's request
+    # (2026-09-10; this used to be hourly). One run covers the whole
+    # tenant in a flat number of requests, so the wire cost would support
+    # more often than this — unlike the per-BMC Redfish sweep, which
+    # genuinely must not be scheduled tighter.
+    schedule: "0 */6 * * *"
     backoffLimit: 1
 
     # In-process budget, so a throttled run ends with a summary naming
