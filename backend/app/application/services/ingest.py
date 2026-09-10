@@ -833,6 +833,20 @@ class IngestService:
             ps.profile_dn, self._sites
         )
 
+        # `last_seen_at` means "last time this server's own endpoint
+        # answered" — an unreachable run must not bump it, or a dead
+        # server would look freshly seen. See `Server.reachable`.
+        if ps.reachable:
+            last_seen_at = now
+            unreachable_since = None
+        else:
+            last_seen_at = existing.last_seen_at if existing is not None else None
+            unreachable_since = (
+                existing.unreachable_since
+                if existing is not None and existing.unreachable_since is not None
+                else now
+            )
+
         server = Server(
             _id=server_id,
             name=ps.name,
@@ -848,7 +862,9 @@ class IngestService:
             manager_id=ps.manager_id,
             tags=list(ps.tags),
             source_provider=provider_type,
-            last_seen_at=now,
+            last_seen_at=last_seen_at,
+            reachable=ps.reachable,
+            unreachable_since=unreachable_since,
             unread_fields=unread,
             revision=revision,
             created_at=created_at,

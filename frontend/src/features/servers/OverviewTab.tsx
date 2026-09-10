@@ -130,6 +130,17 @@ export function OverviewTab({
           </div>
         }
       />
+      {!server.reachable && (
+        <Field
+          label="Collection"
+          value={
+            <Badge tone="warning">
+              Unreachable
+              {server.unreachable_since ? ` since ${formatTimestamp(server.unreachable_since)}` : ""}
+            </Badge>
+          }
+        />
+      )}
       <Field
         label="Last seen"
         value={server.last_seen_at ? formatTimestamp(server.last_seen_at) : "—"}

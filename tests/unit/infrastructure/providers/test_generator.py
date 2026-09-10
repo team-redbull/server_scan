@@ -109,8 +109,11 @@ def test_serials_are_unique_per_vendor() -> None:
 
 
 def test_system_uuids_are_unique() -> None:
+    """`None` (an unreachable server never had its BMC's UUID read) is
+    excluded — it means "not reported", not a duplicate empty value.
+    """
     servers = list(generate_servers(seed=42, count=500))
-    uuids = [s.system_uuid for s in servers]
+    uuids = [s.system_uuid for s in servers if s.system_uuid is not None]
     assert len(uuids) == len(set(uuids))
 
 
@@ -523,6 +526,30 @@ def test_an_ilo4_server_reports_identity_with_unread_hardware() -> None:
     ]
     assert gen11
     assert any(s.storage_drives for s in gen11)
+
+
+def test_some_dell_servers_are_seeded_unreachable() -> None:
+    """`Server.reachable=False` (2026-09-10) only shows up for real on an
+    `OPENMANAGE` run, so seeded data needs its own example — see
+    `OpenManageProvider._unreachable_server`.
+    """
+    servers = list(generate_servers(seed=42, count=1000))
+    unreachable = [s for s in servers if not s.reachable]
+    assert unreachable
+    assert all(provider_type_for(s) == ManagerType.OPENMANAGE.value for s in unreachable)
+    for s in unreachable:
+        assert s.name and s.serial
+        assert s.cpu_sockets is None
+        assert s.storage_drives is None
+        assert s.psus is None
+
+    # Not every Dell server — most of the fleet stays reachable, or every
+    # other Dell-specific assertion in this file would need to account
+    # for it.
+    reachable_dell = [
+        s for s in servers if provider_type_for(s) == ManagerType.OPENMANAGE.value and s.reachable
+    ]
+    assert reachable_dell
 
 
 def test_installation_types_are_a_visible_four_way_split() -> None:

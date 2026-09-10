@@ -119,7 +119,19 @@ class Server(BaseModel):
     search_tokens: list[str] = Field(default_factory=list)
 
     source_provider: str | None = None
+    # The last time this server's own management endpoint actually
+    # answered — not merely the last time ingest ran for it, which a
+    # `reachable=False` run also does. See `unreachable_since`.
     last_seen_at: datetime | None = None
+
+    # False only when a provider knows this server's identity but could not
+    # reach it this run (`ProviderServer.reachable`). Hardware/network
+    # fields carry forward unaffected, same as any other unread field.
+    reachable: bool = True
+    # When `reachable` first went False; `None` while reachable. Kept
+    # stable across repeated unreachable runs rather than reset to `now`
+    # each time, so the UI can show how long a server has been down.
+    unreachable_since: datetime | None = None
 
     # Dotted API paths (`hardware.storage.drives`) the most recent
     # collection could not read. Top-level, beside the other two

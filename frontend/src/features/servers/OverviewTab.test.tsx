@@ -57,6 +57,8 @@ function makeServer(overrides: Partial<ServerDetail> = {}): ServerDetail {
     manager_id: "mgr_1",
     source_provider: "UCS_CENTRAL",
     last_seen_at: "2026-08-13T10:00:00Z",
+    reachable: true,
+    unreachable_since: null,
     updated_at: "2026-08-13T10:00:00Z",
     ...overrides,
   };
@@ -235,5 +237,34 @@ describe("OverviewTab profile template", () => {
     render(<OverviewTab server={server} />);
 
     expect(screen.queryByText(/profile template|deployment template/i)).not.toBeInTheDocument();
+  });
+});
+
+describe("OverviewTab collection status", () => {
+  it("shows nothing extra for a reachable server", () => {
+    const server = makeServer({ reachable: true, unreachable_since: null });
+
+    render(<OverviewTab server={server} />);
+
+    expect(screen.queryByText("Unreachable", { exact: false })).not.toBeInTheDocument();
+  });
+
+  it("flags an unreachable server with how long it has been down", () => {
+    const server = makeServer({
+      reachable: false,
+      unreachable_since: "2026-09-09T10:00:00Z",
+    });
+
+    render(<OverviewTab server={server} />);
+
+    expect(screen.getByText(/Unreachable since/)).toBeInTheDocument();
+  });
+
+  it("still flags an unreachable server with no known start time", () => {
+    const server = makeServer({ reachable: false, unreachable_since: null });
+
+    render(<OverviewTab server={server} />);
+
+    expect(screen.getByText("Unreachable")).toBeInTheDocument();
   });
 });

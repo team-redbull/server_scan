@@ -80,6 +80,8 @@ class ServerSummary(BaseModel):
     openshift: OpenShiftLifecycle
     connectivity: ConnectivitySummary
     last_seen_at: datetime | None
+    reachable: bool
+    unreachable_since: datetime | None
     updated_at: datetime
 
     @classmethod
@@ -107,6 +109,8 @@ class ServerSummary(BaseModel):
             openshift=server.openshift,
             connectivity=ConnectivitySummary(facts=server.connectivity.facts),
             last_seen_at=server.last_seen_at,
+            reachable=server.reachable,
+            unreachable_since=server.unreachable_since,
             updated_at=server.updated_at,
         )
 
@@ -169,6 +173,8 @@ class ServerDetail(BaseModel):
     # keeps only what a collector actually read.
     nic_os_names: dict[str, str] = Field(default_factory=dict)
     last_seen_at: datetime | None
+    reachable: bool
+    unreachable_since: datetime | None
     revision: int
     created_at: datetime
     updated_at: datetime
@@ -215,6 +221,8 @@ class ServerDetail(BaseModel):
                 if (os_name := nic_names.os_name_for(interface.name)) is not None
             },
             last_seen_at=server.last_seen_at,
+            reachable=server.reachable,
+            unreachable_since=server.unreachable_since,
             revision=server.revision,
             created_at=server.created_at,
             updated_at=server.updated_at,

@@ -272,6 +272,16 @@ invisible for weeks. For a fleet of independent BMCs it is the *normal*
 outcome — which is why the guidance is to alert on staleness, never on
 Job status.
 
+**One exception, added 2026-09-10**: `OPENMANAGE` does not count a single
+BMC's plain connection failure toward exit 3 any more. Unlike every other
+per-host failure, OME already knows that server's identity before its BMC
+is ever contacted, so the collector writes it as a real,
+`reachable=False` document (see `Server.reachable` in §12) instead of
+just naming it in a log line — the CronJob's own exit code is no longer
+the only place that fact lives. Auth failures, TLS failures, a disabled
+credential and every other vendor's per-host misses are unaffected and
+still drive PARTIAL exactly as before.
+
 ### 6.2 A list request
 
 ```
@@ -508,6 +518,7 @@ go stale — treat its date as load-bearing.
 | **Service profile** | UCS's logical server definition. **The source of a UCS server's real name** — `computeBlade.name` is empty in practice. |
 | **IMM** | Intersight Managed Mode. Servers Intersight manages directly, as opposed to `UCSM`-mode servers that UCS Central owns. |
 | **PARTIAL run** | Exit code 3: some servers were written, but the run did not see the whole fleet. |
+| **`Server.reachable`** | `False` when a provider knew a server's identity but could not reach its management endpoint this run. Hardware/network fields carry forward unaffected — see `unreachable_since` and `docs/dell-collectors.md`'s "Collection flow", 2026-09-10 update. `OPENMANAGE` is the only collector that populates it so far. |
 | **UCSPE** | Cisco's free UCS Platform Emulator — the test target that validated the UCS collector. |
 | **PVA** | Intersight Private Virtual Appliance: on-prem Intersight, the only form reachable from an air-gapped site. |
 | **Membership job** | A scheduled process that runs *inside* an OpenShift cluster and reports which servers that cluster is using. Two sources, `nodes` and `agents`. Not a collector: it reads no vendor and writes only `Server.openshift` (ADR-0024). |

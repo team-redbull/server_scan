@@ -538,6 +538,20 @@ key (unaffected — both sides move together under either naming mode) and
 the address fallback when a device has no `DeviceManagement` entry. See
 ADR-0020's dated update and `docs/dell-collectors.md`'s "Collection flow".
 
+**A genuinely unreachable iDRAC is now a visible server document, not
+just a PARTIAL exit code — `OPENMANAGE` only, so far.** Same 2026-09-10
+incident: OME already knows a profile's identity before its BMC is ever
+contacted, so a plain connection failure now yields a `reachable=False`
+placeholder (`OpenManageProvider._unreachable_server`) instead of nothing.
+`IngestService` treats `reachable=False` like any other unread field —
+carries the server's last-known hardware forward, never blanks it — and
+sets `Server.reachable`/`unreachable_since`. This one failure mode no
+longer counts toward `collection_errors`, so the CronJob pod exits 0 for
+it; every other per-host failure (auth, TLS, budget, a guard-disabled
+credential) is unaffected and still drives PARTIAL. See
+`docs/dell-collectors.md`'s "Collection flow" and the `Server.reachable`
+entry below.
+
 **`ONEVIEW` (HPE) deliberately does *not* copy that split, and this is
 the thing a future session is most likely to get wrong.** The estate runs
 iLO 4, 5 and 6 in the same racks, and iLO 4 predates useful Redfish
@@ -794,6 +808,17 @@ non-obvious enough to bite you.
   forward is not enough on a *first* ingest: `Hardware` has no "unknown"
   state, so an iLO-4 server that reported nothing stored `0` drives and
   rendered as a confident, real zero.
+- **`Server.reachable`/`unreachable_since` are a coarser, whole-server
+  version of the same idea, added 2026-09-10 for `OPENMANAGE` only.**
+  `ProviderServer.reachable=False` means "I know this server's identity
+  but could not reach it at all this run" — every optional field on it is
+  `None`, so `IngestService` carries the last-known hardware forward
+  exactly as above; it never blanks a server just because one collection
+  attempt failed. `unreachable_since` is set once on the first miss, held
+  stable across repeated misses, and cleared on recovery. Unlike other
+  per-host failures, this one does not count toward `collection_errors`
+  (see `docs/dell-collectors.md`'s "Collection flow"), so a fleet with a
+  few dead BMCs no longer fails its CronJob pod over them.
 - **GPU VRAM comes from a built-in catalog wherever the vendor API does
   not report it — which is everywhere except Redfish.** Corrected
   2026-09-05: this entry used to say flatly that no management plane

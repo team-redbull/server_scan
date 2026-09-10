@@ -42,6 +42,8 @@ function makeServer(overrides: Partial<ServerSummary> = {}): ServerSummary {
       },
     },
     last_seen_at: "2026-08-12T10:00:00Z",
+    reachable: true,
+    unreachable_since: null,
     updated_at: "2026-08-12T10:00:00Z",
     ...overrides,
   };

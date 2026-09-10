@@ -97,6 +97,11 @@ class ProviderServer:
     serial: str | None = None
     system_uuid: str | None = None
 
+    # True unless a provider knows a server's identity but could not reach
+    # it this run — see `Server.reachable`. Every field below stays `None`
+    # on such a record, so nothing is blanked.
+    reachable: bool = True
+
     # `None` means "this collector could not read it on this run", and is
     # NOT the same as an empty tuple / zero, which mean "read, and there
     # are none". `IngestService` carries the previous value forward for a

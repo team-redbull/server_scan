@@ -160,6 +160,29 @@ same policy and so still agree with each other). **Unconfirmed**: whether
 can hold more than one entry such that `[0]` is not always the right one
 — see the research doc's "Open questions" for what would settle both.
 
+**Added the same day: a genuinely unreachable iDRAC is now a visible,
+`reachable=False` server document, not just a log line.** Even after the
+fix above, some fraction of a fleet is legitimately down at any given
+moment — a plain connection failure (`RedfishUnreachableError`) is no
+longer treated as a run-wide problem. `OpenManageProvider._list_servers`
+tracks which of OME's known profiles the Redfish pass actually reached;
+for each one that only failed with a plain connection error, it yields a
+placeholder built from OME's own identity (name, service tag, model,
+template — everything OME knows without ever touching the BMC) with
+`reachable=False` and every hardware field `None`. `IngestService` then
+does exactly what it already does for any other unread field: carries the
+server's last-known hardware forward rather than blanking it, and sets
+`Server.unreachable_since` (kept stable across repeated misses, cleared on
+recovery). The one thing that changes operationally: this specific
+failure no longer counts toward `collection_errors`, so the CronJob pod
+exits 0 instead of 3 for it — the per-server document is now the signal,
+not the exit code. Every *other* per-host failure (auth rejected, TLS,
+budget exceeded, a guard-disabled credential) is unaffected and still
+drives PARTIAL, since those can indicate a problem across many hosts, not
+just one dead server. See `docs/arc42.md` §6.1 and §12
+(`Server.reachable`), and `_is_unreachable`/`_unreachable_server` in
+`provider.py` for the exact matching rule.
+
 ## Profile template
 
 An OME server profile carries the deployment template it was created from

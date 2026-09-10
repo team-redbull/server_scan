@@ -124,6 +124,8 @@ async def test_list_returns_expected_items(
         "openshift",
         "connectivity",
         "last_seen_at",
+        "reachable",
+        "unreachable_since",
         "updated_at",
     }
 

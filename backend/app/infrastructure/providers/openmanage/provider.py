@@ -34,7 +34,7 @@ from typing import Any
 
 import structlog
 
-from app.domain.enums import ManagerType
+from app.domain.enums import ManagerType, Vendor
 from app.domain.models.manager import Manager
 from app.domain.ports.credentials import ManagerConnection
 from app.domain.ports.provider import ProviderServer, ServerInventoryProvider
@@ -50,6 +50,22 @@ from app.infrastructure.providers.redfish.targets import RedfishCredential, Redf
 logger = structlog.get_logger(__name__)
 
 _PROVIDER_TYPE = ManagerType.OPENMANAGE.value
+
+
+def _is_unreachable(message: str, host: str) -> bool:
+    """
+    Whether a `collection_errors` entry is `host`'s plain connection failure.
+
+    See docs/dell-collectors.md's "Collection flow", 2026-09-10 update.
+
+    Args:
+        message (str): One entry from `redfish.collection_errors`.
+        host (str): A candidate host to test the message against.
+
+    Returns:
+        bool: `True` when `message` is exactly that host's unreachable error.
+    """
+    return message.startswith(f"{host}: unreachable — ")
 
 
 class OpenManageProvider(ServerInventoryProvider):
@@ -171,12 +187,14 @@ class OpenManageProvider(ServerInventoryProvider):
 
         Yields:
             ProviderServer: One Dell server: hardware as its iDRAC reports
-                it, identity as OME does.
+                it, identity as OME does. A profile OME knows whose iDRAC
+                did not answer this run still yields, `reachable=False`
+                and every hardware field `None` — see `_unreachable_server`.
 
         Raises:
             OmeConnectionError: On login failure or a failure of either bulk
-                enumeration call. A single unreachable BMC is recorded in
-                `collection_errors` and does not abort the run.
+                enumeration call. A single unreachable BMC is recorded as a
+                `reachable=False` server instead and does not abort the run.
         """
         identities = await self._discover()
         if not identities:
@@ -191,20 +209,38 @@ class OpenManageProvider(ServerInventoryProvider):
         )
 
         redfish = self._redfish_provider_factory(targets)
+        reached: set[str] = set()
+        unreachable: set[str] = set()
         try:
             async with contextlib.aclosing(redfish.collect()) as servers:
                 async for server in servers:
+                    parsed = parse_bmc_address(server.bmc_address_raw)
+                    if parsed is not None and parsed.host is not None:
+                        reached.add(parsed.host)
                     yield self._merged(server, identities)
         finally:
             # In a `finally`, and behind `aclosing`: a consumer that stops
             # early (`--limit`, a killed run) throws `GeneratorExit` in at
             # the `yield` above, which used to skip this merge entirely —
-            # every per-host Redfish failure silently dropped, and the
-            # nested Redfish pass's own tasks/sessions left to the
-            # asyncgen finalizer instead of closing promptly. Same shape
-            # as `..ucs_central.provider.UcsCentralProvider._collect_domain`.
+            # see `..ucs_central.provider.UcsCentralProvider._collect_domain`
+            # for the same shape. A plain connection failure is set aside as
+            # `unreachable` (the loop below); every other failure keeps
+            # today's behaviour — still counted, still PARTIAL.
             for message in redfish.collection_errors:
-                self._record_error(message)
+                host = next(
+                    (h for h in identities if h not in reached and _is_unreachable(message, h)),
+                    None,
+                )
+                if host is not None:
+                    unreachable.add(host)
+                else:
+                    self._record_error(message)
+
+        # Only reached on normal completion of the loop above — a consumer
+        # that stopped early never asked to see the rest of the fleet, so
+        # nothing here is reported as unreachable on its behalf.
+        for host in unreachable:
+            yield self._unreachable_server(identities[host])
 
     async def _discover(self) -> dict[str, OmeIdentity]:
         """
@@ -305,6 +341,33 @@ class OpenManageProvider(ServerInventoryProvider):
             verify_tls_reason=self._bmc_verify_tls_reason,
             ca_bundle=self._bmc_ca_bundle,
             name=identity.name,
+        )
+
+    def _unreachable_server(self, identity: OmeIdentity) -> ProviderServer:
+        """
+        Build the placeholder for a profile OME knows but whose iDRAC did not answer.
+
+        See docs/dell-collectors.md's "Collection flow" update.
+
+        Args:
+            identity (OmeIdentity): The unreachable profile's OME identity.
+
+        Returns:
+            ProviderServer: `reachable=False`, every hardware/network field
+                `None`. `IngestService` carries the rest forward.
+        """
+        logger.error("ome.server_unreachable", host=identity.idrac_ip, name=identity.name)
+        return ProviderServer(
+            external_id=f"ome-unreachable:{identity.idrac_ip}",
+            vendor=Vendor.DELL.value,
+            name=identity.name,
+            model=identity.model,
+            serial=identity.serial,
+            bmc_address_raw=identity.bmc_address_raw,
+            manager_id=self._manager.id,
+            profile_template_name=identity.profile_template_name,
+            profile_template_external_id=identity.profile_template_external_id,
+            reachable=False,
         )
 
     def _merged(self, server: ProviderServer, by_host: dict[str, OmeIdentity]) -> ProviderServer:

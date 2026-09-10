@@ -458,3 +458,60 @@ class TestPartialRuns:
                 break  # stop before the Redfish pass's own generator exhausts
 
         assert provider.collection_errors == ("10.0.0.3: unreachable",)
+
+
+class TestUnreachableHosts:
+    """A profile OME knows whose iDRAC did not answer this run."""
+
+    async def test_a_plain_connection_failure_becomes_a_placeholder(self) -> None:
+        """The case this collector treats as "the server is down", not a
+        run-wide problem — see docs/dell-collectors.md's "Collection
+        flow", 2026-09-10 update.
+        """
+        provider, recorded = _provider(
+            profiles=[
+                _profile("ocp4-nyc-prod-worker-03", "10.0.0.1"),
+                _profile("ocp4-nyc-prod-worker-09", "10.0.0.9"),
+            ],
+            devices=[
+                _device("10.0.0.1", service_tag="7XKD9P3"),
+                _device("10.0.0.9", service_tag="7XKD9P9"),
+            ],
+            servers=[_collected("10.0.0.1")],
+        )
+        servers = []
+        async for server in provider.collect():
+            recorded["redfish"].collection_errors = ("10.0.0.9: unreachable — Connection refused",)
+            servers.append(server)
+
+        assert provider.collection_errors == ()
+        [placeholder] = [s for s in servers if s.external_id == "ome-unreachable:10.0.0.9"]
+        assert placeholder.reachable is False
+        assert placeholder.serial == "7XKD9P9"
+        assert placeholder.name == "ocp4-nyc-prod-worker-09"
+
+    async def test_every_other_failure_still_counts_toward_partial(self) -> None:
+        """Auth, TLS, budget and a disabled credential are not "the server
+        is down" — they may affect many hosts, so they keep today's
+        behaviour: no placeholder, still PARTIAL.
+        """
+        provider, recorded = _provider(
+            profiles=[
+                _profile("ocp4-nyc-prod-worker-03", "10.0.0.1"),
+                _profile("ocp4-nyc-prod-worker-09", "10.0.0.9"),
+            ],
+            devices=[
+                _device("10.0.0.1", service_tag="7XKD9P3"),
+                _device("10.0.0.9", service_tag="7XKD9P9"),
+            ],
+            servers=[_collected("10.0.0.1")],
+        )
+        servers = []
+        async for server in provider.collect():
+            recorded["redfish"].collection_errors = (
+                "10.0.0.9: TLS verification failed — bad cert",
+            )
+            servers.append(server)
+
+        assert provider.collection_errors == ("10.0.0.9: TLS verification failed — bad cert",)
+        assert all(s.external_id != "ome-unreachable:10.0.0.9" for s in servers)

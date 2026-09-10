@@ -112,6 +112,11 @@ export interface ServerSummary {
   openshift: OpenShiftLifecycle;
   connectivity: ConnectivitySummary;
   last_seen_at: string | null;
+  /** False when the collector knew this server's identity but could not
+   * reach it on the most recent run — hardware fields keep their
+   * last-known values, they are not blanked. */
+  reachable: boolean;
+  unreachable_since: string | null;
   updated_at: string;
 }
 
@@ -325,6 +330,8 @@ export interface ServerDetail {
   nic_os_names: Record<string, string>;
   tags: string[];
   last_seen_at: string | null;
+  reachable: boolean;
+  unreachable_since: string | null;
   updated_at: string;
   created_at: string;
 }

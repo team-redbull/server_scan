@@ -1086,6 +1086,19 @@ def generate_servers(
         gpus = _build_gpus(rng, collector)
         psus = _build_psus(rng)
 
+        # A small fraction of Dell servers exercise `reachable=False`, the
+        # one shape `OpenManageProvider._unreachable_server` can produce.
+        reachable = not (collector is ManagerType.OPENMANAGE and rng.random() < 0.03)
+        if not reachable:
+            system_uuid = None
+            nic_macs = None
+            nics = ()
+            bmc_mac = None
+            cpu_sockets = cpu_cores = cpu_threads = cpu_model = None
+            memory_total_bytes = None
+            storage_drives = storage_total_bytes = None
+            gpus = psus = None
+
         # A Gen9's iLO 4 is the one partial record in this fleet: every
         # OneView subresource call against one fails, so its detailed
         # hardware is `None` — unread — while its identity is intact.
@@ -1119,6 +1132,7 @@ def generate_servers(
             model=model,
             serial=serial,
             system_uuid=system_uuid,
+            reachable=reachable,
             nic_macs=nic_macs,
             nics=nics,
             bmc_address_raw=_bmc_address(collector, bmc_ip),
