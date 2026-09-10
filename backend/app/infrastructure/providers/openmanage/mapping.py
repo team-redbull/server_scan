@@ -3,7 +3,11 @@
 No I/O: `provider.py` makes every REST call and hands this module plain
 dicts to convert. The OME field names here (`ProfileName`, `TargetName`,
 `DeviceServiceTag`) are validated facts carried over from a production Dell
-scanner — see docs/dell-collectors.md for the provenance.
+scanner — see docs/dell-collectors.md for the provenance. `TargetName` and
+`DeviceName` are display names OME derives per its console-wide "Server
+Device Naming" setting, not addresses — see
+docs/notes/2026-09-openmanage-device-naming-and-ip-address.md and
+`_network_address` below for why the real address comes from elsewhere.
 
 This module maps **identity only**. Hardware detail comes from each
 server's iDRAC over Redfish, not from OME's `InventoryDetails` — see
@@ -50,6 +54,29 @@ def _opt_str(value: object) -> str | None:
     return text or None
 
 
+def _network_address(device: dict[str, Any]) -> str | None:
+    """
+    Read a device's real network address, immune to OME's naming policy.
+
+    See docs/notes/2026-09-openmanage-device-naming-and-ip-address.md.
+
+    Args:
+        device (dict[str, Any]): One `/DeviceService/Devices` entry.
+
+    Returns:
+        str | None: The device's real IP/hostname, or `None` when the
+            device has no management entry (or is `{}`, the undeployed
+            case).
+    """
+    management = device.get("DeviceManagement")
+    if not isinstance(management, list) or not management:
+        return None
+    first = management[0]
+    if not isinstance(first, dict):
+        return None
+    return _opt_str(first.get("NetworkAddress"))
+
+
 def idrac_bmc_address(idrac_ip: str | None) -> str | None:
     """
     Render a server's iDRAC IP as the Dell BMC URI the platform expects.
@@ -62,7 +89,8 @@ def idrac_bmc_address(idrac_ip: str | None) -> str | None:
     downgrade a Dell server's stored BMC address.
 
     Args:
-        idrac_ip (str | None): The iDRAC address OME reports as the
+        idrac_ip (str | None): The iDRAC address, preferably the device's
+            `DeviceManagement[0].NetworkAddress`, falling back to the
             profile's `TargetName` / the device's `DeviceName`.
 
     Returns:
@@ -143,7 +171,11 @@ class OmeIdentity:
     Attributes:
         name (str): The profile name, and the server's name. Site parsing
             and classification both key off it.
-        idrac_ip (str | None): The BMC address to collect hardware from.
+        idrac_ip (str | None): The BMC address to collect hardware from —
+            the device's `DeviceManagement[0].NetworkAddress` when present,
+            since `TargetName`/`DeviceName` can hold an OS hostname instead
+            of an address whenever OME's "Server Device Naming" console
+            setting is System Hostname rather than iDRAC Hostname.
         serial (str | None): The Dell service tag, from the managed device.
         model (str | None): The device model, when OME has a managed device.
         profile_template_name (str | None): The OME deployment template
@@ -167,18 +199,24 @@ def identity_from_profile(*, profile: dict[str, Any], device: dict[str, Any]) ->
 
     Args:
         profile (dict[str, Any]): One `/ProfileService/Profiles` entry;
-            `ProfileName` is the server name, `TargetName` its iDRAC IP, and
-            `TemplateName`/`TemplateId` the deployment template it came from.
+            `ProfileName` is the server name, `TargetName` its display name
+            (join key, not necessarily an address — see `_network_address`),
+            and `TemplateName`/`TemplateId` the deployment template it came
+            from.
         device (dict[str, Any]): The `/DeviceService/Devices` entry joined by
-            iDRAC IP, or `{}` when OME has no managed device for the profile.
-            `Model` and `DeviceServiceTag` come from here.
+            display name, or `{}` when OME has no managed device for the
+            profile. `Model` and `DeviceServiceTag` come from here.
 
     Returns:
         OmeIdentity: The identity half of a collected Dell server. The site
             is intentionally absent — it is parsed from the name downstream.
     """
     name = _opt_str(profile.get("ProfileName")) or ""
-    idrac_ip = _opt_str(profile.get("TargetName")) or _opt_str(device.get("DeviceName"))
+    idrac_ip = (
+        _network_address(device)
+        or _opt_str(profile.get("TargetName"))
+        or _opt_str(device.get("DeviceName"))
+    )
     return OmeIdentity(
         name=name,
         idrac_ip=idrac_ip,

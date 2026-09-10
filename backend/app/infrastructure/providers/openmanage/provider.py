@@ -216,14 +216,18 @@ class OpenManageProvider(ServerInventoryProvider):
         and is counted, not reported as a fault.
 
         Returns:
-            dict[str, OmeIdentity]: Matched identities, keyed by iDRAC IP.
-                Keyed by address because that is what the Redfish pass
-                reports back and what joins the two halves.
+            dict[str, OmeIdentity]: Matched identities, keyed by BMC
+                address (`OmeIdentity.idrac_ip`). Keyed by address because
+                that is what the Redfish pass reports back and what joins
+                the two halves.
         """
         async with self._new_client() as client:
             profiles = await client.get_all("/ProfileService/Profiles")
             devices = await client.get_all("/DeviceService/Devices")
 
+        # Joined on OME's display name, not an address — the two sides
+        # agree on it either way; mapping._network_address supplies the
+        # actual BMC host once this join has found the right device.
         device_by_ip = {
             str(device.get("DeviceName")): device
             for device in devices
@@ -241,8 +245,10 @@ class OpenManageProvider(ServerInventoryProvider):
         for profile in profiles:
             if not self._matches(profile):
                 continue
-            idrac_ip = str(profile.get("TargetName") or "")
-            identity = identity_from_profile(profile=profile, device=device_by_ip.get(idrac_ip, {}))
+            display_name = str(profile.get("TargetName") or "")
+            identity = identity_from_profile(
+                profile=profile, device=device_by_ip.get(display_name, {})
+            )
             host = identity.idrac_ip
             if not host:
                 unassigned += 1

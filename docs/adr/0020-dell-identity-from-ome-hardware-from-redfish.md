@@ -141,6 +141,26 @@ wrong serial, not a caught error) had this shipped as first assumed.
 **Unconfirmed on any Dell generation older than iDRAC9** — this generation
 is what was checked; iDRAC7/8 may shape the OEM block differently.
 
+**Item 4 hit in production, 2026-09-10, before the rest of this list was
+ever checked.** A server named `ocp4-compute-five-01` failed with
+`unreachable, could not reach ocp4-compute-five-01`: OME's console-wide
+"Server Device Naming" setting was System Hostname, so `TargetName`
+(Profiles) and `DeviceName` (Devices) — the fields this collector read as
+the iDRAC address — held the server's own OS hostname instead. Researched
+against Dell's own official OME automation source (no live appliance was
+available; see `docs/notes/2026-09-openmanage-device-naming-and-ip-address.md`):
+every Dell script that needs to *reach* a device reads
+`DeviceManagement[0].NetworkAddress` instead, which is immune to this
+setting. `mapping._network_address`/`identity_from_profile` now prefer it,
+falling back to `TargetName`/`DeviceName` only when a device carries no
+`DeviceManagement` entry. The profile-to-device join itself is unchanged
+(still `TargetName`/`DeviceName`) — both sides derive from the same
+console-wide setting, so they keep agreeing with each other regardless of
+which mode is active, even though neither is reliably an address by
+itself. See `docs/dell-collectors.md`'s "Collection flow" for the full
+writeup, including two items the research left unconfirmed for lack of a
+live appliance.
+
 Before trusting the rest of this design in production, still confirm on
 real hardware:
 

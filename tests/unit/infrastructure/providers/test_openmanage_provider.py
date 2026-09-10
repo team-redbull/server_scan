@@ -64,7 +64,13 @@ def _profile(name: str, idrac: str, *, template: str = "RHOCP Worker v4") -> dic
     }
 
 
-def _device(idrac: str, *, service_tag: str, model: str = "PowerEdge R650") -> dict[str, Any]:
+def _device(
+    idrac: str,
+    *,
+    service_tag: str,
+    model: str = "PowerEdge R650",
+    network_address: str | None = None,
+) -> dict[str, Any]:
     """
     One `/DeviceService/Devices` entry.
 
@@ -72,11 +78,16 @@ def _device(idrac: str, *, service_tag: str, model: str = "PowerEdge R650") -> d
         idrac (str): The device's `DeviceName`, joined to a profile by it.
         service_tag (str): The Dell service tag.
         model (str): The device model.
+        network_address (str | None): `DeviceManagement[0].NetworkAddress`,
+            when the entry should carry one.
 
     Returns:
         dict[str, Any]: The device as OME reports it.
     """
-    return {"DeviceName": idrac, "DeviceServiceTag": service_tag, "Model": model}
+    device: dict[str, Any] = {"DeviceName": idrac, "DeviceServiceTag": service_tag, "Model": model}
+    if network_address is not None:
+        device["DeviceManagement"] = [{"NetworkAddress": network_address}]
+    return device
 
 
 class _FakeOmeClient:
@@ -350,6 +361,40 @@ class TestTheJoin:
         )
         servers = [s async for s in provider.collect()]
         assert [s.profile_template_name for s in servers] == ["RHOCP Worker v4"] * 2
+
+    async def test_the_real_ip_wins_over_a_hostname_targetname(self) -> None:
+        """Reproduces a live failure: `TargetName`/`DeviceName` can hold an
+        OS hostname, not an address — see docs/dell-collectors.md's
+        "Collection flow", 2026-09-10 update.
+        """
+        provider, recorded = _provider(
+            profiles=[_profile("ocp4-compute-five-01", "ocp4-compute-five-01")],
+            devices=[
+                _device(
+                    "ocp4-compute-five-01",
+                    service_tag="7XKD9P3",
+                    network_address="10.0.0.9",
+                )
+            ],
+            servers=[_collected("10.0.0.9")],
+        )
+        [server] = [s async for s in provider.collect()]
+        assert recorded["redfish"].targets[0].host == "10.0.0.9"
+        assert server.bmc_address_raw == (
+            "idrac-virtualmedia://10.0.0.9/redfish/v1/Systems/System.Embedded.1"
+        )
+
+    async def test_falls_back_to_the_display_name_with_no_network_address(self) -> None:
+        """`DeviceManagement` is what a live appliance has always been
+        expected to carry, but this must keep working if it is ever absent.
+        """
+        provider, recorded = _provider(
+            profiles=[_profile("ocp4-nyc-prod-worker-03", "10.0.0.1")],
+            devices=[_device("10.0.0.1", service_tag="7XKD9P3")],
+            servers=[_collected("10.0.0.1")],
+        )
+        [server async for server in provider.collect()]
+        assert recorded["redfish"].targets[0].host == "10.0.0.1"
 
     async def test_the_manager_id_is_this_run_s(self) -> None:
         """The Redfish pass is constructed with the same manager, but the

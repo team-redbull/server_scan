@@ -34,11 +34,17 @@ collector uses four endpoints, all validated in the production scanner:
   undeployed profile has no `TargetName`; it names no server and is
   counted and skipped, not reported as an unreachable host.
   `ProfileName` is the server's operator-facing name (and the platform's
-  site/classification source); `TargetName` is the server's iDRAC IP.
+  site/classification source); `TargetName` is the profile's display
+  name, used only to join to a `/DeviceService/Devices` entry — **not
+  trusted as the iDRAC address**, see the dated update below.
 - `GET /DeviceService/Devices` — one entry per managed device. `DeviceName`
-  is the iDRAC IP (the join key back to a profile's `TargetName`), `Model`
-  is the hardware model, `DeviceServiceTag` is the service tag used as the
-  server serial, and `Id` is the device handle for inventory calls.
+  is the device's display name (the join key back to a profile's
+  `TargetName` — the two agree with each other regardless of naming
+  policy, even though neither is reliably an address), `Model` is the
+  hardware model, `DeviceServiceTag` is the service tag used as the server
+  serial, and `Id` is the device handle for inventory calls.
+  `DeviceManagement[0].NetworkAddress` is the field actually used to reach
+  the iDRAC — see the dated update below.
 - `GET /DeviceService/Devices(<id>)/InventoryDetails('<section>')` — one
   hardware section for one device, returned in an `InventoryInfo` array.
   The collector reads `serverProcessors`, `serverMemoryDevices`,
@@ -75,9 +81,11 @@ and for what the OME-only design got wrong.
 
 `OpenManageProvider.list_servers` makes the two bulk calls once
 (`/ProfileService/Profiles`, `/DeviceService/Devices`) and joins each
-profile to its device by iDRAC IP. That yields, per server, the four things
-only OME knows: the **profile name** (the server's name), the **deployment
-template**, the **service tag** and the **iDRAC address**.
+profile to its device by display name (`TargetName`/`DeviceName` — see the
+2026-09-10 update below for why that is a name, not necessarily an
+address). That yields, per server, the four things only OME knows: the
+**profile name** (the server's name), the **deployment template**, the
+**service tag** and the **iDRAC address**.
 
 Every matched address then becomes a `RedfishTarget`, and the hardware pass
 is `app.infrastructure.providers.redfish` unchanged — CPU, memory, storage,
@@ -129,6 +137,28 @@ The BMC address stored is OME's `idrac-virtualmedia://` form, not the
 `https://<host>` origin the Redfish collector reports for a standalone BMC:
 that is what `parse_bmc_address` documents for Dell and what a Metal3
 `BareMetalHost` round-trips.
+
+**Fixed 2026-09-10 — `TargetName`/`DeviceName` are not addresses.** A live
+report: a server named `ocp4-compute-five-01` failed collection with
+`unreachable, could not reach ocp4-compute-five-01` — the collector was
+dialling the server's *OS hostname*, not its iDRAC. Cause: OME's
+console-wide "Server Device Naming" setting (REST:
+`ApplicationService/Settings`'s `DEVICE_PREFERRED_NAME`, values
+`IDRAC_HOSTNAME`/`IDRAC_SYSTEM_HOSTNAME`) can be set to System Hostname,
+in which case `TargetName` and `DeviceName` both hold the OS hostname, not
+a reachable address — confirmed from Dell's own official OME automation
+(`dellemc-openmanage-ansible-modules`, `OpenManage-Enterprise`; see
+`docs/notes/2026-09-openmanage-device-naming-and-ip-address.md` for the
+full research). Every one of Dell's own scripts that needs to *reach* a
+device instead reads `DeviceManagement[0].NetworkAddress`, which is immune
+to this setting. `mapping._network_address` now reads it and
+`identity_from_profile` prefers it over `TargetName`/`DeviceName`, which
+remain only as a fallback and as the profile-to-device join key (the join
+still works under either naming mode, since both sides derive from the
+same policy and so still agree with each other). **Unconfirmed**: whether
+`DeviceManagement` can ever be empty for a managed iDRAC, and whether it
+can hold more than one entry such that `[0]` is not always the right one
+— see the research doc's "Open questions" for what would settle both.
 
 ## Profile template
 

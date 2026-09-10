@@ -525,6 +525,19 @@ verification" and `docs/dell-collectors.md`'s "Collection flow" for the
 full writeup and what a wrong-but-stable serial would have done to
 correlation if it had shipped unfixed.
 
+**A second, related field bug hit production 2026-09-10**:
+`TargetName`/`DeviceName` — read as the iDRAC address since ADR-0020 —
+are display names OME derives per its own "Server Device Naming" console
+setting, and when that setting is System Hostname (not iDRAC Hostname)
+they hold a server's OS hostname instead, causing
+`unreachable, could not reach <hostname>`. `mapping._network_address` now
+prefers `DeviceManagement[0].NetworkAddress`, which every one of Dell's
+own OME automation scripts uses to reach a device and which is immune to
+this setting; `TargetName`/`DeviceName` remain the profile-to-device join
+key (unaffected — both sides move together under either naming mode) and
+the address fallback when a device has no `DeviceManagement` entry. See
+ADR-0020's dated update and `docs/dell-collectors.md`'s "Collection flow".
+
 **`ONEVIEW` (HPE) deliberately does *not* copy that split, and this is
 the thing a future session is most likely to get wrong.** The estate runs
 iLO 4, 5 and 6 in the same racks, and iLO 4 predates useful Redfish
