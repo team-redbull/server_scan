@@ -33,7 +33,7 @@ class Settings(BaseSettings):
     )
 
     # --- Service identity ---
-    service_name: str = "server-inventory-api"
+    service_name: str = "server-scan-api"
     environment: Literal["development", "test", "staging", "production"] = "development"
 
     # --- HTTP server ---
@@ -54,7 +54,7 @@ class Settings(BaseSettings):
 
     # --- MongoDB ---
     mongo_uri: str = "mongodb://localhost:27017"
-    mongo_db: str = "server_inventory"
+    mongo_db: str = "server-scan"
     mongo_connect_timeout_ms: int = 5_000
     mongo_server_selection_timeout_ms: int = 5_000
     mongo_socket_timeout_ms: int = 10_000
@@ -173,7 +173,7 @@ class Settings(BaseSettings):
     #
     # `INVENTORY_`-prefixed, so `ucs_manager_ip` is
     # `INVENTORY_UCS_MANAGER_IP`. In Kubernetes these arrive from a
-    # Secret via `envFrom` — see `deploy/helm/server-inventory/values.yaml`.
+    # Secret via `envFrom` — see `deploy/helm/server-scan/values.yaml`.
     #
     # Cisco Intersight does not have a login at all, and its settings say
     # so rather than reusing the username/password shape every other
@@ -484,14 +484,14 @@ class Settings(BaseSettings):
             raise ValueError(
                 "INVENTORY_CURSOR_SECRET is blank with INVENTORY_ENVIRONMENT=production. "
                 "Set INVENTORY_CURSOR_SECRET to a real, deployment-specific secret — "
-                "see deploy/helm/server-inventory's cursorSecret value."
+                "see deploy/helm/server-scan's cursorSecret value."
             )
         if self.cursor_secret == _INSECURE_DEV_CURSOR_SECRET:
             raise ValueError(
                 "INVENTORY_CURSOR_SECRET is still the committed dev default "
                 f"({_INSECURE_DEV_CURSOR_SECRET!r}) with INVENTORY_ENVIRONMENT=production. "
                 "Set INVENTORY_CURSOR_SECRET to a real, deployment-specific secret — "
-                "see deploy/helm/server-inventory's cursorSecret value."
+                "see deploy/helm/server-scan's cursorSecret value."
             )
         return self
 

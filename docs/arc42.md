@@ -376,17 +376,23 @@ collector does, and never call this platform's API.
 - **The frontend has full manifests** (Deployment/Service/Route) as of
   chart 0.2.0. This entry used to record their absence as a gap and was
   simply out of date.
-- **Exactly one Route, since 2026-09-12.** With the frontend on, its
-  nginx forwards `/api/` and `/health/` to the API Service in-cluster
+- **Exactly one Route, since 2026-09-12, and adding an API path does not
+  add another.** The Route gets traffic into the cluster; the frontend's
+  nginx decides what belongs to the API and forwards it to that Service
   (`frontend-api-proxy-configmap.yaml`), replacing the five path-scoped
-  API Routes that used to split one host. `/docs`, `/openapi.json` and
-  `/metrics` are therefore no longer reachable from outside the cluster;
-  Prometheus scrapes `/metrics` through the Service and is unaffected.
+  Routes that used to split one host. `/api/`, `/health/`, `/metrics`,
+  `/docs`, `/redoc` and `/openapi.json` are all reachable through it; a
+  new one is a `location` block, not a Route. An explicit list rather
+  than a catch-all, because the SPA owns `/` and its own client-side
+  routes must not be proxied.
 - **The chart is `deploy/helm/server-scan`** (renamed from
-  `server-inventory` on 2026-09-12, along with its `part-of` label and
-  its `serverScan.*` template helpers). The Mongo *database* name
-  `server_inventory` is deliberately unchanged — renaming it would orphan
-  every stored document.
+  `server-inventory` on 2026-09-12, along with its `part-of` label, its
+  `serverScan.*` template helpers, the project name, the service name and
+  the dev pod). **The Mongo database and user are now `server-scan` too**
+  — done at the operator's direction, and the one part of the rename that
+  does not migrate itself: an existing deployment's documents stay in
+  `server_inventory` until `mongodump`/`mongorestore --nsFrom/--nsTo`
+  moves them.
 - **The standalone Redfish collector's two TOML files live in the chart**
   (`files/redfish/`), read with `.Files.Get`. The inventory file is the
   default source and holds no secrets. The credentials file is opt-in and

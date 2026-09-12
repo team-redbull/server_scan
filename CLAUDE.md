@@ -1231,7 +1231,7 @@ the fallback — it depends on no compose provider at all, which is what
 the air-gapped and CI paths may need.
 
 **The three paths cannot see each other.** They name containers
-differently — `server-inventory-dev-mongo` (dev-up.sh),
+differently — `server-scan-dev-mongo` (dev-up.sh),
 `server_scan-mongo-1` (docker compose), `server_scan_mongo_1`
 (podman-compose) — while all binding 27017 and 6379. So a stack started
 one way is invisible to another way's `ps` and still takes the ports.
@@ -1281,20 +1281,30 @@ quarterly, or before any release you care about:
 shipped. The deployment ones first:
 
 - **The Helm chart is `deploy/helm/server-scan`**, renamed from
-  `server-inventory`, along with `app.kubernetes.io/part-of` and the
-  `serverScan.*` template helpers. **The Mongo database name
-  `server_inventory` is deliberately NOT renamed** — it would orphan
-  every stored document. `INVENTORY_SERVICE_NAME` and `scripts/dev-up.sh`'s
-  container names are also unchanged (a metrics label and dev containers,
-  neither part of the chart).
-- **Exactly one Route.** With the frontend on, its nginx proxies `/api/`
-  and `/health/` to the API Service in-cluster
-  (`frontend-api-proxy-configmap.yaml` mounted at `/etc/nginx/api-proxy.d`,
-  which `frontend/nginx.conf` includes), so the five path-scoped API
-  Routes and `route.apiPaths` are gone. **`/docs`, `/openapi.json` and
-  `/metrics` are no longer reachable from outside the cluster** —
-  `port-forward` for the first two; Prometheus scrapes `/metrics` through
-  the Service and is unaffected.
+  `server-inventory`, along with `app.kubernetes.io/part-of`, the
+  `serverScan.*` template helpers, the project name in `pyproject.toml`,
+  `INVENTORY_SERVICE_NAME`, `scripts/dev-up.sh`'s pod name, and **the
+  Mongo database and user, both now `server-scan`**. The database rename
+  was made at the operator's explicit direction after the orphaning risk
+  was raised: **an existing deployment's data stays in the old
+  `server_inventory` database and must be moved by hand** — `mongodump
+  --db server_inventory` then `mongorestore --nsFrom 'server_inventory.*'
+  --nsTo 'server-scan.*'`. A hyphen in a Mongo database name is legal and
+  was verified against a real server, not assumed; only the `mongosh`
+  shell needs `db.getSiblingDB("server-scan")` rather than dotted access,
+  since `db.server-scan` parses as subtraction.
+- **Exactly one Route, and it does not gain one per endpoint.** The Route
+  only gets traffic into the cluster; the frontend's nginx decides which
+  paths belong to the API and forwards them to its Service
+  (`frontend-api-proxy-configmap.yaml`, mounted at
+  `/etc/nginx/api-proxy.d`, which `frontend/nginx.conf` includes). So
+  `route.apiPaths` and the five path-scoped API Routes are gone, and
+  **exposing another API path is one `location` block there** — no second
+  Route, no second hostname. Currently forwarded: `/api/`, `/health/`,
+  `/metrics`, `/docs`, `/redoc`, `/openapi.json`. It is a list rather
+  than a catch-all because the SPA owns `/` and has its own client-side
+  routes (`/servers`, `/rules`, `/health-policies`) that must not be
+  proxied.
 - **The standalone Redfish TOMLs live in the chart**, at
   `deploy/helm/server-scan/files/redfish/`, read with `.Files.Get`
   (`collectors.redfishStandalone.inventoryFile`/`credentialsFile`). The

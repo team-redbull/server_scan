@@ -1,5 +1,5 @@
 [project]
-name = "server-inventory"
+name = "server-scan"
 version = "0.1.0"
 description = "Production-grade air-gapped bare-metal server inventory platform"
 requires-python = ">=3.12,<3.14"

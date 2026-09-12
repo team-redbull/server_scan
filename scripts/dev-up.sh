@@ -16,7 +16,7 @@
 set -euo pipefail
 
 RUNTIME="${CONTAINER_RUNTIME:-podman}"
-POD_NAME="server-inventory-dev"
+POD_NAME="server-scan-dev"
 MONGO_IMAGE="docker.io/library/mongo:8"
 REDIS_IMAGE="docker.io/library/redis:8-alpine"
 
