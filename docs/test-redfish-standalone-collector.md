@@ -250,22 +250,25 @@ manager=redfish-standalone PARTIAL — this run did not see the whole fleet:
 |---|---|
 | A handful `unreachable` | Hosts off, being reimaged, or dead. **The normal case.** Worth checking whether the *same* hosts fail every run — grep `redfish.host_unreachable`. |
 | *Every* host `unreachable` | Not a fleet problem. Egress, routing or DNS from the collector pod. Re-run §1 from a debug pod in the same namespace. |
-| A few `login failed` | Those hosts have different credentials. Add a `[credentials."<host>"]` entry. **Do not raise the threshold to silence it.** |
+| A few `login failed` | Those hosts have different credentials. Add a `[credentials."<host>"]` entry. Grep `redfish.bmc_login_failed`; the run summary's `auth_failures` is the total. |
 | `TLS verification failed` | See below. |
 | `exceeded its 180s budget` | One slow BMC, already contained — the other hosts completed. If it happens every run, investigate that BMC rather than raising the budget for the whole fleet. |
 | `authenticated but exposes no system` | The address is a chassis or enclosure manager rather than a server, or Redfish is licence-gated on that hardware. |
 
-### Exit 1 — `redfish.credential_circuit_open`
+### Many `redfish.bmc_login_failed` for the same credential
 
 ```
-redfish.credential_circuit_open credential='shared-lab'
-  hosts=['192.0.2.41','192.0.2.42','192.0.2.55']
-  hint="Different BMCs rejected the same credential…"
+redfish.bmc_login_failed host=192.0.2.41 credential='shared-lab' run_failures=3
 ```
 
-**Do not simply re-run.** Three different BMCs rejecting the same
-credential means the credential is wrong, and each repeat costs another
-failed login on every host.
+**Nothing stops the run any more.** The credential circuit breaker that
+used to disable a credential after three rejections was removed
+2026-09-12 at the operator's request (ADR-0016's dated update): every
+host is attempted every run, so a wrong shared credential now costs one
+failed login on *every* BMC that uses it, every run.
+
+**So do not simply re-run.** Many hosts rejecting the same credential
+means the credential is wrong, not that the hosts are.
 
 1. Verify by hand against **one** host: `curl -u user:pass https://<host>/redfish/v1/Systems`
 2. If the account is locked (Lenovo XCC, OpenBMC), an admin must unlock it.
@@ -273,8 +276,8 @@ failed login on every host.
    Dell's IP block. It clears on its own.
 4. Fix the credential, then re-run.
 
-`redfish.auth_rejected` appears once per rejecting host with a running
-`distinct_hosts` count, so you can see it building before it trips.
+The run summary's `auth_failures` is the count across the whole run, and
+each rejection's own line names the host and the credential.
 
 ### TLS failures — do not "fix" these by disabling verification
 

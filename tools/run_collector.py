@@ -66,8 +66,6 @@ from app.infrastructure.providers.intersight.provider import IntersightProvider
 from app.infrastructure.providers.oneview.provider import OneViewProvider
 from app.infrastructure.providers.openmanage.provider import OpenManageProvider
 from app.infrastructure.providers.redfish.provider import (
-    AUTH_BUDGET_EXHAUSTED_MARKER,
-    AUTH_CREDENTIAL_DISABLED_MARKER,
     AUTH_REJECTED_MARKER,
     UNREACHABLE_MARKER,
     RedfishStandaloneProvider,
@@ -171,8 +169,6 @@ def _openmanage_provider(
             host_budget_seconds=settings.redfish_host_budget_seconds,
             run_budget_seconds=settings.redfish_run_budget_seconds,
             fleet_concurrency=settings.redfish_fleet_concurrency,
-            auth_failure_threshold=settings.redfish_auth_failure_threshold,
-            auth_failure_budget=settings.redfish_auth_failure_budget,
             tls_min_version=settings.redfish_tls_min_version,
             debug_http=_debug_http_enabled(),
         )
@@ -314,8 +310,6 @@ def _redfish_provider(
         host_budget_seconds=settings.redfish_host_budget_seconds,
         run_budget_seconds=settings.redfish_run_budget_seconds,
         fleet_concurrency=settings.redfish_fleet_concurrency,
-        auth_failure_threshold=settings.redfish_auth_failure_threshold,
-        auth_failure_budget=settings.redfish_auth_failure_budget,
         tls_min_version=settings.redfish_tls_min_version,
         debug_http=_debug_http_enabled(),
     )
@@ -879,8 +873,6 @@ def _format_duration(seconds: float) -> str:
 _BENIGN_COLLECTION_ERROR_MARKERS = (
     UNREACHABLE_MARKER,
     AUTH_REJECTED_MARKER,
-    AUTH_CREDENTIAL_DISABLED_MARKER,
-    AUTH_BUDGET_EXHAUSTED_MARKER,
 )
 
 
@@ -892,11 +884,10 @@ def _is_benign_collection_error(message: str) -> bool:
         message (str): One entry from `ProviderServer.collection_errors`.
 
     Returns:
-        bool: `True` for a plain unreachable host or any of the three
-            credential-rejection shapes `_BENIGN_COLLECTION_ERROR_MARKERS`
-            names. `False` for everything else (TLS, budget-exceeded, a
-            generic `RedfishError`) — those can still signal a problem
-            worth a human looking at across many hosts.
+        bool: `True` for a plain unreachable host or a rejected login.
+            `False` for everything else (TLS, budget-exceeded, a generic
+            `RedfishError`) — those can still signal a problem worth a
+            human looking at across many hosts.
     """
     return any(marker in message for marker in _BENIGN_COLLECTION_ERROR_MARKERS)
 

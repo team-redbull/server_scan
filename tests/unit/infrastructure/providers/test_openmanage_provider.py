@@ -490,10 +490,38 @@ class TestUnreachableHosts:
         assert placeholder.serial == "7XKD9P9"
         assert placeholder.name == "ocp4-nyc-prod-worker-09"
 
+    async def test_a_rejected_login_becomes_a_placeholder_too(self) -> None:
+        """Widened 2026-09-12: an iDRAC that rejects its credential leaves
+        the server exactly as unmeasured as a dead one, and OME already
+        knows who it is — so it stays visible rather than vanishing.
+        """
+        provider, recorded = _provider(
+            profiles=[
+                _profile("ocp4-nyc-prod-worker-03", "10.0.0.1"),
+                _profile("ocp4-nyc-prod-worker-09", "10.0.0.9"),
+            ],
+            devices=[
+                _device("10.0.0.1", service_tag="7XKD9P3"),
+                _device("10.0.0.9", service_tag="7XKD9P9"),
+            ],
+            servers=[_collected("10.0.0.1")],
+        )
+        servers = []
+        async for server in provider.collect():
+            recorded["redfish"].collection_errors = (
+                "10.0.0.9: login failed for credential 'ome-bmc'",
+            )
+            servers.append(server)
+
+        assert provider.collection_errors == ()
+        [placeholder] = [s for s in servers if s.external_id == "ome-unreachable:10.0.0.9"]
+        assert placeholder.reachable is False
+        assert placeholder.serial == "7XKD9P9"
+
     async def test_every_other_failure_still_counts_toward_partial(self) -> None:
-        """Auth, TLS, budget and a disabled credential are not "the server
-        is down" — they may affect many hosts, so they keep today's
-        behaviour: no placeholder, still PARTIAL.
+        """TLS and a per-host budget are not "the server is down" — they
+        may affect many hosts, so they keep today's behaviour: no
+        placeholder, still PARTIAL.
         """
         provider, recorded = _provider(
             profiles=[

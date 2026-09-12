@@ -45,7 +45,10 @@ from app.infrastructure.providers.openmanage.mapping import (
     dell_port_nics,
     identity_from_profile,
 )
-from app.infrastructure.providers.redfish.provider import UNREACHABLE_MARKER
+from app.infrastructure.providers.redfish.provider import (
+    AUTH_REJECTED_MARKER,
+    UNREACHABLE_MARKER,
+)
 from app.infrastructure.providers.redfish.targets import RedfishCredential, RedfishTarget
 
 logger = structlog.get_logger(__name__)
@@ -53,20 +56,25 @@ logger = structlog.get_logger(__name__)
 _PROVIDER_TYPE = ManagerType.OPENMANAGE.value
 
 
-def _is_unreachable(message: str, host: str) -> bool:
-    """
-    Whether a `collection_errors` entry is `host`'s plain connection failure.
+# The two ways an iDRAC can leave a server wholly unmeasured while OME
+# still knows exactly who it is. See docs/dell-collectors.md's
+# "Collection flow".
+_UNCOLLECTED_MARKERS = (UNREACHABLE_MARKER, AUTH_REJECTED_MARKER)
 
-    See docs/dell-collectors.md's "Collection flow", 2026-09-10 update.
+
+def _is_uncollected(message: str, host: str) -> bool:
+    """
+    Whether a `collection_errors` entry means `host` was not read at all.
 
     Args:
         message (str): One entry from `redfish.collection_errors`.
         host (str): A candidate host to test the message against.
 
     Returns:
-        bool: `True` when `message` is exactly that host's unreachable error.
+        bool: `True` when `message` is that host's connection failure or
+            its rejected login.
     """
-    return message.startswith(f"{host}{UNREACHABLE_MARKER}")
+    return any(message.startswith(f"{host}{marker}") for marker in _UNCOLLECTED_MARKERS)
 
 
 class OpenManageProvider(ServerInventoryProvider):
@@ -189,13 +197,16 @@ class OpenManageProvider(ServerInventoryProvider):
         Yields:
             ProviderServer: One Dell server: hardware as its iDRAC reports
                 it, identity as OME does. A profile OME knows whose iDRAC
-                did not answer this run still yields, `reachable=False`
-                and every hardware field `None` — see `_unreachable_server`.
+                did not answer or rejected the login still yields,
+                `reachable=False` and every hardware field `None` — see
+                `_unreachable_server`.
 
         Raises:
-            OmeConnectionError: On login failure or a failure of either bulk
-                enumeration call. A single unreachable BMC is recorded as a
-                `reachable=False` server instead and does not abort the run.
+            OmeConnectionError: On login failure against the appliance
+                itself, or a failure of either bulk enumeration call. One
+                iDRAC that is dead or rejects its credential is recorded
+                as a `reachable=False` server instead and never aborts
+                the run.
         """
         identities = await self._discover()
         if not identities:
@@ -211,7 +222,7 @@ class OpenManageProvider(ServerInventoryProvider):
 
         redfish = self._redfish_provider_factory(targets)
         reached: set[str] = set()
-        unreachable: set[str] = set()
+        uncollected: set[str] = set()
         try:
             async with contextlib.aclosing(redfish.collect()) as servers:
                 async for server in servers:
@@ -224,23 +235,23 @@ class OpenManageProvider(ServerInventoryProvider):
             # early (`--limit`, a killed run) throws `GeneratorExit` in at
             # the `yield` above, which used to skip this merge entirely —
             # see `..ucs_central.provider.UcsCentralProvider._collect_domain`
-            # for the same shape. A plain connection failure is set aside as
-            # `unreachable` (the loop below); every other failure keeps
-            # today's behaviour — still counted, still PARTIAL.
+            # for the same shape. A dead BMC and a rejected login are both
+            # set aside as `uncollected` (the loop below); every other
+            # failure keeps today's behaviour — still counted, still PARTIAL.
             for message in redfish.collection_errors:
                 host = next(
-                    (h for h in identities if h not in reached and _is_unreachable(message, h)),
+                    (h for h in identities if h not in reached and _is_uncollected(message, h)),
                     None,
                 )
                 if host is not None:
-                    unreachable.add(host)
+                    uncollected.add(host)
                 else:
                     self._record_error(message)
 
         # Only reached on normal completion of the loop above — a consumer
         # that stopped early never asked to see the rest of the fleet, so
         # nothing here is reported as unreachable on its behalf.
-        for host in unreachable:
+        for host in uncollected:
             yield self._unreachable_server(identities[host])
 
     async def _discover(self) -> dict[str, OmeIdentity]:
@@ -346,12 +357,12 @@ class OpenManageProvider(ServerInventoryProvider):
 
     def _unreachable_server(self, identity: OmeIdentity) -> ProviderServer:
         """
-        Build the placeholder for a profile OME knows but whose iDRAC did not answer.
+        Build the placeholder for a profile OME knows but whose iDRAC gave nothing.
 
         See docs/dell-collectors.md's "Collection flow" update.
 
         Args:
-            identity (OmeIdentity): The unreachable profile's OME identity.
+            identity (OmeIdentity): The uncollected profile's OME identity.
 
         Returns:
             ProviderServer: `reachable=False`, every hardware/network field

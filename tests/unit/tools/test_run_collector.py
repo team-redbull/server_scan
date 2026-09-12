@@ -1388,45 +1388,13 @@ class TestRunExitCodes:
         """
         code = await self._run_with(
             monkeypatch,
-            _outcome(
-                collection_errors=("10.0.0.5: login failed for credential 'ome-bmc' — not retried",)
-            ),
+            _outcome(collection_errors=("10.0.0.5: login failed for credential 'ome-bmc'",)),
         )
 
         assert code == 0
         out = capsys.readouterr().out
         assert "PARTIAL —" not in out
         assert "10.0.0.5" in out
-
-    async def test_a_disabled_credential_alone_exits_zero(
-        self, monkeypatch: pytest.MonkeyPatch, capsys: Any
-    ) -> None:
-        code = await self._run_with(
-            monkeypatch,
-            _outcome(
-                collection_errors=(
-                    "10.0.0.6: skipped, credential 'ome-bmc' was disabled after 3 rejections",
-                )
-            ),
-        )
-
-        assert code == 0
-        assert "PARTIAL —" not in capsys.readouterr().out
-
-    async def test_an_exhausted_auth_budget_alone_exits_zero(
-        self, monkeypatch: pytest.MonkeyPatch, capsys: Any
-    ) -> None:
-        code = await self._run_with(
-            monkeypatch,
-            _outcome(
-                collection_errors=(
-                    "10.0.0.7: skipped, the run's authentication failure budget was spent",
-                )
-            ),
-        )
-
-        assert code == 0
-        assert "PARTIAL —" not in capsys.readouterr().out
 
     async def test_a_mix_of_unreachable_and_a_real_failure_still_exits_three(
         self, monkeypatch: pytest.MonkeyPatch, capsys: Any

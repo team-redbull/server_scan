@@ -177,19 +177,29 @@ recovery). The one thing that changes operationally: this specific
 failure no longer counts toward `collection_errors`, so the CronJob pod
 exits 0 instead of 3 for it — the per-server document is now the signal,
 not the exit code. See `docs/arc42.md` §6.1 and §12 (`Server.reachable`),
-and `_is_unreachable`/`_unreachable_server` in `provider.py` for the
+and `_is_uncollected`/`_unreachable_server` in `provider.py` for the
 exact matching rule.
 
-**Widened the same day: a rejected/disabled BMC credential is exit-0-safe
-too**, after a real OME run hit auth failures often enough that PARTIAL
-stopped meaning anything unusual — `tools.run_collector.
-_is_benign_collection_error` treats `AUTH_REJECTED_MARKER`/
-`AUTH_CREDENTIAL_DISABLED_MARKER`/`AUTH_BUDGET_EXHAUSTED_MARKER` (all
-`..redfish.provider` exports) the same as `UNREACHABLE_MARKER`. No Mongo
-placeholder is written for these — only the plain-unreachable case gets
-that treatment, since OME's identity is what makes it safe (see above).
-Still PARTIAL-worthy: TLS failures, a per-host time budget exceeded, and
-any other unrecognized error. See ADR-0016's second 2026-09-10 update.
+**Widened the same day: a rejected BMC credential is exit-0-safe too**,
+after a real OME run hit auth failures often enough that PARTIAL stopped
+meaning anything unusual — `tools.run_collector.
+_is_benign_collection_error` treats `AUTH_REJECTED_MARKER` (a
+`..redfish.provider` export) the same as `UNREACHABLE_MARKER`. Still
+PARTIAL-worthy: TLS failures, a per-host time budget exceeded, and any
+other unrecognized error. See ADR-0016's second 2026-09-10 update.
+
+**Widened again 2026-09-12: a rejected login now writes the same
+`reachable=False` placeholder a dead BMC does.** An iDRAC that refuses
+the credential leaves the server exactly as unmeasured as one that does
+not answer, and OME knows its identity either way — so `_is_uncollected`
+matches both markers, and the server stays visible in the inventory with
+its last-known hardware rather than quietly missing a run. The same
+change removed the credential circuit breaker that used to skip the rest
+of the fleet after three rejections: **every iDRAC is now contacted every
+run**, however many earlier ones refused. See ADR-0016's 2026-09-12
+update — and note the risk that buys, which is now the operator's:
+repeating a run with a wrong shared password locks accounts and
+IP-blocks this collector from every iDRAC for about an hour.
 
 ## Profile template
 

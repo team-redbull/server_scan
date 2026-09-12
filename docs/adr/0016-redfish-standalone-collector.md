@@ -673,3 +673,44 @@ teaching this provider to look servers up by BMC host (a new dependency
 this layer has never had) or teaching `IngestService` a second,
 address-based correlation path alongside `(vendor, serial_normalized)` —
 both real design changes, not implemented here pending direction.
+
+## Update (2026-09-12): the credential circuit breaker is gone
+
+`_AuthGuard` is removed, with both of its settings
+(`INVENTORY_REDFISH_AUTH_FAILURE_THRESHOLD`, `_BUDGET`), its two Helm
+values (`collectors.redfish.authFailureThreshold`, `authFailureBudget`)
+and the two `collection_errors` shapes it wrote
+(`AUTH_CREDENTIAL_DISABLED_MARKER`, `AUTH_BUDGET_EXHAUSTED_MARKER`). Both
+collectors that share this provider — `REDFISH_STANDALONE` and
+`OPENMANAGE`'s iDRAC pass — now attempt **every** host in the inventory,
+however many earlier hosts rejected the same credential.
+
+At the operator's explicit request, after the guard fired on a real
+estate. It was built to bound lockout damage; what it actually did was
+turn one wrong password into a run that silently skipped most of the
+fleet, so the servers behind the skipped hosts went stale with nothing in
+the inventory saying why. The guard's own docstring already conceded it
+"bounds damage, it does not prevent lockout" — with hosts contacted
+concurrently, a number of logins equal to `fleet_concurrency` are in
+flight before the first rejection returns.
+
+**The risk it covered is real and is now the operator's to carry.** The
+`redfish.credential_circuit_open` hint said it plainly and it is still
+true: re-running with a wrong credential locks the account on Lenovo XCC
+and IP-blocks this collector from every iDRAC for an hour. What replaces
+the breaker is visibility, not protection — every rejection logs
+`redfish.bmc_login_failed` at ERROR with the host and the credential's
+*name*, and the run summary carries `auth_failures`.
+
+What is unchanged: a rejected login is still recorded in
+`collection_errors` under `AUTH_REJECTED_MARKER`, and is still benign at
+the exit-code decision, so the CronJob pod still exits 0 for it. TLS
+failures and per-host budget overruns are still PARTIAL.
+
+`OPENMANAGE` goes one step further the same day, and this is the one
+behaviour change beyond "try everything": a rejected login now yields the
+same `reachable=False` placeholder document a plain unreachable host
+does (`..openmanage.provider._is_uncollected`). The reasoning in the
+2026-09-10 entry above is unchanged for `REDFISH_STANDALONE` — a
+standalone target still has no serial to correlate a placeholder against,
+so it still writes none.

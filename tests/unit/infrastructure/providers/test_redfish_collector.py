@@ -92,8 +92,6 @@ def _provider(port: int, *targets: RedfishTarget, **overrides: Any) -> RedfishSt
         "host_budget_seconds": 20.0,
         "run_budget_seconds": 60.0,
         "fleet_concurrency": 4,
-        "auth_failure_threshold": 3,
-        "auth_failure_budget": 10,
     }
     settings.update({k: v for k, v in overrides.items() if k != "connect_host"})
     return RedfishStandaloneProvider(
@@ -491,13 +489,15 @@ class TestPartialFleetAndTheBreaker:
         assert len(servers) == 1
         assert len(provider.collection_errors) == 1
 
-    async def test_a_credential_is_disabled_after_enough_rejections(self) -> None:
-        """Three distinct hosts rejecting one credential means the
-        credential is wrong, and continuing locks the estate.
+    async def test_every_host_is_tried_however_many_rejected_the_credential(self) -> None:
+        """No host is ever skipped over an earlier host's rejection.
+
+        The opposite of what this file asserted until 2026-09-12, when the
+        credential circuit breaker was removed — see ADR-0016's update.
         """
         with RedfishFixture(resources=minimal_service()) as fixture:
             # Four distinct target identities, all reaching the one
-            # fixture: the breaker counts hosts, not sockets.
+            # fixture, all with the wrong password.
             bad = [
                 _target(fixture.port, host=f"bmc-{n}.example", password="wrong")
                 for n in range(1, 5)
@@ -507,9 +507,10 @@ class TestPartialFleetAndTheBreaker:
 
             posts = [p for m, p in fixture.requests if m == "POST"]
 
-        # Three hosts are tried; the fourth is skipped without a login.
-        assert len(posts) == 3
-        assert any("was disabled" in e for e in provider.collection_errors)
+        assert len(posts) == 4
+        assert len(provider.collection_errors) == 4
+        assert all("login failed for credential" in e for e in provider.collection_errors)
+        assert not any("was disabled" in e for e in provider.collection_errors)
 
     async def test_the_run_budget_stops_the_fleet_with_a_summary(self) -> None:
         """The in-process budget must trip before the CronJob's hard kill,

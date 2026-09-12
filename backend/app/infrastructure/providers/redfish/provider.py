@@ -10,10 +10,10 @@ therefore correctness requirements, not tuning knobs — see
 docs/adr/0016-redfish-standalone-collector.md.
 
 Failure is normal here rather than exceptional. A run where 40 of 400
-hosts do not answer is a Tuesday, so per-host failures are collected into
-`collection_errors` and the run continues; only a systemic
-authentication failure stops it, because continuing would lock accounts
-across the estate.
+hosts do not answer is a Tuesday, so per-host failures — a dead BMC and a
+rejected login alike — are collected into `collection_errors` and the run
+always continues to the next host. See ADR-0016's 2026-09-12 update for
+why nothing skips ahead any more.
 """
 
 from __future__ import annotations
@@ -22,7 +22,6 @@ import asyncio
 import contextlib
 import random
 from collections.abc import AsyncGenerator, Callable
-from dataclasses import dataclass, field
 from typing import Any
 
 import structlog
@@ -57,72 +56,10 @@ _PROVIDER_TYPE = ManagerType.REDFISH_STANDALONE.value
 # only — exported so a caller can recognize it without re-deriving it.
 UNREACHABLE_MARKER = ": unreachable — "
 
-# The three auth-failure shapes `_record_auth_failure`/`_collect_host`
-# write, exported for the same reason — see
-# `tools.run_collector._is_benign_collection_error`.
+# The shape `_record_auth_failure` writes, exported for the same reason —
+# see `tools.run_collector._is_benign_collection_error` and
+# `..openmanage.provider._is_uncollected`.
 AUTH_REJECTED_MARKER = ": login failed for credential "
-AUTH_CREDENTIAL_DISABLED_MARKER = ": skipped, credential "
-AUTH_BUDGET_EXHAUSTED_MARKER = ": skipped, the run's authentication failure budget was spent"
-
-
-@dataclass(slots=True)
-class _AuthGuard:
-    """
-    Bounds how much damage a wrong credential can do to the estate.
-
-    Two counters, because they cover different estates. The per-credential
-    threshold catches a stale shared account. The run-wide budget is what
-    covers an estate where every BMC has its own login — there the
-    per-credential counters all sit at one and would never trip, while
-    accounts lock one at a time.
-
-    Stated honestly, because it is easy to over-claim: this bounds damage,
-    it does not prevent lockout. With hosts contacted concurrently, a
-    number of logins equal to the concurrency limit are already in flight
-    before the first rejection returns.
-
-    Attributes:
-        threshold (int): Distinct hosts that may reject one credential
-            before it is disabled.
-        budget (int): Total authentication failures before the run aborts.
-    """
-
-    threshold: int
-    budget: int
-    rejected_hosts: dict[str, set[str]] = field(default_factory=dict)
-    total_failures: int = 0
-
-    def record(self, *, credential: str, host: str) -> None:
-        """
-        Note that a host rejected a credential.
-
-        Args:
-            credential (str): The credential's name, never its value.
-            host (str): The host that rejected it.
-        """
-        self.rejected_hosts.setdefault(credential, set()).add(host)
-        self.total_failures += 1
-
-    def is_open(self, credential: str) -> bool:
-        """
-        Report whether a credential has been disabled for this run.
-
-        Args:
-            credential (str): The credential's name.
-
-        Returns:
-            bool: True once enough distinct hosts have rejected it.
-        """
-        return len(self.rejected_hosts.get(credential, set())) >= self.threshold
-
-    def exhausted(self) -> bool:
-        """
-        Report whether the run's total failure budget is spent.
-
-        Returns:
-            bool: True when the run should stop entirely.
-        """
-        return self.total_failures >= self.budget
 
 
 class RedfishStandaloneProvider(ServerInventoryProvider):
@@ -144,8 +81,6 @@ class RedfishStandaloneProvider(ServerInventoryProvider):
         host_budget_seconds: float,
         run_budget_seconds: float,
         fleet_concurrency: int,
-        auth_failure_threshold: int,
-        auth_failure_budget: int,
         tls_min_version: str = "TLSv1_2",
         debug_http: bool = False,
         client_factory: Callable[[RedfishTarget], Any] | None = None,
@@ -161,10 +96,6 @@ class RedfishStandaloneProvider(ServerInventoryProvider):
             host_budget_seconds (float): Wall clock allowed per host.
             run_budget_seconds (float): Wall clock allowed for the run.
             fleet_concurrency (int): BMCs contacted at once.
-            auth_failure_threshold (int): Distinct hosts rejecting one
-                credential before it is disabled.
-            auth_failure_budget (int): Total authentication failures
-                before the run aborts.
             tls_min_version (str): Minimum TLS version.
             debug_http (bool): Emit one redacted line per request.
             client_factory (Callable[[RedfishTarget], Any] | None): Test
@@ -180,7 +111,7 @@ class RedfishStandaloneProvider(ServerInventoryProvider):
         self._tls_min_version = tls_min_version
         self._debug_http = debug_http
         super().__init__()
-        self._guard = _AuthGuard(threshold=auth_failure_threshold, budget=auth_failure_budget)
+        self._auth_failures = 0
         self._client_factory: Callable[[RedfishTarget], Any] = client_factory or self._new_client
 
     def _new_client(self, target: RedfishTarget) -> RedfishClient:
@@ -233,7 +164,7 @@ class RedfishStandaloneProvider(ServerInventoryProvider):
         Yields:
             ProviderServer: One per `ComputerSystem` found.
         """
-        self._guard = _AuthGuard(threshold=self._guard.threshold, budget=self._guard.budget)
+        self._auth_failures = 0
 
         # Shuffled because completion order is not arrival order: without
         # this the run budget would truncate the same slow hosts every
@@ -331,10 +262,7 @@ class RedfishStandaloneProvider(ServerInventoryProvider):
             hosts_total=total,
             servers_collected=collected,
             hosts_failed=len(self.collection_errors),
-            auth_failures=self._guard.total_failures,
-            credentials_disabled=sorted(
-                name for name in self._guard.rejected_hosts if self._guard.is_open(name)
-            ),
+            auth_failures=self._auth_failures,
         )
 
     async def _collect_host(
@@ -354,17 +282,6 @@ class RedfishStandaloneProvider(ServerInventoryProvider):
         # a slot is not charged against the host. Reversing these makes
         # every host past the first few "time out" without a packet sent.
         async with semaphore:
-            credential = target.credential.name
-            if self._guard.exhausted():
-                self._record_error(f"{target.host}{AUTH_BUDGET_EXHAUSTED_MARKER}")
-                return []
-            if self._guard.is_open(credential):
-                self._record_error(
-                    f"{target.host}{AUTH_CREDENTIAL_DISABLED_MARKER}{credential!r} was disabled "
-                    f"after {self._guard.threshold} rejections"
-                )
-                return []
-
             if not target.verify_tls:
                 logger.warning(
                     "redfish.tls_verification_disabled",
@@ -403,35 +320,21 @@ class RedfishStandaloneProvider(ServerInventoryProvider):
 
     def _record_auth_failure(self, target: RedfishTarget, exc: RedfishAuthError) -> None:
         """
-        Record a rejected login and, if it is the last one, say so loudly.
+        Record a rejected login, loudly, and move on to the next host.
 
         Args:
             target (RedfishTarget): The host that rejected the credential.
             exc (RedfishAuthError): The rejection.
         """
-        credential = target.credential.name
-        self._guard.record(credential=credential, host=target.host)
+        self._auth_failures += 1
         logger.error(
-            "redfish.auth_rejected",
+            "redfish.bmc_login_failed",
             host=target.host,
-            credential=credential,
-            distinct_hosts=len(self._guard.rejected_hosts[credential]),
-            threshold=self._guard.threshold,
-            run_failures=self._guard.total_failures,
+            credential=target.credential.name,
+            error=str(exc),
+            run_failures=self._auth_failures,
         )
-        self._record_error(f"{target.host}{AUTH_REJECTED_MARKER}{credential!r} — not retried")
-        if self._guard.is_open(credential):
-            logger.error(
-                "redfish.credential_circuit_open",
-                credential=credential,
-                hosts=sorted(self._guard.rejected_hosts[credential]),
-                hint=(
-                    "Different BMCs rejected the same credential, so it is almost certainly "
-                    "wrong or already locked. Verify it by hand against one BMC before "
-                    "re-running: repeating the run locks the account on Lenovo XCC and "
-                    "IP-blocks this collector from every iDRAC for an hour."
-                ),
-            )
+        self._record_error(f"{target.host}{AUTH_REJECTED_MARKER}{target.credential.name!r}")
 
     async def _collect_systems(self, target: RedfishTarget) -> list[ProviderServer]:
         """

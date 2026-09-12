@@ -363,16 +363,6 @@ class Settings(BaseSettings):
     # tolerates, not by any one BMC.
     redfish_fleet_concurrency: int = 16
 
-    # Distinct hosts that may reject the *same* credential before it is
-    # disabled for the rest of the run.
-    redfish_auth_failure_threshold: int = 3
-    # Authentication failures across *all* credentials before the run
-    # aborts. This is the one that matters on an estate where every BMC
-    # has its own account, since the per-credential threshold above can
-    # never be reached there. Ten 401s across ten credentials is a stale
-    # Secret, not ten unrelated mistakes.
-    redfish_auth_failure_budget: int = 10
-
     # How many domains the UCS Central collector talks to at once. It uses
     # Central only to enumerate registered domains and their service-profile
     # names, then reads each domain's real inventory from that domain's own
