@@ -21,7 +21,10 @@ import type { ServerSummary } from "@/types/server";
 
 /**
  * Name, Installation, MCE, Cluster, Model, State, and the maintenance
- * switch — in that order.
+ * switch — in that order. Name is left-aligned and every other column
+ * centred: names run from 15 to 60 characters, and centring text that
+ * varies that much leaves no vertical edge for the eye to follow, while
+ * the fixed-width badges beside it line up either way.
  *
  * Kept deliberately short of the nine this table once had (vendor, site,
  * fabric, last-updated…): everything cut is one click away on the detail
@@ -204,7 +207,7 @@ export function InventoryTable({
                 <th
                   key={header.id}
                   scope="col"
-                  className={`border-b border-[var(--border-subtle)] px-2 py-2.5 text-center text-xs font-medium tracking-wide text-[var(--text-secondary)] uppercase ${index === 0 ? "rounded-tl-[var(--radius-card)]" : ""} ${index === headerGroup.headers.length - 1 ? "rounded-tr-[var(--radius-card)]" : ""}`}
+                  className={`border-b border-[var(--border-subtle)] px-2 py-2.5 text-xs font-medium tracking-wide text-[var(--text-secondary)] uppercase ${header.column.id === "name" ? "text-left" : "text-center"} ${index === 0 ? "rounded-tl-[var(--radius-card)]" : ""} ${index === headerGroup.headers.length - 1 ? "rounded-tr-[var(--radius-card)]" : ""}`}
                 >
                   {header.column.getCanSort() ? (
                     <button
@@ -253,7 +256,10 @@ export function InventoryTable({
               className={`group cursor-pointer border-b border-[var(--border-subtle)] transition-colors duration-[var(--duration-instant)] ease-[var(--ease-out-strong)] last:border-0 hover:bg-[var(--surface-hover)] focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[var(--color-status-info)] ${ROW_ACCENT[row.original.health.overall]}`}
             >
               {row.getVisibleCells().map((cell) => (
-                <td key={cell.id} className="px-2 py-2.5 text-center whitespace-nowrap">
+                <td
+                  key={cell.id}
+                  className={`px-2 py-2.5 whitespace-nowrap ${cell.column.id === "name" ? "text-left" : "text-center"}`}
+                >
                   {flexRender(cell.column.columnDef.cell, cell.getContext())}
                 </td>
               ))}
