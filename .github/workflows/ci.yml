@@ -112,6 +112,74 @@ jobs:
       - name: deptry
         run: uv run --with deptry==0.24.0 deptry . --known-first-party app
 
+  helm:
+    name: Helm lint (every chart)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The runner's own preinstalled helm, deliberately not
+      # `azure/setup-helm`: ADR-0013 requires every action be SHA-pinned
+      # and then manually re-pinned forever, and a linter is not worth
+      # that standing cost when ubuntu-latest already ships the binary.
+      # The trade is a version that floats with the runner image, so the
+      # version is printed — a lint that starts failing on a day nobody
+      # touched this repo is answered by this line.
+      - name: helm version
+        run: helm version
+
+      # Every chart under deploy/helm, discovered rather than listed, so a
+      # chart added later is linted without anyone remembering to edit this
+      # file. Failing on an empty glob is deliberate: a silently-skipped
+      # lint job is worse than no lint job.
+      #
+      # `lint` only here. `helm template` is the step below, per chart with
+      # real values, because `openshift-membership` deliberately cannot
+      # render from its defaults — `nodes.clusterName` is `required`, which
+      # is the point of that value.
+      - name: helm lint
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          charts=(deploy/helm/*/Chart.yaml)
+          if [ ${#charts[@]} -eq 0 ]; then
+            echo "No charts found under deploy/helm — did the layout change?" >&2
+            exit 1
+          fi
+          for chart in "${charts[@]}"; do
+            dir="$(dirname "$chart")"
+            echo "::group::helm lint $dir"
+            helm lint "$dir"
+            echo "::endgroup::"
+          done
+
+      # What `lint` cannot catch: a template that renders invalid YAML, or
+      # one whose `required` trips only under a value combination the
+      # defaults never reach. Everything interesting here is off by
+      # default — the frontend, every collector CronJob, both membership
+      # jobs — so defaults alone exercise almost none of the templates.
+      - name: helm template
+        run: |
+          set -euo pipefail
+          helm template ci-lint deploy/helm/server-scan > /dev/null
+          helm template ci-lint deploy/helm/server-scan \
+            --set frontend.enabled=true \
+            --set route.host=scan.apps.example.com > /dev/null
+          helm template ci-lint deploy/helm/server-scan \
+            --set collectors.redfishStandalone.enabled=true \
+            --set collectors.redfishStandalone.credentialsFile=files/redfish/credentials.toml \
+            --set collectors.ucsCentral.enabled=true \
+            --set collectors.intersight.enabled=true \
+            --set collectors.openmanage.enabled=true \
+            --set collectors.oneview.enabled=true \
+            --set collectors.fake.enabled=true > /dev/null
+          helm template ci-lint deploy/helm/openshift-membership \
+            --set nodes.clusterName=ci-cluster > /dev/null
+          helm template ci-lint deploy/helm/openshift-membership \
+            --set nodes.clusterName=ci-cluster \
+            --set agents.enabled=true --set agents.mceName=ci-mce > /dev/null
+
   test:
     name: Test (pytest)
     runs-on: ubuntu-latest
@@ -311,7 +379,7 @@ jobs:
     # Never against untested or not-yet-merged code. `push` is this
     # workflow's only trigger, so `github.ref` alone decides the branch —
     # an `event_name` check here would never actually differ.
-    needs: [lint, test, frontend, e2e]
+    needs: [lint, helm, test, frontend, e2e]
     if: github.ref == 'refs/heads/main'
     permissions:
       contents: write # the "Tag the release" step below pushes the new git tag
