@@ -17,12 +17,12 @@ export function AppNav() {
   return (
     <nav className="border-b border-[var(--border-subtle)] bg-[var(--surface-raised)]">
       <div className="mx-auto flex max-w-7xl items-center gap-6 px-8">
-        {/* Served straight from `public/`, not imported: it is one fixed
-            asset, so a build-time import would buy a hashed filename and
-            nothing else. `alt` rather than `aria-hidden` so a missing
-            file degrades to the word instead of a broken-image icon. */}
-        <Link to="/" className="flex shrink-0 items-center py-2">
-          <img src="/redbull.svg" alt="Red Bull" className="h-7 w-auto" />
+        {/* Three classes place it: `h-10` sizes it (width follows),
+            `-ml-4` pulls it outside the container's own `px-8` so it sits
+            nearer the window edge than the nav text, and the wrapper's
+            `gap-6` sets the distance to "Sites". */}
+        <Link to="/" className="-ml-4 flex shrink-0 items-center py-1">
+          <img src="/redbull-logo.svg" alt="Red Bull" className="h-10 w-auto" />
         </Link>
         {LINKS.map((link) => {
           const isActive =

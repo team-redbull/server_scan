@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 
+import maintenanceIcon from "@/assets/maintenance.svg";
 import { ApiError } from "@/api/client";
 import { useToggleMaintenanceMutation } from "@/features/inventory/hooks";
 import type { ServerSummary } from "@/types/server";
@@ -32,35 +33,16 @@ import type { ServerSummary } from "@/types/server";
  * build at all.
  */
 
-/** Crossed wrench and screwdriver — the conventional "maintenance" mark.
+/** The supplied maintenance icon (frontend/src/assets/maintenance.svg).
  *
- * Stroked, not filled: at 16px a filled tool silhouette collapses into a
- * blob, while an open jaw and a visible shaft still read. The two tools
- * lie on opposite diagonals so the crossing is legible at that size.
+ * An `<img>` and not an inlined path set: it is a fixed multi-colour
+ * illustration, so there is nothing for `currentColor` to drive and
+ * inlining 1 KB of `<style>`-scoped classes into every row would only
+ * make the DOM bigger. Imported rather than read from `public/` so Vite
+ * content-hashes it and a replacement can never be served from cache.
  */
 function ToolsIcon() {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      className="size-4"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.9"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      {/* Wrench: open jaw at top-left, shaft down to bottom-right. The
-          arc is the long way round a circle at (8,8), which is what
-          leaves the jaw open toward the corner. */}
-      <path d="M7.7 4.8A3.2 3.2 0 1 1 4.8 7.7" />
-      <path d="M10.3 10.3 19.5 19.5" />
-      {/* Screwdriver on the other diagonal: blade at bottom-left, the
-          handle a deliberately fatter stroke so it reads as a grip. */}
-      <path d="M4.5 19.5 15.5 8.5" />
-      <path d="M16.2 7.8 20 4" strokeWidth="4.2" />
-    </svg>
-  );
+  return <img src={maintenanceIcon} alt="" aria-hidden="true" className="size-4" />;
 }
 
 /** Play: back into service. */
