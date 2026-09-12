@@ -46,6 +46,19 @@ def list_key(filter_hash: str, cursor_hash: str) -> str:
     return f"si:{_NAMESPACE_VERSION}:list:{filter_hash}:{cursor_hash}"
 
 
+def list_and_facets_patterns() -> tuple[str, ...]:
+    """
+    The globs matching every cached list page and facet count.
+
+    Two patterns, because Redis `SCAN MATCH` has no brace alternation — a
+    `{list,facets}` glob matches the literal string and so nothing at all.
+
+    Returns:
+        tuple[str, ...]: `SCAN MATCH` patterns.
+    """
+    return (f"si:{_NAMESPACE_VERSION}:list:*", f"si:{_NAMESPACE_VERSION}:facets:*")
+
+
 def facets_key(filter_hash: str) -> str:
     """
     The cache key for one filtered view's facet counts.

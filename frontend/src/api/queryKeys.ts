@@ -14,8 +14,11 @@ export const queryKeys = {
     all: ["servers"] as const,
     lists: () => [...queryKeys.servers.all, "list"] as const,
     list: (params: ServerListParams) => [...queryKeys.servers.lists(), params] as const,
-    facets: (params: ServerListParams) =>
-      [...queryKeys.servers.all, "facets", params] as const,
+    // `facets` is a SIBLING of `lists()` under `all`, not a child — so
+    // invalidating the list does not touch it, and vice versa. `facetsAll`
+    // is the prefix that reaches every params variant of it.
+    facetsAll: () => [...queryKeys.servers.all, "facets"] as const,
+    facets: (params: ServerListParams) => [...queryKeys.servers.facetsAll(), params] as const,
     details: () => [...queryKeys.servers.all, "detail"] as const,
     detail: (id: string) => [...queryKeys.servers.details(), id] as const,
   },

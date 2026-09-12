@@ -1,8 +1,14 @@
-import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { queryKeys } from "@/api/queryKeys";
-import { getServerFacets, listServers } from "@/api/servers";
+import {
+  disableMaintenance,
+  enableMaintenance,
+  getServerFacets,
+  listServers,
+} from "@/api/servers";
 import type { ServerListParams } from "@/api/servers";
+import type { ServerListResponse } from "@/types/server";
 
 /**
  * Server list query. `placeholderData: keepPreviousData` keeps the current
@@ -31,5 +37,46 @@ export function useServerFacetsQuery(params: ServerListParams) {
     queryKey: queryKeys.servers.facets(params),
     queryFn: () => getServerFacets(params),
     placeholderData: keepPreviousData,
+  });
+}
+
+/**
+ * Toggle one server's maintenance mode from the inventory list.
+ *
+ * Row-agnostic — the server's id is a mutation *variable*, not a closure
+ * over a hook argument, because a hook cannot be called per row. `ticket`
+ * and `expected_end` stay on the detail page; only the reason is worth
+ * asking for inline.
+ *
+ * Args:
+ *   None.
+ *
+ * Returns:
+ *   The mutation, taking `{ id, enable, reason? }` where `enable` is the
+ *   state to move the server *to*.
+ */
+export function useToggleMaintenanceMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, enable, reason }: { id: string; enable: boolean; reason?: string }) =>
+      enable ? enableMaintenance(id, reason ? { reason } : {}) : disableMaintenance(id),
+    onSuccess: (server) => {
+      queryClient.setQueryData(queryKeys.servers.detail(server.id), server);
+      // Patch for the same frame, then refetch — under `?maintenance=true`
+      // the row must LEAVE the list, which no patch can do. Safe only
+      // because the server clears its own list cache first (ADR-0028).
+      queryClient.setQueriesData<ServerListResponse>(
+        { queryKey: queryKeys.servers.lists() },
+        (page) =>
+          page && {
+            ...page,
+            items: page.items.map((row) =>
+              row.id === server.id ? { ...row, maintenance: server.maintenance } : row,
+            ),
+          },
+      );
+      void queryClient.invalidateQueries({ queryKey: queryKeys.servers.all });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.sites.all });
+    },
   });
 }

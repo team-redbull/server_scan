@@ -14,7 +14,11 @@ anything outside it.
 
 Caching: list pages are cache-aside under `list_key(...)` — the key is
 fully computable from the request itself (filter/search/sort/cursor hash),
-so there's no bootstrapping problem. Server detail is trickier: the key
+so there's no bootstrapping problem. They carry a short TTL and no
+invalidation on ingest; the two maintenance endpoints are the one
+exception (`_invalidate_list_cache`). ADR-0028 has the reasoning.
+
+Server detail is trickier: the key
 design in `app.infrastructure.redis.keys.server_key` embeds the document's
 `revision` specifically so a write never needs an explicit invalidation
 call, but that means the *current* revision has to be known before the
@@ -71,7 +75,12 @@ from app.infrastructure.redis.cache import (
     CacheClient,
 )
 from app.infrastructure.redis.client import RedisClientHolder
-from app.infrastructure.redis.keys import facets_key, list_key, server_key
+from app.infrastructure.redis.keys import (
+    facets_key,
+    list_and_facets_patterns,
+    list_key,
+    server_key,
+)
 from app.infrastructure.singleflight import coalesce
 from app.utils.digest import stable_hash
 from app.utils.timeutil import utcnow
@@ -469,6 +478,17 @@ async def _invalidate_detail_cache(server_id: str, cache: CacheClient) -> None:
     await cache.delete(_revision_pointer_key(server_id))
 
 
+async def _invalidate_list_cache(cache: CacheClient) -> None:
+    """Drop every cached list page and facet count after an operator write.
+
+    The two maintenance endpoints only — never ingest. ADR-0028 says why.
+
+    Args:
+        cache (CacheClient): The cache client.
+    """
+    await cache.delete_matching(*list_and_facets_patterns())
+
+
 @router.post("/servers/{server_id}/reclassify", response_model=ServerDetail)
 async def reclassify_server(
     server_id: str,
@@ -645,6 +665,7 @@ async def enable_maintenance(
         request_id=request_id,
     )
     await _invalidate_detail_cache(server_id, cache)
+    await _invalidate_list_cache(cache)
     return ServerDetail.from_server(server, nic_name_catalog(settings.nic_os_names))
 
 
@@ -676,4 +697,5 @@ async def disable_maintenance(
     """
     server = await service.disable(server_id, actor=actor, request_id=request_id)
     await _invalidate_detail_cache(server_id, cache)
+    await _invalidate_list_cache(cache)
     return ServerDetail.from_server(server, nic_name_catalog(settings.nic_os_names))

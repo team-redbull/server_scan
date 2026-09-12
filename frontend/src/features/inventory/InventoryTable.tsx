@@ -14,12 +14,14 @@ import { Link, useNavigate } from "react-router";
 import type { ServerListParams } from "@/api/servers";
 import type { SortableField } from "@/features/inventory/sorting";
 import { InstallationBadge } from "@/components/InstallationBadge";
+import { MaintenanceToggle } from "@/features/inventory/MaintenanceToggle";
 import { StateBadge } from "@/components/StateBadge";
 import type { HealthSeverity, OpenShiftState } from "@/types/server";
 import type { ServerSummary } from "@/types/server";
 
 /**
- * Name, Installation, MCE, Cluster, Model, State — in that order.
+ * Name, Installation, MCE, Cluster, Model, State, and the maintenance
+ * switch — in that order.
  *
  * Kept deliberately short of the nine this table once had (vendor, site,
  * fabric, last-updated…): everything cut is one click away on the detail
@@ -28,6 +30,12 @@ import type { ServerSummary } from "@/types/server";
  *
  * MCE renders only when a row on the page actually has one — an estate
  * with no MCE would otherwise scan a column of dashes forever.
+ *
+ * The maintenance switch is the rightmost column and the row's only
+ * write control. It replaced the hover-only "›" disclosure chevron rather
+ * than sitting beside it: a seventh column overflowed the table at laptop
+ * width, and a row that now carries a real button no longer needs a
+ * decorative hint that it leads somewhere.
  *
  * Motion note: rows animate nothing. An operator scrolls this list many
  * times a day, and per-row transitions on a 50-row table are both a
@@ -135,6 +143,15 @@ function buildColumns(withMce: boolean): LegacyColumnDef<ServerSummary, any>[] {
     },
     enableSorting: false,
   }),
+  // Right of State, because it acts on what State just reported. The only
+  // write control in this table, and the only cell whose click does not
+  // open the server.
+  columnHelper.accessor((row) => row, {
+    id: "maintenance",
+    header: "Maint",
+    cell: (info) => <MaintenanceToggle server={info.getValue<ServerSummary>()} />,
+    enableSorting: false,
+  }),
   ];
 }
 
@@ -168,11 +185,15 @@ export function InventoryTable({
   });
 
   return (
-    // No `overflow-hidden` here: it would make this div the sticky
-    // header's containing scroll block, but the div itself never scrolls
-    // (the page does) — so the header would never actually stick. The
-    // rounded top corners are done on the header's own end cells instead.
-    <div className="rounded-[var(--radius-card)] border border-[var(--border-subtle)] bg-[var(--surface-raised)]">
+    // `overflow-x-auto`, never `overflow-hidden`: the columns do not fit a
+    // laptop viewport once the maintenance switch is in, and clipping the
+    // rightmost one silently loses the row's only control. `-x-` alone
+    // matters — any `overflow-y` value other than `visible` would make
+    // this div the sticky header's containing scroll block, and since the
+    // div itself never scrolls vertically (the page does), the header
+    // would stop sticking. Rounded top corners are on the header's own
+    // end cells for the same reason.
+    <div className="overflow-x-auto rounded-[var(--radius-card)] border border-[var(--border-subtle)] bg-[var(--surface-raised)]">
       <table className="min-w-full text-sm">
         {/* Sticky header: at 100+ rows the column meaning otherwise
          * scrolls away exactly when you are deep enough to need it. */}
@@ -183,7 +204,7 @@ export function InventoryTable({
                 <th
                   key={header.id}
                   scope="col"
-                  className={`border-b border-[var(--border-subtle)] px-4 py-2.5 text-left text-xs font-medium tracking-wide text-[var(--text-secondary)] uppercase ${index === 0 ? "rounded-tl-[var(--radius-card)]" : ""}`}
+                  className={`border-b border-[var(--border-subtle)] px-3 py-2.5 text-left text-xs font-medium tracking-wide text-[var(--text-secondary)] uppercase ${index === 0 ? "rounded-tl-[var(--radius-card)]" : ""} ${index === headerGroup.headers.length - 1 ? "rounded-tr-[var(--radius-card)]" : ""}`}
                 >
                   {header.column.getCanSort() ? (
                     <button
@@ -205,12 +226,6 @@ export function InventoryTable({
                   )}
                 </th>
               ))}
-              <th
-                scope="col"
-                className="w-6 rounded-tr-[var(--radius-card)] border-b border-[var(--border-subtle)]"
-              >
-                <span className="sr-only">Open</span>
-              </th>
             </tr>
           ))}
         </thead>
@@ -238,28 +253,17 @@ export function InventoryTable({
               className={`group cursor-pointer border-b border-[var(--border-subtle)] transition-colors duration-[var(--duration-instant)] ease-[var(--ease-out-strong)] last:border-0 hover:bg-[var(--surface-hover)] focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[var(--color-status-info)] ${ROW_ACCENT[row.original.health.overall]}`}
             >
               {row.getVisibleCells().map((cell) => (
-                <td key={cell.id} className="px-4 py-2.5 whitespace-nowrap">
+                <td key={cell.id} className="px-3 py-2.5 whitespace-nowrap">
                   {flexRender(cell.column.columnDef.cell, cell.getContext())}
                 </td>
               ))}
-              {/* Disclosure affordance: appears on hover so the row reads
-                  as "leads somewhere" without adding permanent chrome to
-                  every one of fifty rows. */}
-              <td className="w-6 pr-3 text-right">
-                <span
-                  aria-hidden="true"
-                  className="inline-block text-[var(--text-muted)] opacity-0 transition-opacity duration-[var(--duration-fast)] ease-[var(--ease-out-strong)] group-hover:opacity-100"
-                >
-                  ›
-                </span>
-              </td>
             </tr>
           ))}
           {servers.length === 0 && (
             <tr>
               <td
-                colSpan={columns.length + 1}
-                className="px-4 py-12 text-center text-sm text-[var(--text-muted)]"
+                colSpan={columns.length}
+                className="px-3 py-12 text-center text-sm text-[var(--text-muted)]"
               >
                 {emptyMessage ?? "No servers match the current filters."}
               </td>

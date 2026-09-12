@@ -174,6 +174,31 @@ class CacheClient:
 
         cache_operations_total.labels(operation="set", outcome="success").inc()
 
+    async def delete_matching(self, *patterns: str) -> int:
+        """
+        Delete every key matching any glob. Degrades to 0 on Redis failure.
+
+        `scan_iter`, never `KEYS`, and never on the ingest path — ADR-0028.
+
+        Args:
+            patterns (str): `SCAN MATCH` globs.
+
+        Returns:
+            int: How many keys were deleted.
+        """
+        deleted = 0
+        try:
+            for pattern in patterns:
+                async for key in self._redis.client.scan_iter(match=pattern, count=500):
+                    deleted += await self._redis.client.delete(key)
+        except _CACHE_EXCEPTIONS as exc:
+            logger.warning("cache.delete_matching_failed", patterns=patterns, error=str(exc))
+            cache_operations_total.labels(operation="delete_matching", outcome="error").inc()
+            return deleted
+
+        cache_operations_total.labels(operation="delete_matching", outcome="success").inc()
+        return deleted
+
     async def delete(self, key: str) -> None:
         """
         Delete a cached key. Degrades to a no-op on any Redis failure.

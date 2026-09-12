@@ -154,6 +154,43 @@ async def test_enable_maintenance_sets_fields_and_returns_server_detail(
     assert body["revision"] == server.revision + 1
 
 
+async def test_the_maintenance_filter_reflects_a_write_immediately(
+    app_context: tuple[AsyncClient, MongoServerRepository, MongoHealthPolicyRepository],
+) -> None:
+    """`?maintenance=true` must not serve a page cached before the write.
+
+    A real operator report; ADR-0028 has it.
+    """
+    client, repo, _policy_repo = app_context
+    server = await repo.upsert(_make_server("srv-maint-filter"))
+    query = "/api/v1/servers?maintenance=true&page_size=50"
+
+    # Prime the cache for this filter while the server is NOT in maintenance.
+    assert (await client.get(query)).json()["items"] == []
+
+    await client.put(f"/api/v1/servers/{server.id}/maintenance", json={"reason": "x"})
+    listed = (await client.get(query)).json()["items"]
+    assert [row["id"] for row in listed] == [server.id]
+
+    await client.delete(f"/api/v1/servers/{server.id}/maintenance")
+    assert (await client.get(query)).json()["items"] == []
+
+
+async def test_a_maintenance_write_refreshes_the_facet_counts(
+    app_context: tuple[AsyncClient, MongoServerRepository, MongoHealthPolicyRepository],
+) -> None:
+    """The counts beside the filter are cached on the same key family."""
+    client, repo, _policy_repo = app_context
+    server = await repo.upsert(_make_server("srv-maint-facets"))
+
+    before = (await client.get("/api/v1/servers/facets")).json()["maintenance"]
+    assert before.get("true", 0) == 0
+
+    await client.put(f"/api/v1/servers/{server.id}/maintenance", json={"reason": "x"})
+    after = (await client.get("/api/v1/servers/facets")).json()["maintenance"]
+    assert after.get("true", 0) == 1
+
+
 async def test_enable_maintenance_records_maintenance_enabled_event(
     app_context: tuple[AsyncClient, MongoServerRepository, MongoHealthPolicyRepository],
 ) -> None:

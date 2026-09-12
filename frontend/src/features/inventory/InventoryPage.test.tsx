@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createMemoryRouter, RouterProvider } from "react-router";
 
@@ -429,4 +429,84 @@ describe("InventoryPage", () => {
       expect(url.searchParams.get("sort")).toBeNull();
     }
   });
+
+  it("asks why before putting a server into maintenance, and sends the reason", async () => {
+    mockServerList((url) =>
+      url.pathname === "/api/v1/servers/srv_1/maintenance"
+        ? jsonResponse(makeServer({ maintenance: { enabled: true, reason: "Replacing PSU 2" } }))
+        : jsonResponse(pageResponse([makeServer()])),
+    );
+
+    const { router } = renderInventoryPage();
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Put ocp-dell-worker-001 into maintenance" }),
+    );
+
+    // The card, not the mutation: clicking the icon must not write anything.
+    const card = screen.getByRole("dialog");
+    expect(
+      (fetchMock.mock.calls as [string, RequestInit | undefined][]).some(
+        ([, init]) => init?.method === "PUT",
+      ),
+    ).toBe(false);
+
+    fireEvent.change(within(card).getByLabelText(/why is it going into maintenance/i), {
+      target: { value: "  Replacing PSU 2  " },
+    });
+    fireEvent.click(within(card).getByRole("button", { name: "Start maintenance" }));
+
+    await waitFor(() => {
+      const put = (fetchMock.mock.calls as [string, RequestInit | undefined][]).find(
+        ([input, init]) =>
+          init?.method === "PUT" && input.endsWith("/api/v1/servers/srv_1/maintenance"),
+      );
+      expect(put).toBeDefined();
+      // Trimmed, so a stray space does not become the audit trail's reason.
+      expect(JSON.parse(put?.[1]?.body as string)).toEqual({ reason: "Replacing PSU 2" });
+    });
+    // The row's own click handler must not have fired alongside the button's.
+    expect(router.state.location.pathname).toBe("/");
+  });
+
+  it("cancels the maintenance card without writing anything", async () => {
+    mockServerList(() => jsonResponse(pageResponse([makeServer()])));
+
+    renderInventoryPage();
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Put ocp-dell-worker-001 into maintenance" }),
+    );
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Cancel" }));
+
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(
+      (fetchMock.mock.calls as [string, RequestInit | undefined][]).some(
+        ([, init]) => init?.method === "PUT",
+      ),
+    ).toBe(false);
+  });
+
+  it("ends maintenance in one click, with no card", async () => {
+    mockServerList((url) =>
+      url.pathname === "/api/v1/servers/srv_1/maintenance"
+        ? jsonResponse(makeServer())
+        : jsonResponse(
+            pageResponse([makeServer({ maintenance: { enabled: true, reason: "disk swap" } })]),
+          ),
+    );
+
+    renderInventoryPage();
+    fireEvent.click(
+      await screen.findByRole("button", { name: "End maintenance on ocp-dell-worker-001" }),
+    );
+
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    await waitFor(() => {
+      const del = (fetchMock.mock.calls as [string, RequestInit | undefined][]).find(
+        ([input, init]) =>
+          init?.method === "DELETE" && input.endsWith("/api/v1/servers/srv_1/maintenance"),
+      );
+      expect(del).toBeDefined();
+    });
+  });
+
 });

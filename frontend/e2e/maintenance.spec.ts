@@ -46,4 +46,45 @@ test.describe("Maintenance", () => {
     // Cleanup regardless of assertion outcome above.
     await request.delete(`/api/v1/servers/${serverId}/maintenance`);
   });
+
+  test("toggles maintenance from the inventory list, and the filter keeps up", async ({
+    page,
+    request,
+  }) => {
+    const listResponse = await request.get("/api/v1/servers?page_size=1");
+    const { items } = (await listResponse.json()) as { items: { id: string; name: string }[] };
+    const server = items[0];
+    if (!server) {
+      throw new Error("No seeded server available to test maintenance against.");
+    }
+    await request.delete(`/api/v1/servers/${server.id}/maintenance`);
+
+    await page.goto("/servers");
+
+    // Starting maintenance asks why; ending it does not.
+    await page.getByRole("button", { name: `Put ${server.name} into maintenance` }).click();
+    const card = page.getByRole("dialog");
+    await card.getByLabel(/why is it going into maintenance/i).fill("e2e list toggle");
+    await card.getByRole("button", { name: "Start maintenance" }).click();
+    await expect(card).toBeHidden();
+    await expect(
+      page.getByRole("button", { name: `End maintenance on ${server.name}` }),
+    ).toBeVisible();
+
+    // The reason reached the document, not just the button state.
+    const detail = await (await request.get(`/api/v1/servers/${server.id}`)).json();
+    expect(detail.maintenance.reason).toBe("e2e list toggle");
+
+    // Under "Maintenance only" the row must LEAVE the list the moment it
+    // leaves maintenance — the list page and its facet count are cached
+    // server-side, and this is what ADR-0028 exists for.
+    await page.getByLabel("Maintenance only").click();
+    await expect(page.getByLabel("Maintenance only")).toBeChecked();
+    await expect(page.getByRole("link", { name: server.name })).toBeVisible();
+
+    await page.getByRole("button", { name: `End maintenance on ${server.name}` }).click();
+    await expect(page.getByRole("link", { name: server.name })).toHaveCount(0);
+
+    await request.delete(`/api/v1/servers/${server.id}/maintenance`);
+  });
 });
