@@ -101,7 +101,7 @@ oc create secret generic server-scan-db \
   --from-literal=mongodb-root-password='...' \
   --from-literal=mongodb-passwords='...' \
   --from-literal=redis-password='...' \
-  --from-literal=mongo-uri='mongodb://server_inventory:...@server-scan-mongodb:27017/server_inventory?authSource=server_inventory' \
+  --from-literal=mongo-uri='mongodb://server-scan:...@server-scan-mongodb:27017/server-scan?authSource=server-scan' \
   --from-literal=redis-uri='redis://:...@server-scan-redis-master:6379/0'
 ```
 
@@ -140,15 +140,31 @@ own nginx forwards `/api/` and `/health/` to the API Service in-cluster
 API needs no Route of its own. This replaced a set of five path-scoped API
 Routes on 2026-09-12, at the operator's request.
 
-Two consequences worth knowing before you deploy it:
+**One Route does not mean one path.** The Route's only job is getting
+traffic into the cluster; nginx decides what belongs to the API. These
+are forwarded today, all on the single hostname:
 
-- **`/docs`, `/openapi.json` and `/metrics` are no longer reachable from
-  outside the cluster.** Nothing in the UI calls them. Reach them with
-  `kubectl port-forward svc/<release>-api 8080:80`. Prometheus is
-  unaffected — it scrapes `/metrics` through the Service, in-cluster.
-- **`route.host` is no longer mandatory with the frontend on.** One Route
-  means an OpenShift-generated hostname works; set `route.host` when you
-  want a specific one.
+| Path | Serves |
+|---|---|
+| `/api/` | the REST API the SPA calls |
+| `/health/` | liveness and readiness, which the SPA's status page reads |
+| `/metrics` | Prometheus exposition, readable in a browser |
+| `/docs`, `/redoc` | the OpenAPI pages |
+| `/openapi.json` | the document those pages fetch |
+
+**To expose another one, add a `location` block to
+`frontend-api-proxy-configmap.yaml`** — there is no Route to create and
+no hostname to pick. It is an explicit list rather than a catch-all only
+because the SPA owns `/` and has client-side routes of its own
+(`/servers`, `/rules`, `/health-policies`) that must not be proxied.
+
+`/docs` loads Swagger UI's JavaScript from a public CDN, so on a
+genuinely air-gapped cluster the page will render empty even though it is
+reachable. `/openapi.json` is unaffected and is the useful half there.
+
+**`route.host` is no longer mandatory with the frontend on.** One Route
+means an OpenShift-generated hostname works; set `route.host` when you
+want a specific one.
 
 ## Container security
 

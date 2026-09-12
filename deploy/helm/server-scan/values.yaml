@@ -131,7 +131,7 @@ mongodb:
     #   oc create secret generic server-scan-db \
     #     --from-literal=mongodb-root-password=... \
     #     --from-literal=mongodb-passwords=... \
-    #     --from-literal=mongo-uri='mongodb://server_inventory:...@server-scan-mongodb:27017/server_inventory?authSource=server_inventory'
+    #     --from-literal=mongo-uri='mongodb://server-scan:...@server-scan-mongodb:27017/server-scan?authSource=server-scan'
     #
     # Leave it empty and the two passwords below are used instead, and the
     # chart composes the URI itself.
@@ -144,10 +144,10 @@ mongodb:
     # longer has. Keep them alphanumeric: they go into a URI unescaped, and
     # DO NOT commit them — that is what `existingSecret` is for.
     rootPassword: ""
-    usernames: ["server_inventory"]
+    usernames: ["server-scan"]
     passwords: [""]
-    # Must match INVENTORY_MONGO_DB, whose default is `server_inventory`.
-    databases: ["server_inventory"]
+    # Must match INVENTORY_MONGO_DB, whose default is `server-scan`.
+    databases: ["server-scan"]
 
   persistence:
     enabled: true
@@ -261,13 +261,12 @@ route:
   # Empty lets OpenShift generate one from the Service name.
   #
   # Exactly ONE Route is created either way: the frontend's when
-  # `frontend.enabled`, the API's otherwise. With the frontend on, the SPA's
-  # own nginx proxies /api and /health to the API Service in-cluster
-  # (frontend-api-proxy-configmap.yaml), so the API needs no Route and
-  # `/docs`, `/openapi.json` and `/metrics` are not reachable from outside
-  # the cluster at all. Reach them with
-  # `kubectl port-forward svc/<release>-api 8080:80`; Prometheus scrapes
-  # /metrics through the Service, which is unaffected.
+  # `frontend.enabled`, the API's otherwise. With the frontend on, the
+  # SPA's own nginx forwards /api/, /health/, /metrics, /docs, /redoc and
+  # /openapi.json to the API Service in-cluster, so the API needs no Route
+  # of its own and every one of those is reachable on the single host.
+  # Exposing another path is a `location` block in
+  # templates/frontend-api-proxy-configmap.yaml, never another Route.
   host: ""
 
 # Real vendor collectors, run as CronJobs against the same image as the

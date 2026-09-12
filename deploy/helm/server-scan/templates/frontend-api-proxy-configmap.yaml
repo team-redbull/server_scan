@@ -1,8 +1,13 @@
 {{- if .Values.frontend.enabled }}
 {{- /*
-The whole reason there is one Route and not six: nginx forwards the two
-path prefixes the browser actually calls to the API Service, so the SPA's
-same-origin requests never need a Route of their own. See deploy/README.md.
+Why there is one Route and not one per endpoint: the Route only gets
+traffic into the cluster. nginx decides which paths belong to the API and
+forwards them to its Service, so exposing another API path is one line
+here — no second Route, no second hostname. See deploy/README.md.
+
+A list rather than a catch-all because the SPA owns `/` and has its own
+client-side routes (/servers, /rules, /health-policies); forwarding
+everything would send those to the API and break a hard refresh.
 
 Mounted into /etc/nginx/api-proxy.d, which frontend/nginx.conf includes
 from inside its `server` block.
@@ -13,6 +18,7 @@ happens to start before the API Service object exists, it crash-loops
 until it does — seconds, self-healing, and not worth a `resolver`
 directive whose address differs between OpenShift and vanilla k8s.
 */ -}}
+{{- $api := printf "http://%s-api:80" .Release.Name }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -24,7 +30,7 @@ metadata:
 data:
   api-proxy.conf: |
     location /api/ {
-      proxy_pass http://{{ .Release.Name }}-api:80/api/;
+      proxy_pass {{ $api }}/api/;
       proxy_http_version 1.1;
       proxy_set_header Host $host;
       proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -38,7 +44,38 @@ data:
     # on that page — the same trap frontend/vite.config.ts documents for
     # the dev proxy.
     location /health/ {
-      proxy_pass http://{{ .Release.Name }}-api:80/health/;
+      proxy_pass {{ $api }}/health/;
+      proxy_http_version 1.1;
+      proxy_set_header Host $host;
+    }
+
+    # Prometheus scrapes this through the Service, in-cluster, and does
+    # not need the Route. It is here so a human can read it from a
+    # browser. `=` is an exact match: the SPA has no /metrics route to
+    # shadow, and an exact location cannot grow one by accident.
+    location = /metrics {
+      proxy_pass {{ $api }}/metrics;
+      proxy_http_version 1.1;
+      proxy_set_header Host $host;
+    }
+
+    # The OpenAPI page and the document it fetches. Both exact matches for
+    # the same reason; /docs in particular must not become a prefix, or a
+    # future SPA route under /docs/... would be swallowed.
+    location = /docs {
+      proxy_pass {{ $api }}/docs;
+      proxy_http_version 1.1;
+      proxy_set_header Host $host;
+    }
+
+    location = /redoc {
+      proxy_pass {{ $api }}/redoc;
+      proxy_http_version 1.1;
+      proxy_set_header Host $host;
+    }
+
+    location = /openapi.json {
+      proxy_pass {{ $api }}/openapi.json;
       proxy_http_version 1.1;
       proxy_set_header Host $host;
     }
