@@ -148,7 +148,7 @@ function buildColumns(withMce: boolean): LegacyColumnDef<ServerSummary, any>[] {
   // open the server.
   columnHelper.accessor((row) => row, {
     id: "maintenance",
-    header: "Maint",
+    header: "Maintenance",
     cell: (info) => <MaintenanceToggle server={info.getValue<ServerSummary>()} />,
     enableSorting: false,
   }),
@@ -204,7 +204,7 @@ export function InventoryTable({
                 <th
                   key={header.id}
                   scope="col"
-                  className={`border-b border-[var(--border-subtle)] px-3 py-2.5 text-left text-xs font-medium tracking-wide text-[var(--text-secondary)] uppercase ${index === 0 ? "rounded-tl-[var(--radius-card)]" : ""} ${index === headerGroup.headers.length - 1 ? "rounded-tr-[var(--radius-card)]" : ""}`}
+                  className={`border-b border-[var(--border-subtle)] px-2 py-2.5 text-center text-xs font-medium tracking-wide text-[var(--text-secondary)] uppercase ${index === 0 ? "rounded-tl-[var(--radius-card)]" : ""} ${index === headerGroup.headers.length - 1 ? "rounded-tr-[var(--radius-card)]" : ""}`}
                 >
                   {header.column.getCanSort() ? (
                     <button
@@ -253,7 +253,7 @@ export function InventoryTable({
               className={`group cursor-pointer border-b border-[var(--border-subtle)] transition-colors duration-[var(--duration-instant)] ease-[var(--ease-out-strong)] last:border-0 hover:bg-[var(--surface-hover)] focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[var(--color-status-info)] ${ROW_ACCENT[row.original.health.overall]}`}
             >
               {row.getVisibleCells().map((cell) => (
-                <td key={cell.id} className="px-3 py-2.5 whitespace-nowrap">
+                <td key={cell.id} className="px-2 py-2.5 text-center whitespace-nowrap">
                   {flexRender(cell.column.columnDef.cell, cell.getContext())}
                 </td>
               ))}

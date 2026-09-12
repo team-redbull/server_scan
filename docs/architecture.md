@@ -351,14 +351,17 @@ and exposed via reclassify/recalculate endpoints.
   served a page computed before the write, so a server taken back out of
   maintenance kept appearing in a list whose whole meaning is that it is
   in maintenance.
-- **Reachable from the inventory list, not just the detail page**
-  (2026-09-12): each row carries a one-click switch
+- **Switched from the inventory list, and only from there**
+  (2026-09-12): each row carries a switch
   (`features/inventory/MaintenanceToggle`) backed by a row-agnostic
   mutation — the server id is a mutation *variable*, since a hook cannot
-  be called per row. It sends no reason, which the API already allows;
-  reason and ticket stay on the detail page. It is the only cell in the
-  table whose click does not open the server, so it stops propagation
-  itself rather than relying on the row handler's anchor check.
+  be called per row. Entering maintenance asks for a reason in a small
+  card; leaving is one click. `OverviewTab` shows state and reason
+  read-only — its own start/end controls were removed the same day at
+  the operator's request, so there is one place this is done from and
+  one flow to audit. It is the only cell in the table whose click does
+  not open the server, so it stops propagation itself rather than
+  relying on the row handler's anchor check.
 - `audit_events` is append-only by construction, not by convention:
   `MongoAuditEventRepository` exposes only `record()` — no `update`/
   `delete` method exists on the class at all, so no code path in this
@@ -476,7 +479,9 @@ summary:
   was no flow to test. Fixed: `app/api/servers.ts` gained
   `enableMaintenance`/`disableMaintenance`, `app/features/servers/
   hooks.ts` gained the matching mutations, and `OverviewTab` gained an
-  inline start/end-maintenance control.
+  inline start/end-maintenance control. (That control has since moved
+  to the inventory list — see slice 4 above; the detail page is
+  read-only for maintenance again, by request rather than by omission.)
 - `frontend/e2e/` (Playwright) covers inventory search/detail/tabs,
   classification-rule create+preview+disable+delete, health-policy
   create+shadow-panel+delete, and maintenance enable/disable — run three

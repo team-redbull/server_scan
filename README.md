@@ -57,9 +57,11 @@ over without silently dropping rows
 (`docs/adr/0026-nullable-sort-fields.md`). MCE appears as a column only
 when a row on the page has one.
 
-The maintenance switch is the one write control in the table: 🔧 pauses a
-server, ▶ returns it, both without leaving the list or naming a reason.
-A reason and a ticket are still the detail page's job.
+The maintenance switch is the one write control in the app, and it lives
+only in this table: the tools icon opens a card asking why and pauses the
+server, the play icon returns it in one click. The server detail page
+shows the current state and reason read-only — it has no control of its
+own, so there is exactly one place maintenance is switched from.
 
 **The UI is dark only** and deliberately ignores the viewer's system
 theme: it is watched on wall displays in dim rooms, and a light flash on

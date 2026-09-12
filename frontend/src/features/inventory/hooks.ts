@@ -44,9 +44,9 @@ export function useServerFacetsQuery(params: ServerListParams) {
  * Toggle one server's maintenance mode from the inventory list.
  *
  * Row-agnostic — the server's id is a mutation *variable*, not a closure
- * over a hook argument, because a hook cannot be called per row. `ticket`
- * and `expected_end` stay on the detail page; only the reason is worth
- * asking for inline.
+ * over a hook argument, because a hook cannot be called per row. This is
+ * the app's ONLY maintenance write path — the detail page is read-only.
+ * `ticket` and `expected_end` are API-only today.
  *
  * Args:
  *   None.

@@ -86,7 +86,6 @@ frontend/src/features/inventory/InventoryTable.tsx 5
 frontend/src/features/rules/RulesPage.tsx 1
 frontend/src/features/servers/ConnectivityTab.tsx 1
 frontend/src/features/servers/HardwareTab.test.tsx 3
-frontend/src/features/servers/hooks.ts 1
 frontend/src/features/sites/SitesOverviewPage.test.tsx 1
 frontend/src/router.tsx 1
 tests/_stack_availability.py 1

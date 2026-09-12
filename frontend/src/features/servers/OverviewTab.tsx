@@ -1,7 +1,5 @@
-import type { FormEvent, ReactNode } from "react";
-import { useState } from "react";
+import type { ReactNode } from "react";
 
-import { ApiError } from "@/api/client";
 import { Badge } from "@/components/Badge";
 import { HealthBadge } from "@/components/HealthBadge";
 import { InstallationBadge } from "@/components/InstallationBadge";
@@ -10,18 +8,6 @@ import type { HealthSummary, ServerDetail } from "@/types/server";
 
 interface OverviewTabProps {
   server: ServerDetail;
-  /** Both omitted (rather than made required) so `OverviewTab` stays
-   * usable in a read-only context — `ServerDetailPage` is the only
-   * current caller and always supplies both, but nothing here should
-   * force every future caller to own maintenance mutations just to
-   * render an overview. */
-  onEnableMaintenance?: (reason: string) => void;
-  onDisableMaintenance?: () => void;
-  maintenancePending?: boolean;
-  /** The failed mutation's error, if the last enable/disable attempt
-   * failed — this is the app's only write path, and a failure here used
-   * to be completely silent (the button just re-enabled). */
-  maintenanceError?: unknown;
 }
 
 /** What each collector's own vendor calls this concept — Cisco UCS's
@@ -39,30 +25,10 @@ const PROFILE_TEMPLATE_LABELS: Record<string, string> = {
   OPENMANAGE: "Deployment template",
 };
 
-function maintenanceErrorMessage(error: unknown): string {
-  if (error instanceof ApiError) {
-    return error.problem.detail;
-  }
-  return error instanceof Error ? error.message : "Failed to update maintenance.";
-}
-
-export function OverviewTab({
-  server,
-  onEnableMaintenance,
-  onDisableMaintenance,
-  maintenancePending,
-  maintenanceError,
-}: OverviewTabProps) {
-  const [reason, setReason] = useState("");
+export function OverviewTab({ server }: OverviewTabProps) {
   const profileTemplateLabel = server.source_provider
     ? PROFILE_TEMPLATE_LABELS[server.source_provider]
     : undefined;
-
-  function handleEnable(e: FormEvent) {
-    e.preventDefault();
-    onEnableMaintenance?.(reason);
-    setReason("");
-  }
 
   return (
     <dl className="grid grid-cols-1 gap-x-8 gap-y-4 sm:grid-cols-2">
@@ -79,55 +45,17 @@ export function OverviewTab({
       <Field label="OpenShift" value={<OpenShiftValue server={server} />} />
       <Field label="Overall health" value={<HealthBadge severity={server.health.overall} />} />
       <Field label="Health breakdown" value={<HealthBreakdown health={server.health} />} />
+      {/* Read-only on purpose: maintenance is switched from the inventory
+          list, where the operator can see the whole fleet. This only says
+          whether it is on, and why. */}
       <Field
         label="Maintenance"
         value={
-          <div className="flex flex-col gap-2">
-            {server.maintenance.enabled ? (
-              <>
-                <Badge tone="warning">{server.maintenance.reason ?? "Enabled"}</Badge>
-                {onDisableMaintenance && (
-                  <button
-                    type="button"
-                    onClick={onDisableMaintenance}
-                    disabled={maintenancePending}
-                    className="w-fit rounded border border-gray-300 px-2 py-1 text-xs disabled:cursor-not-allowed disabled:opacity-40 dark:border-gray-600"
-                  >
-                    End maintenance
-                  </button>
-                )}
-              </>
-            ) : (
-              <>
-                <span>Not in maintenance</span>
-                {onEnableMaintenance && (
-                  <form onSubmit={handleEnable} className="flex items-center gap-2">
-                    <input
-                      type="text"
-                      value={reason}
-                      onChange={(e) => {
-                        setReason(e.target.value);
-                      }}
-                      placeholder="Reason (optional)"
-                      className="rounded border border-gray-300 px-2 py-1 text-xs dark:border-gray-600 dark:bg-gray-900"
-                    />
-                    <button
-                      type="submit"
-                      disabled={maintenancePending}
-                      className="w-fit shrink-0 rounded border border-gray-300 px-2 py-1 text-xs disabled:cursor-not-allowed disabled:opacity-40 dark:border-gray-600"
-                    >
-                      Start maintenance
-                    </button>
-                  </form>
-                )}
-              </>
-            )}
-            {maintenanceError != null && (
-              <p role="alert" className="text-xs text-red-600 dark:text-red-400">
-                {maintenanceErrorMessage(maintenanceError)}
-              </p>
-            )}
-          </div>
+          server.maintenance.enabled ? (
+            <Badge tone="warning">{server.maintenance.reason ?? "Enabled"}</Badge>
+          ) : (
+            <span className="text-[var(--text-secondary)]">Not in maintenance</span>
+          )
         }
       />
       {!server.reachable && (
