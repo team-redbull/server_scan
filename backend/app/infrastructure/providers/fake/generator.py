@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import random
 import uuid
+import zlib
 from collections.abc import Iterator
 from dataclasses import replace
 
@@ -423,6 +424,12 @@ _OPER_STATE_PATTERNS: dict[int, tuple[tuple[str, ...], ...]] = {
     2: (("UP", "UP"), ("UP", "DOWN"), ("DOWN", "DOWN")),
     4: (("UP", "UP", "UP", "UP"), ("UP", "UP", "UP", "DOWN"), ("UP", "DOWN", "UP", "DOWN")),
 }
+
+# The seeded minority whose links really are down, so the two link
+# policies have something to fire on now that a Cisco server's UNKNOWN
+# vNICs no longer trip them by accident (ADR-0027's "Seeded data").
+_ALL_LINKS_DOWN_PER_MILLE = 30
+_SINGLE_LINK_UP_PER_MILLE = 40
 
 # vNICs UCS carves out of each physical port (adaptorHostEthIf per
 # adaptorExtEthIf). Two is the common OCP bond.
@@ -954,6 +961,28 @@ def _nic_port_count(rng: random.Random, collector: ManagerType, *, slot: int | N
     return rng.randint(2, 4)
 
 
+def _link_states(macs: tuple[str, ...]) -> tuple[str, ...]:
+    """
+    Real UP/DOWN readings for one server's ports, faults included.
+
+    Keyed off the MAC, not `rng`, and never UNKNOWN — ADR-0027's "Seeded
+    data" says why both.
+
+    Args:
+        macs (tuple[str, ...]): The server's MACs, one per port.
+
+    Returns:
+        tuple[str, ...]: One link state per port, in order.
+    """
+    ports = len(macs)
+    draw = zlib.crc32(macs[0].encode()) % 1000 if macs else 999
+    if draw < _ALL_LINKS_DOWN_PER_MILLE:
+        return ("DOWN",) * ports
+    if draw < _ALL_LINKS_DOWN_PER_MILLE + _SINGLE_LINK_UP_PER_MILLE and ports >= 2:
+        return ("UP",) + ("DOWN",) * (ports - 1)
+    return ("UP",) * ports
+
+
 def _nics_for(
     rng: random.Random, collector: ManagerType, macs: tuple[str, ...], *, slot: int | None
 ) -> tuple[ProviderNic, ...]:
@@ -980,6 +1009,7 @@ def _nics_for(
             ProviderNic(name=f"eth{i}", mac=mac, speed_mbps=None, link_state="UNKNOWN")
             for i, mac in enumerate(macs)
         )
+    states = _link_states(macs)
     if collector is ManagerType.ONEVIEW:
         # HPE names a port by its adapter and port number, not an FQDD.
         return tuple(
@@ -987,10 +1017,10 @@ def _nics_for(
                 name=f"Physical Port {port}",
                 mac=mac,
                 speed_mbps=rng.choice((10_000, 25_000)),
-                link_state="UP" if port == 1 else rng.choice(("UP", "DOWN")),
+                link_state=state,
                 location=f"1:{port}",
             )
-            for port, mac in enumerate(macs, start=1)
+            for port, (mac, state) in enumerate(zip(macs, states, strict=True), start=1)
         )
     # Onboard first, then the add-in card, because that is the order a
     # BMC enumerates them and therefore the order the MACs come back in.
@@ -1003,7 +1033,7 @@ def _nics_for(
                 name=f"NIC.Integrated.1-{port}-1",
                 mac=mac,
                 speed_mbps=rng.choice((10_000, 25_000)),
-                link_state="UP",
+                link_state=states[port - 1],
                 location=f"1/{port}/1",
             )
         )
@@ -1014,7 +1044,7 @@ def _nics_for(
                     name=f"NIC.Slot.{slot}-{port}-1",
                     mac=mac,
                     speed_mbps=rng.choice((25_000, 100_000)),
-                    link_state="UP",
+                    link_state=states[_ONBOARD_PORTS + port - 1],
                     location=f"{slot}/{port}/1",
                 )
             )

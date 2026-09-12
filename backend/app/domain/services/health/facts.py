@@ -135,6 +135,10 @@ def extract_facts(server: Server) -> dict[str, Any]:
         "memory.degraded_dimm_count": sum(1 for d in dimms if d.health in _NOT_GOOD),
         "network.interface_link_states": link_states,
         "network.interface_count": len(link_states),
+        # The denominator every link policy compares against, NOT
+        # `interface_count`: UNKNOWN means "not read", never "not up".
+        # See ADR-0027.
+        "network.links_known_count": sum(1 for s in link_states if s != "UNKNOWN"),
         # Counted UP rather than counting DOWN: a server with unused NICs
         # has DOWN links and is perfectly healthy, so "any link down" is a
         # useless signal. "Nothing is up" is the one that means something,

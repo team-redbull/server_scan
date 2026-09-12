@@ -329,6 +329,15 @@ def build_default_registry() -> MetricRegistry:
     )
     registry.register(
         MetricDef(
+            name="network.links_known_count",
+            type=MetricType.INT,
+            category="network",
+            description="Interfaces whose link state was actually readable (not UNKNOWN)",
+            resolver=lambda f: _get(f, "network.links_known_count", 0),
+        )
+    )
+    registry.register(
+        MetricDef(
             name="gpu.count",
             type=MetricType.INT,
             category="gpu",

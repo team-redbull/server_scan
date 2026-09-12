@@ -296,27 +296,33 @@ def default_system_policies() -> list[HealthPolicy]:
 
     # Deliberately NOT "any link is down": a server with unused NICs has
     # down links and is perfectly healthy, so that would fire on most of
-    # the fleet forever. `interface_count GTE 1` is what separates "every
-    # link is down" from "no interfaces were reported at all" — the latter
-    # is a collection gap, not a network failure, and must not alert.
+    # the fleet forever. `links_known_count GTE 1` — not `interface_count`
+    # — is what separates "every link is down" from "no link state could be
+    # read at all"; see ADR-0027.
     all_links_down = HealthPolicy(
         id=new_id("health_policy"),
         name="No network link up",
         description=(
-            "Fires when a server reports interfaces and none of them is up. "
-            "Says nothing about a server whose interfaces were never read."
+            "Fires when a server reports readable link states and none of them "
+            "is up. Says nothing about a server whose link states were never read."
         ),
         policy_key="network.all_links_down",
         category="network",
         severity=HealthSeverity.CRITICAL,
         condition=Condition(
             all_of=[
-                Condition(metric="network.interface_count", operator="GTE", value=1),
+                Condition(metric="network.links_known_count", operator="GTE", value=1),
                 Condition(metric="network.links_up_count", operator="EQ", value=0),
             ]
         ),
-        evidence=[EvidenceField(key="interfaces", metric="network.interface_count")],
-        message_template="no network link is up across {interfaces} interface(s)",
+        evidence=[
+            EvidenceField(key="interfaces", metric="network.links_known_count"),
+            EvidenceField(key="reported", metric="network.interface_count"),
+        ],
+        message_template=(
+            "no network link is up across {interfaces} of {reported} interface(s) "
+            "with a readable link state"
+        ),
         scope=PolicyScope(),
         source="SYSTEM_DEFAULT",
         priority=100,
@@ -404,15 +410,15 @@ def default_system_policies() -> list[HealthPolicy]:
         severity=HealthSeverity.MAJOR,
         condition=Condition(
             all_of=[
-                Condition(metric="network.interface_count", operator="GTE", value=2),
+                Condition(metric="network.links_known_count", operator="GTE", value=2),
                 Condition(metric="network.links_up_count", operator="EQ", value=1),
             ]
         ),
         evidence=[
             EvidenceField(key="up", metric="network.links_up_count"),
-            EvidenceField(key="interfaces", metric="network.interface_count"),
+            EvidenceField(key="interfaces", metric="network.links_known_count"),
         ],
-        message_template="only {up} of {interfaces} network links is up",
+        message_template="only {up} of {interfaces} readable network links is up",
         scope=PolicyScope(),
         source="SYSTEM_DEFAULT",
         priority=100,

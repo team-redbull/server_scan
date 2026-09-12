@@ -107,3 +107,49 @@ def test_extract_facts_link_states() -> None:
     )
     facts = extract_facts(server)
     assert facts["network.interface_link_states"] == ["UP", "DOWN"]
+
+
+def _with_links(*states: LinkState) -> dict[str, object]:
+    """
+    Extract facts for a server whose only feature is its link states.
+
+    Args:
+        states (LinkState): One per interface, in order.
+
+    Returns:
+        dict[str, object]: The extracted facts.
+    """
+    server = Server(
+        _id="srv_x",
+        name="x",
+        identity=IDENTITY,
+        created_at=NOW,
+        updated_at=NOW,
+        network=NetworkInfo(
+            interfaces=[
+                NetworkInterface(name=f"nic{n}", link_state=state)
+                for n, state in enumerate(states, start=1)
+            ]
+        ),
+    )
+    return extract_facts(server)
+
+
+def test_links_known_count_excludes_unknown_link_states() -> None:
+    """A link state of UNKNOWN is "not read", never "not up".
+
+    UCS reports UNKNOWN on ~99.75% of vNICs, so counting one as a down
+    link made nearly every Cisco server read CRITICAL — ADR-0027.
+    """
+    facts = _with_links(LinkState.UP, LinkState.DOWN, LinkState.UNKNOWN, LinkState.DISABLED)
+
+    assert facts["network.interface_count"] == 4
+    assert facts["network.links_known_count"] == 3
+    assert facts["network.links_up_count"] == 1
+
+
+def test_links_known_count_is_zero_when_nothing_could_be_read() -> None:
+    facts = _with_links(LinkState.UNKNOWN, LinkState.UNKNOWN)
+
+    assert facts["network.interface_count"] == 2
+    assert facts["network.links_known_count"] == 0

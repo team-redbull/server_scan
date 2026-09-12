@@ -16,6 +16,7 @@ from app.domain.enums import HealthSeverity, LinkState
 from app.domain.models.hardware import Gpu, Hardware, Power, Psu, Storage, StorageDrive
 from app.domain.models.network import NetworkInfo, NetworkInterface
 from app.domain.models.server import Server
+from app.domain.services.health.evaluate import evaluate_health
 from app.domain.services.health.facts import extract_facts
 from app.domain.services.health.health_policy_defaults import default_system_policies
 from app.domain.services.health.metrics import build_default_registry
@@ -189,4 +190,74 @@ class TestNoFalseAlarms:
         """
         facts = extract_facts(_server())
         assert facts["gpu.count"] == 0
+        assert facts["gpu.failed_count"] == 0
+
+
+class TestUnknownIsNotAVerdict:
+    """A field a collector could not read must not be judged (ADR-0027)."""
+
+    @staticmethod
+    def _network_severity(*states: LinkState) -> HealthSeverity:
+        """
+        Run the seeded defaults over a server with just these link states.
+
+        Args:
+            states (LinkState): One per interface, in order.
+
+        Returns:
+            HealthSeverity: The rolled-up `network` category severity.
+        """
+        server = _server(
+            network=NetworkInfo(
+                interfaces=[
+                    NetworkInterface(name=f"nic{n}", link_state=state)
+                    for n, state in enumerate(states, start=1)
+                ]
+            )
+        )
+        state = evaluate_health(
+            extract_facts(server),
+            default_system_policies(),
+            build_default_registry(),
+            vendor="cisco",
+            manager_type=None,
+            site_id=None,
+        )
+        return state.categories["network"].severity
+
+    def test_all_link_states_unknown_is_not_critical(self) -> None:
+        """The symptom this rule exists for: UCS reports UNKNOWN on ~99.75%
+        of vNICs, which used to read as "no link is up" and marked nearly
+        every Cisco server CRITICAL.
+        """
+        assert self._network_severity(LinkState.UNKNOWN, LinkState.UNKNOWN) != (
+            HealthSeverity.CRITICAL
+        )
+
+    def test_one_up_link_beside_unknowns_is_not_major(self) -> None:
+        """Redundancy cannot be judged against links nothing could read."""
+        assert self._network_severity(LinkState.UP, LinkState.UNKNOWN) != HealthSeverity.MAJOR
+
+    def test_links_that_really_are_all_down_are_still_critical(self) -> None:
+        """The check must still fire on a reading, or the fix broke it."""
+        assert self._network_severity(LinkState.DOWN, LinkState.DOWN) == HealthSeverity.CRITICAL
+
+    def test_one_up_of_two_real_readings_is_still_major(self) -> None:
+        assert self._network_severity(LinkState.UP, LinkState.DOWN) == HealthSeverity.MAJOR
+
+    def test_no_other_fact_counts_unknown_as_a_failure(self) -> None:
+        """The audit behind ADR-0027: every other health fact already
+        counts only definite-bad readings, so UNKNOWN is excluded there.
+        """
+        facts = extract_facts(
+            _server(
+                storage=Storage(drives=[StorageDrive(id="d", health=HealthSeverity.UNKNOWN.value)]),
+                power=Power(psus=[Psu(id="p", health="UNKNOWN")]),
+                gpus=[Gpu(health="UNKNOWN")],
+            )
+        )
+        assert facts["storage.failed_drive_count"] == 0
+        assert facts["storage.warning_drive_count"] == 0
+        assert facts["storage.data_bad_disk_count"] == 0
+        assert facts["power.failed_psu_count"] == 0
         assert facts["gpu.failed_count"] == 0
