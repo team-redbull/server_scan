@@ -13,7 +13,7 @@ backend/app/application/services/bootstrap.py 2
 backend/app/application/services/classification_service.py 3
 backend/app/application/services/health_policy_service.py 5
 backend/app/application/services/ingest.py 11
-backend/app/config/settings.py 31
+backend/app/config/settings.py 30
 backend/app/dependencies.py 1
 backend/app/domain/enums/core.py 6
 backend/app/domain/models/audit_event.py 3
@@ -64,7 +64,7 @@ backend/app/infrastructure/providers/openmanage/mapping.py 4
 backend/app/infrastructure/providers/openmanage/provider.py 6
 backend/app/infrastructure/providers/redfish/client.py 14
 backend/app/infrastructure/providers/redfish/mapping.py 20
-backend/app/infrastructure/providers/redfish/provider.py 11
+backend/app/infrastructure/providers/redfish/provider.py 10
 backend/app/infrastructure/providers/redfish/targets.py 3
 backend/app/infrastructure/providers/ucs_central/client.py 4
 backend/app/infrastructure/providers/ucs_central/provider.py 9

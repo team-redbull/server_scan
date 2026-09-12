@@ -50,11 +50,16 @@ far, in order:
     (`docs/adr/0024-openshift-cluster-membership.md`).
 
 The inventory table shows **Name, Installation, MCE, Cluster, Model,
-State**, and sorts on Name, Model, Installation, Cluster and MCE. The last
-two are nullable — plenty of servers have no cluster — which needed a
-null-aware keyset cursor to page over without silently dropping rows
+State** and a per-row maintenance switch, and sorts on Name, Model,
+Installation, Cluster and MCE. The last two are nullable — plenty of
+servers have no cluster — which needed a null-aware keyset cursor to page
+over without silently dropping rows
 (`docs/adr/0026-nullable-sort-fields.md`). MCE appears as a column only
 when a row on the page has one.
+
+The maintenance switch is the one write control in the table: 🔧 pauses a
+server, ▶ returns it, both without leaving the list or naming a reason.
+A reason and a ticket are still the detail page's job.
 
 **The UI is dark only** and deliberately ignores the viewer's system
 theme: it is watched on wall displays in dim rooms, and a light flash on
@@ -131,7 +136,9 @@ that disagreement is the signal**, so nothing reconciles them.
 A server's **site** is not configured *per manager*: it is parsed from
 the server's own name (`ocp4-prod-tlv-infra-01` -> site `tlv`), so a
 misconfigured manager cannot mislabel everything it collects. A name with
-no site token is surfaced as "Unassigned" rather than defaulted.
+no site token is surfaced as "Unassigned" rather than defaulted — as a
+card on the sites overview that appears only while something is actually
+in it, unlike a configured site, which shows at zero.
 
 **Which sites exist is one environment variable**, because a site code is
 a property of your hostname convention rather than of this code:
@@ -196,7 +203,7 @@ MongoDB is the only thing that ties a collector run to what the UI shows
 vendor manager directly. Adding a new vendor is: write a `ServerInventoryProvider`
 implementation for it (see `app.infrastructure.providers.ucs_manager` as
 the reference), register it in `tools/run_collector.py`, and add a
-CronJob to `deploy/helm/server-inventory` — nothing in the API, the
+CronJob to `deploy/helm/server-scan` — nothing in the API, the
 classification engine, the health engine, or the frontend needs to
 change. (The membership jobs are the other chart,
 `deploy/helm/openshift-membership`, and do not go through this seam at
@@ -419,12 +426,24 @@ is reachable.
 **What to look at once it's seeded** (`--count 1000 --seed 42`):
 
 * **The sites overview's six fleet cards** read 1000 across all sites,
-  453 UPI, 292 hosted-cluster and 127 MCE on the first row, then 191
-  available and 706 installed on the second. (128 servers are
-  unclassified and 103 are installed-to-inventory; neither has a card,
-  both are filterable.) Every card is meant to be non-empty and visibly
-  different — an unclassified server is a real state, not a seeding
-  accident, and so is an available one.
+  585 UPI, 313 hosted-cluster and 102 MCE on the first row, then 204
+  available and 796 installed on the second. Measured, not estimated —
+  re-measure rather than trust these if the generator changes. Nothing
+  lands in `UNCLASSIFIED`, which is not a seeding gap: UPI's default rule
+  became an unconditional `.*` on 2026-09-10, so the system rules cannot
+  produce that state at all. Every card is meant to be non-empty and
+  visibly different — an available server is a real state, not a seeding
+  accident.
+* **The four site cards plus Unassigned**: 211 nyc, 224 tlv, 224 bat-yam,
+  220 five, and 121 with no site token in the name. That last one is why
+  the Unassigned card is worth having — and why it is hidden when it
+  would read zero, since on a real estate it usually does.
+* **Both network link policies fire, and Cisco is deliberately exempt.**
+  22 servers report every readable link down (CRITICAL) and 17 report one
+  up (MAJOR), while the 324 UCS/Intersight servers report `UNKNOWN` for
+  every vNIC and are scored on nothing —
+  `docs/adr/0027-unknown-is-not-a-reading.md`. Before that ADR those 324
+  were all CRITICAL, which is what made the two real cases invisible.
 * **Availability is not derived from the name.** A seeded server named
   `ocp4-prod-tlv-compute-01` can come back `AVAILABLE`, because a freed
   server keeps the name it was installed under. That disagreement between
@@ -529,7 +548,7 @@ tests/           unit / integration / api tests
 tools/           operational CLIs: fake-data seeder, index/load verification,
                  the real-collector runner (tools/run_collector.py)
 scripts/         dev environment helpers
-deploy/          Helm charts: server-inventory (API, frontend, per-vendor
+deploy/          Helm charts: server-scan (API, frontend, per-vendor
                  collector CronJobs) and openshift-membership (the two
                  per-cluster jobs that report what each cluster is using)
 docs/            architecture notes, ADRs, cisco-collectors.md (the

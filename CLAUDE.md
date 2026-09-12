@@ -567,16 +567,29 @@ closing that gap would require.
 
 **Widened the same day to cover auth failures too, both collectors**,
 after a real OME run hit rejected credentials often enough that PARTIAL
-stopped meaning anything unusual: a rejected login, a credential the auth
-guard disabled after repeated rejections, and the run-wide auth-failure
-budget being spent are now all exit-0-safe, via
-`tools.run_collector._is_benign_collection_error` and three new exported
-markers on `..redfish.provider` (`AUTH_REJECTED_MARKER`/
-`AUTH_CREDENTIAL_DISABLED_MARKER`/`AUTH_BUDGET_EXHAUSTED_MARKER`). **Still
-PARTIAL-worthy**: TLS failures, a per-host time budget exceeded, and any
-other unrecognized error — none of those are auth/reachability outcomes
-in the same "happens on a normal Tuesday" sense as the four markers
-above. See ADR-0016's second 2026-09-10 update for the full reasoning.
+stopped meaning anything unusual: a rejected login is exit-0-safe, via
+`tools.run_collector._is_benign_collection_error` and
+`..redfish.provider.AUTH_REJECTED_MARKER`. **Still PARTIAL-worthy**: TLS
+failures, a per-host time budget exceeded, and any other unrecognized
+error — none of those are auth/reachability outcomes in the same "happens
+on a normal Tuesday" sense. See ADR-0016's second 2026-09-10 update.
+
+**Nothing skips a BMC any more, since 2026-09-12** — `_AuthGuard` is
+deleted, with `INVENTORY_REDFISH_AUTH_FAILURE_THRESHOLD`/`_BUDGET`, the
+two Helm values, and the `AUTH_CREDENTIAL_DISABLED_MARKER`/
+`AUTH_BUDGET_EXHAUSTED_MARKER` shapes. Every host in the inventory is
+attempted every run however many earlier hosts rejected the same
+credential; each rejection logs `redfish.bmc_login_failed` at ERROR and
+the run summary carries `auth_failures`. **The lockout risk it covered is
+real and is now the operator's** — re-running with a wrong shared
+credential locks Lenovo XCC accounts and IP-blocks this collector from
+every iDRAC for an hour. Do not re-add a breaker without asking; this was
+an explicit operator decision (ADR-0016's 2026-09-12 update).
+**`OPENMANAGE` goes one further: a rejected login now writes the same
+`reachable=False` placeholder a dead BMC does**
+(`..openmanage.provider._is_uncollected`, which replaced
+`_is_unreachable`). `REDFISH_STANDALONE` still writes none — no serial to
+correlate against.
 
 **`ONEVIEW` (HPE) deliberately does *not* copy that split, and this is
 the thing a future session is most likely to get wrong.** The estate runs
@@ -715,7 +728,7 @@ non-obvious enough to bite you.
   each went.
 - **These jobs are a *separate* Helm chart**, `deploy/helm/openshift-
   membership`, one release per cluster — they run inside every OpenShift
-  cluster, not beside the API. `deploy/helm/server-inventory` is still
+  cluster, not beside the API. `deploy/helm/server-scan` is still
   the platform itself. A kustomize `cronjobs/` tree used to hold this and
   is deleted; don't resurrect it.
 - **A change that is correct on a fresh database is not automatically
@@ -841,6 +854,33 @@ non-obvious enough to bite you.
   forward is not enough on a *first* ingest: `Hardware` has no "unknown"
   state, so an iLO-4 server that reported nothing stored `0` drives and
   rendered as a confident, real zero.
+- **The list cache is invalidated by maintenance writes and by nothing
+  else** (ADR-0028). `GET /servers` pages (15s) and `/servers/facets`
+  counts (60s) are cache-aside with no write invalidation on the ingest
+  path — deliberately, since five CronJobs write continuously. The two
+  maintenance endpoints call `_invalidate_list_cache`, because the
+  operator is looking at the list they just wrote to: without it a server
+  taken *out* of maintenance kept showing under `?maintenance=true` for
+  the TTL. **Do not extend this to ingest** — that is the decision the
+  short TTL exists to express. Two traps if you touch it: `SCAN MATCH`
+  has no brace alternation (`{list,facets}` matches nothing, silently),
+  and it must never become `KEYS`, which blocks Redis for the whole scan.
+- **UNKNOWN is not a health verdict** (ADR-0027). Every fact in
+  `app.domain.services.health.facts` counts only *definite* readings — a
+  PSU counts as failed on `DOWN`, never `UNKNOWN`; a drive on `CRITICAL`.
+  Network was the one exception and it bit: `network.all_links_down`
+  compared links-UP against `network.interface_count`, and UCS reports
+  `link_state=UNKNOWN` on ~99.75% of real vNICs, so once Cisco collectors
+  started reporting vNICs (2026-09-10) nearly every Cisco server read
+  CRITICAL on network. Both link policies now use
+  `network.links_known_count` (interfaces whose state is anything but
+  UNKNOWN) as the denominator; `network.interface_count` keeps its
+  literal meaning and rides along as `reported` evidence. `DISABLED` is
+  deliberately still counted — it is a real reading. **If you add a fact,
+  it must exclude UNKNOWN**;
+  `test_health_defaults_coverage.TestUnknownIsNotAVerdict` fails if it
+  does not. The engine is still two-valued on purpose — the ADR says what
+  would make three-valued evaluation worth its cost.
 - **`Server.reachable`/`unreachable_since` are a coarser, whole-server
   version of the same idea, added 2026-09-10 for `OPENMANAGE` only.**
   `ProviderServer.reachable=False` means "I know this server's identity
@@ -1237,7 +1277,46 @@ quarterly, or before any release you care about:
 
 ## Where to continue right now
 
-**Most recent work, 2026-09-10** — cluster membership, finished and
+**Most recent work, 2026-09-12** — eight operator-requested changes, all
+shipped. The deployment ones first:
+
+- **The Helm chart is `deploy/helm/server-scan`**, renamed from
+  `server-inventory`, along with `app.kubernetes.io/part-of` and the
+  `serverScan.*` template helpers. **The Mongo database name
+  `server_inventory` is deliberately NOT renamed** — it would orphan
+  every stored document. `INVENTORY_SERVICE_NAME` and `scripts/dev-up.sh`'s
+  container names are also unchanged (a metrics label and dev containers,
+  neither part of the chart).
+- **Exactly one Route.** With the frontend on, its nginx proxies `/api/`
+  and `/health/` to the API Service in-cluster
+  (`frontend-api-proxy-configmap.yaml` mounted at `/etc/nginx/api-proxy.d`,
+  which `frontend/nginx.conf` includes), so the five path-scoped API
+  Routes and `route.apiPaths` are gone. **`/docs`, `/openapi.json` and
+  `/metrics` are no longer reachable from outside the cluster** —
+  `port-forward` for the first two; Prometheus scrapes `/metrics` through
+  the Service and is unaffected.
+- **The standalone Redfish TOMLs live in the chart**, at
+  `deploy/helm/server-scan/files/redfish/`, read with `.Files.Get`
+  (`collectors.redfishStandalone.inventoryFile`/`credentialsFile`). The
+  inventory file is the default source; **the credentials file is opt-in
+  and empty by default because rendering it puts BMC passwords in git**,
+  and `credentialsSecret` still wins.
+- **CI has a `helm` job** that lints every chart under `deploy/helm`
+  (discovered, not listed) and `helm template`s each one under the value
+  combinations the defaults never reach. It uses the runner's
+  preinstalled helm rather than `azure/setup-helm`, so ADR-0013's
+  SHA-pinning obligation gains nothing new to maintain.
+
+And the four application ones: the Unassigned site card is hidden while empty (a configured
+site still shows at zero); the Redfish credential circuit breaker is
+deleted so every BMC is attempted every run, with `OPENMANAGE` now
+writing a `reachable=False` placeholder for a rejected login as well as a
+dead one; the inventory table gained a one-click per-row maintenance
+switch; and UNKNOWN stopped counting as a health verdict (ADR-0027 —
+this was a real fleet-wide false CRITICAL on Cisco, not a hypothetical).
+See the "Key technical facts" entries for the last two.
+
+**Work before that, 2026-09-10** — cluster membership, finished and
 documented. `Server.openshift` is now written by two real CronJobs
 (`docs/adr/0024-openshift-cluster-membership.md`), `OpenShiftLifecycle`
 was trimmed from ten fields to five at the user's direction,

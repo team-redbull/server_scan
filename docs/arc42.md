@@ -274,16 +274,22 @@ Job status.
 
 **Two exceptions, both added 2026-09-10**: neither `OPENMANAGE` nor
 `REDFISH_STANDALONE` counts a single BMC's plain connection failure, nor
-a rejected/disabled BMC credential, toward exit 3 any more — see
+a rejected BMC credential, toward exit 3 any more — see
 `tools.run_collector._is_benign_collection_error` and
 `..redfish.provider`'s exported markers (`UNREACHABLE_MARKER`,
-`AUTH_REJECTED_MARKER`, `AUTH_CREDENTIAL_DISABLED_MARKER`,
-`AUTH_BUDGET_EXHAUSTED_MARKER`). Widened to cover auth the same day, at
-the operator's request, after a real OME run hit rejected credentials
-often enough that PARTIAL had stopped meaning anything unusual. TLS
-failures, a per-host time budget exceeded, and any other error are
-unaffected and still drive PARTIAL; this is narrower than "any failure,"
-on purpose.
+`AUTH_REJECTED_MARKER`). Widened to cover auth the same day, at the
+operator's request, after a real OME run hit rejected credentials often
+enough that PARTIAL had stopped meaning anything unusual. TLS failures, a
+per-host time budget exceeded, and any other error are unaffected and
+still drive PARTIAL; this is narrower than "any failure," on purpose.
+
+**No host is skipped over an earlier host's rejection (2026-09-12).** The
+credential circuit breaker that disabled a credential after three
+rejections and aborted a run after ten is removed, with both of its
+settings — see ADR-0016's dated update for what it bought and what it
+cost. Every BMC is attempted every run; each rejection logs
+`redfish.bmc_login_failed` at ERROR. On `OPENMANAGE`, a rejected login
+now also writes the same `reachable=False` document a dead BMC does.
 
 They differ in what replaces the signal. `OPENMANAGE` gets the fuller
 treatment: OME already knows a server's identity before its BMC is ever
@@ -322,10 +328,13 @@ can be legitimately shadowed.
 ## 7. Deployment View
 
 ```
-OpenShift namespace
-├── Deployment  backend API (N replicas)  ── Service ── Route
+OpenShift namespace                        (chart: deploy/helm/server-scan)
+├── Deployment  backend API (N replicas)  ── Service ─┐
 │      envFrom: <release>-api-config (ConfigMap)   ← INVENTORY_SITES lives here
-│      env:     Mongo/Redis URIs from a Secret
+│      env:     Mongo/Redis URIs from a Secret      │
+├── Deployment  frontend (nginx + SPA)  ── Service ──┴── Route  ← the ONLY one
+│      nginx proxies /api/ and /health/ to the API Service, so the
+│      API has no Route of its own (frontend off: the API takes it)
 ├── CronJob  collector-ucs-central          (6-hourly, opt-in)
 ├── CronJob  collector-intersight           (6-hourly, opt-in)
 ├── CronJob  collector-oneview              (6-hourly, opt-in)
@@ -367,6 +376,23 @@ collector does, and never call this platform's API.
 - **The frontend has full manifests** (Deployment/Service/Route) as of
   chart 0.2.0. This entry used to record their absence as a gap and was
   simply out of date.
+- **Exactly one Route, since 2026-09-12.** With the frontend on, its
+  nginx forwards `/api/` and `/health/` to the API Service in-cluster
+  (`frontend-api-proxy-configmap.yaml`), replacing the five path-scoped
+  API Routes that used to split one host. `/docs`, `/openapi.json` and
+  `/metrics` are therefore no longer reachable from outside the cluster;
+  Prometheus scrapes `/metrics` through the Service and is unaffected.
+- **The chart is `deploy/helm/server-scan`** (renamed from
+  `server-inventory` on 2026-09-12, along with its `part-of` label and
+  its `serverScan.*` template helpers). The Mongo *database* name
+  `server_inventory` is deliberately unchanged — renaming it would orphan
+  every stored document.
+- **The standalone Redfish collector's two TOML files live in the chart**
+  (`files/redfish/`), read with `.Files.Get`. The inventory file is the
+  default source and holds no secrets. The credentials file is opt-in and
+  off by default, because rendering it commits BMC passwords to git —
+  `collectors.redfishStandalone.credentialsSecret` remains the production
+  path and wins when both are set.
 - **Gap: nothing deploys these images.** CI publishes; no GitOps/ArgoCD
   wiring exists.
 
@@ -380,6 +406,7 @@ collector does, and never call this platform's API.
 | **Error handling** | `exception_handlers` | RFC 9457 Problem Details, extended with a stable `code`, `request_id` and structured `details` (ADR-0002) |
 | **Persistence rules** | `infrastructure/mongodb` | Datetimes stored as ISO 8601 **strings**; range/cursor queries must compare against that type (ADR-0006 — this caused a real silent-wrong-results bug) |
 | **Search** | `domain/services/search_tokens` | Anchored, escaped prefix match over a multikey-indexed token array; structurally incapable of ReDoS or an unanchored scan (ADR-0004). Tokens are word-boundary **suffixes**, so the anchored query still finds a fragment from the middle of a name — `cisco-m6` matches `ocp-cisco-m6-bat-yam-…` (ADR-0025) |
+| **List cache** | `api/v1/servers` | Cache-aside pages (15s) and facet counts (60s), invalidated by **nothing on the ingest path** — five CronJobs write continuously and clearing on each would keep the cache cold. The two maintenance endpoints are the one exception, because the operator is looking at the list they just wrote to (ADR-0028) |
 | **Pagination** | `domain/services/cursor` | Keyset only, HMAC-signed cursor bound to the filter/sort combination. A **nullable** sort field needs the null-aware clause: Mongo's range operators are type-bracketed, so a naive `$gt`/`$lt` cursor drops rows with no error (ADR-0026) |
 | **Caching** | `infrastructure/redis` | Cache-aside; revision-keyed detail entries; every method returns a miss on error rather than raising |
 | **Classification** | `domain/services/classification` | Total order `(priority, specificity, order, id)` computed in Python; conflicts recorded, not hidden (ADR-0005 for the sibling idea) |
@@ -438,6 +465,8 @@ of it.
 | 0024 | Cluster membership is reported by the clusters, per cluster, as a reconcile |
 | 0025 | Search tokens are word-boundary suffixes, so an anchored query finds mid-name fragments |
 | 0026 | Nullable sort fields need a null-aware cursor; retired indexes are dropped automatically |
+| 0027 | A value a collector could not read is never a health verdict — UNKNOWN is excluded from every policy's denominator |
+| 0028 | An operator write clears the cached list pages and facet counts; an ingest write still does not |
 
 ---
 

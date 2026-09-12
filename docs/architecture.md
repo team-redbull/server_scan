@@ -214,6 +214,19 @@ any real collector exists.
   `not`/leaf nodes only, depth- and size-capped, validated against the
   registry before evaluation. No `eval`, no `exec`, no stored code of any
   kind.
+- **A value the collector could not read is never a verdict**
+  (`docs/adr/0027-unknown-is-not-a-reading.md`). Every fact counts only
+  definite readings: `power.failed_psu_count` counts `DOWN` and not
+  `UNKNOWN`, `storage.failed_drive_count` counts `CRITICAL`, and so on.
+  Network was the one place the comparison ran the other way — good
+  readings against a denominator of *every* interface — which marked
+  nearly every Cisco server CRITICAL for "no link up" once Cisco
+  collectors started reporting vNICs, because UCS reports link state
+  `UNKNOWN` on ~99.75% of them. Both link policies now use
+  `network.links_known_count` as the denominator;
+  `network.interface_count` keeps its literal meaning and rides along as
+  evidence. The engine itself stays two-valued — the ADR says what would
+  make three-valued evaluation worth it.
 - **Message templates are rendered by explicit substitution**, never
   `str.format(**evidence)` — `str.format`'s field syntax reaches attribute
   and index access (`{obj.__class__}`, `{obj[0]}`) even on a template that
@@ -332,6 +345,20 @@ and exposed via reclassify/recalculate endpoints.
   `Server.maintenance`, never `classification`/`health`, so a server can
   be simultaneously HOSTED_CLUSTER, CRITICAL, and in maintenance without
   the three concepts interfering.
+- **A maintenance write clears the cached list pages and facet counts**
+  (`_invalidate_list_cache`, ADR-0028) — the one write path that does.
+  Ingest keeps paying the TTL. Without this the "Maintenance only" filter
+  served a page computed before the write, so a server taken back out of
+  maintenance kept appearing in a list whose whole meaning is that it is
+  in maintenance.
+- **Reachable from the inventory list, not just the detail page**
+  (2026-09-12): each row carries a one-click switch
+  (`features/inventory/MaintenanceToggle`) backed by a row-agnostic
+  mutation — the server id is a mutation *variable*, since a hook cannot
+  be called per row. It sends no reason, which the API already allows;
+  reason and ticket stay on the detail page. It is the only cell in the
+  table whose click does not open the server, so it stops propagation
+  itself rather than relying on the row handler's anchor check.
 - `audit_events` is append-only by construction, not by convention:
   `MongoAuditEventRepository` exposes only `record()` — no `update`/
   `delete` method exists on the class at all, so no code path in this
