@@ -137,18 +137,21 @@ function card(name: string): HTMLAnchorElement {
   return link as HTMLAnchorElement;
 }
 
+const EMPTY_SLICES = { UPI: {}, HOSTED_CLUSTER: {} };
+
+/** Point `GET /api/v1/sites` at one response for the current test. */
+function stubSites(response: unknown): void {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(() =>
+      Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(response) }),
+    ),
+  );
+}
+
 describe("SitesOverviewPage", () => {
   beforeEach(() => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(() =>
-        Promise.resolve({
-          ok: true,
-          status: 200,
-          json: () => Promise.resolve(SITES_RESPONSE),
-        }),
-      ),
-    );
+    stubSites(SITES_RESPONSE);
   });
 
   afterEach(() => {
@@ -284,5 +287,33 @@ describe("SitesOverviewPage", () => {
 
     expect(card("Tel Aviv")).toHaveAttribute("href", "/servers?site_id=tlv");
     expect(card("New York City")).toHaveAttribute("href", "/servers?site_id=nyc");
+  });
+
+  it("hides the Unassigned card when no server landed in it", async () => {
+    stubSites({ ...SITES_RESPONSE, items: [...SITE_ITEMS, site("unassigned", "Unassigned", EMPTY_SLICES)] });
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: "Tel Aviv" })).toBeInTheDocument();
+    });
+
+    expect(screen.queryByRole("heading", { name: "Unassigned" })).not.toBeInTheDocument();
+  });
+
+  it("shows the Unassigned card as soon as a hostname fails to parse", async () => {
+    stubSites({
+      ...SITES_RESPONSE,
+      items: [
+        ...SITE_ITEMS,
+        site("unassigned", "Unassigned", { UPI: { total: 4 }, HOSTED_CLUSTER: {} }),
+      ],
+    });
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: "Unassigned" })).toBeInTheDocument();
+    });
+
+    expect(card("Unassigned")).toHaveAttribute("href", "/servers?site_id=unassigned");
   });
 });

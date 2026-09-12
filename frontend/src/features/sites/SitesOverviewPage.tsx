@@ -120,14 +120,19 @@ function fleetCards(fleet: FleetSummary): CardSpec[] {
  *   CardSpec[]: the per-site row.
  */
 function siteCards(items: SiteStats[]): CardSpec[] {
-  return items.map((site) => ({
-    key: site.site_id,
-    name: site.name,
-    subtitle:
-      site.site_id === UNASSIGNED_SITE_ID ? "no site in hostname" : "servers",
-    to: `/servers?site_id=${site.site_id}`,
-    stats: site,
-  }));
+  // Unassigned is dropped when empty, unlike a configured site, which
+  // still renders at zero: "no hostname failed to parse" is the expected
+  // state, and a permanent empty card for it is noise.
+  return items
+    .filter((site) => site.site_id !== UNASSIGNED_SITE_ID || site.total > 0)
+    .map((site) => ({
+      key: site.site_id,
+      name: site.name,
+      subtitle:
+        site.site_id === UNASSIGNED_SITE_ID ? "no site in hostname" : "servers",
+      to: `/servers?site_id=${site.site_id}`,
+      stats: site,
+    }));
 }
 
 /** Bar widths are proportional to the card's own total, not to the
