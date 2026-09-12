@@ -5,7 +5,7 @@ metadata:
   labels:
     app.kubernetes.io/name: {{ .Release.Name }}-api
     app.kubernetes.io/component: backend
-    app.kubernetes.io/part-of: server-inventory
+    app.kubernetes.io/part-of: server-scan
 spec:
   replicas: {{ .Values.backend.replicaCount }}
   selector:
@@ -16,12 +16,12 @@ spec:
       labels:
         app.kubernetes.io/name: {{ .Release.Name }}-api
         app.kubernetes.io/component: backend
-        app.kubernetes.io/part-of: server-inventory
+        app.kubernetes.io/part-of: server-scan
     spec:
       automountServiceAccountToken: false
       containers:
         - name: api
-          image: {{ include "serverInventory.apiImage" . | quote }}
+          image: {{ include "serverScan.apiImage" . | quote }}
           imagePullPolicy: {{ .Values.backend.image.pullPolicy }}
           ports:
             - name: http
@@ -30,7 +30,7 @@ spec:
           env:
             - name: INVENTORY_ENVIRONMENT
               value: production
-            {{- include "serverInventory.dbEnv" . | nindent 12 }}
+            {{- include "serverScan.dbEnv" . | nindent 12 }}
           envFrom:
             - configMapRef:
                 name: {{ .Release.Name }}-api-config

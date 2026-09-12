@@ -7,7 +7,7 @@ metadata:
   labels:
     app.kubernetes.io/name: {{ .Release.Name }}-openshift-agents
     app.kubernetes.io/component: membership
-    app.kubernetes.io/part-of: server-inventory
+    app.kubernetes.io/part-of: server-scan
 spec:
   schedule: {{ .Values.agents.schedule | quote }}
   {{- with .Values.timeZone }}

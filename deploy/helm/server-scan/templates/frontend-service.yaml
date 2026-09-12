@@ -6,7 +6,7 @@ metadata:
   labels:
     app.kubernetes.io/name: {{ .Release.Name }}-frontend
     app.kubernetes.io/component: frontend
-    app.kubernetes.io/part-of: server-inventory
+    app.kubernetes.io/part-of: server-scan
 spec:
   selector:
     app.kubernetes.io/name: {{ .Release.Name }}-frontend

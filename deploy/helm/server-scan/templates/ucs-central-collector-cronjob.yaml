@@ -6,7 +6,7 @@ metadata:
   labels:
     app.kubernetes.io/name: {{ .Release.Name }}-collector-ucs-central
     app.kubernetes.io/component: collector
-    app.kubernetes.io/part-of: server-inventory
+    app.kubernetes.io/part-of: server-scan
 spec:
   schedule: {{ .Values.collectors.ucsCentral.schedule | quote }}
   {{- with .Values.collectors.timeZone }}
@@ -28,7 +28,7 @@ spec:
           automountServiceAccountToken: false
           containers:
             - name: collector
-              image: {{ include "serverInventory.apiImage" . | quote }}
+              image: {{ include "serverScan.apiImage" . | quote }}
               imagePullPolicy: {{ .Values.backend.image.pullPolicy }}
               command: ["python3", "-m", "tools.run_collector", "--manager-type", "UCS_CENTRAL"]
               env:
@@ -42,7 +42,7 @@ spec:
                 {{- end }}
                 - name: INVENTORY_UCS_CENTRAL_DOMAIN_CONCURRENCY
                   value: {{ .Values.collectors.ucsCentral.domainConcurrency | quote }}
-                {{- include "serverInventory.dbEnv" . | nindent 16 }}
+                {{- include "serverScan.dbEnv" . | nindent 16 }}
               envFrom:
                 - configMapRef:
                     name: {{ .Release.Name }}-api-config

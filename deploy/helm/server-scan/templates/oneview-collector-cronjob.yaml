@@ -6,7 +6,7 @@ metadata:
   labels:
     app.kubernetes.io/name: {{ .Release.Name }}-collector-oneview
     app.kubernetes.io/component: collector
-    app.kubernetes.io/part-of: server-inventory
+    app.kubernetes.io/part-of: server-scan
 spec:
   schedule: {{ .Values.collectors.oneview.schedule | quote }}
   {{- with .Values.collectors.timeZone }}
@@ -28,7 +28,7 @@ spec:
           automountServiceAccountToken: false
           containers:
             - name: collector
-              image: {{ include "serverInventory.apiImage" . | quote }}
+              image: {{ include "serverScan.apiImage" . | quote }}
               imagePullPolicy: {{ .Values.backend.image.pullPolicy }}
               command: ["python3", "-m", "tools.run_collector", "--manager-type", "ONEVIEW"]
               env:
@@ -54,7 +54,7 @@ spec:
                   value: {{ .Values.collectors.oneview.pageSize | quote }}
                 - name: INVENTORY_ONEVIEW_VERIFY_TLS
                   value: {{ .Values.collectors.oneview.verifyTls | quote }}
-                {{- include "serverInventory.dbEnv" . | nindent 16 }}
+                {{- include "serverScan.dbEnv" . | nindent 16 }}
               envFrom:
                 - configMapRef:
                     name: {{ .Release.Name }}-api-config

@@ -1,6 +1,6 @@
 # Deployment
 
-Two Helm charts. `helm/server-inventory` is the platform — API, frontend
+Two Helm charts. `helm/server-scan` is the platform — API, frontend
 and the per-vendor collector CronJobs — and is what the rest of this
 document is about. `helm/openshift-membership` is the pair of jobs that
 run *inside* every OpenShift cluster to report what it is using, one
@@ -15,7 +15,7 @@ credential handling had to be made twice and only landed fully in one.
 `helm template` covers the "I want plain YAML" case on demand:
 
 ```bash
-helm template server-inventory deploy/helm/server-inventory \
+helm template server-scan deploy/helm/server-scan \
   -f my-values.yaml > manifests.yaml
 ```
 
@@ -57,10 +57,10 @@ Each database is resolved on its own, so all four combinations render:
 
 ```bash
 # Neither — the default. Both URIs come from db.secretName.
-helm template server-inventory deploy/helm/server-inventory
+helm template server-scan deploy/helm/server-scan
 
 # Both, plus the UI and the fake-data collector: a self-contained demo.
-helm install si deploy/helm/server-inventory \
+helm install si deploy/helm/server-scan \
   --set mongodb.enabled=true --set mongodb.auth.rootPassword=... \
   --set 'mongodb.auth.passwords[0]=...' \
   --set redis.enabled=true --set redis.auth.password=... \
@@ -68,18 +68,18 @@ helm install si deploy/helm/server-inventory \
   --set collectors.fake.enabled=true --set backend.cursorSecret=...
 
 # Redis only, against an operated MongoDB.
-helm install si deploy/helm/server-inventory \
+helm install si deploy/helm/server-scan \
   --set redis.enabled=true --set redis.auth.password=...
 ```
 
 For whichever database is **not** bundled, the connection string arrives
-via a `Secret` (`db.secretName`, default `server-inventory-db`, keys
+via a `Secret` (`db.secretName`, default `server-scan-db`, keys
 `mongo-uri` / `redis-uri`) that this chart consumes but does not create —
 provisioning it is a platform/GitOps concern, consistent with the "no
 credentials in source, credentials via secret refs" requirement. A
 bundled one is rendered into the chart's own `<release>-bundled-db` Secret
 instead, and the two names are deliberately different so bundling one
-database never collides with a `server-inventory-db` an operator owns.
+database never collides with a `server-scan-db` an operator owns.
 
 **Set the bundled passwords explicitly.** Left blank, the Bitnami subchart
 generates one — and `helm template`, which is how Argo CD renders this
@@ -97,16 +97,16 @@ Secret then carries both — the subchart's own key
 `redis-uri` the API reads:
 
 ```bash
-oc create secret generic server-inventory-db \
+oc create secret generic server-scan-db \
   --from-literal=mongodb-root-password='...' \
   --from-literal=mongodb-passwords='...' \
   --from-literal=redis-password='...' \
-  --from-literal=mongo-uri='mongodb://server_inventory:...@server-inventory-mongodb:27017/server_inventory?authSource=server_inventory' \
-  --from-literal=redis-uri='redis://:...@server-inventory-redis-master:6379/0'
+  --from-literal=mongo-uri='mongodb://server_inventory:...@server-scan-mongodb:27017/server_inventory?authSource=server_inventory' \
+  --from-literal=redis-uri='redis://:...@server-scan-redis-master:6379/0'
 ```
 
 Air-gapped installs need the subcharts vendored: `helm dependency update
-deploy/helm/server-inventory` on a connected machine, then commit the
+deploy/helm/server-scan` on a connected machine, then commit the
 resulting `charts/*.tgz`. Note that Bitnami's charts default their image
 to `:latest`; `values.yaml` says how to pin one.
 
@@ -130,16 +130,25 @@ which a floating one cannot.
 
 `frontend.enabled` deploys the SPA image CI already publishes. The SPA
 calls the API same-origin — `frontend/src/api/client.ts` sets no base URL
-and its nginx proxies nothing — so the two Services share one host and are
-split by path: the frontend takes `/`, and the API gets one Route per
-entry in `route.apiPaths` (`/api`, `/health`, `/metrics`, `/docs`,
-`/openapi.json`). OpenShift routes by longest prefix, so nothing has to
-know about anything else.
+— so both halves must answer on one hostname.
 
-That makes `route.host` **mandatory** once the frontend is on: an
-OpenShift-generated host is derived per Route, so two Services would land
-on two hostnames and every API call from the SPA would 404. The chart
-fails to render rather than deploying that.
+**Exactly one Route exists either way**: the frontend's when
+`frontend.enabled`, the API's otherwise. With the frontend on, the SPA's
+own nginx forwards `/api/` and `/health/` to the API Service in-cluster
+(`frontend-api-proxy-configmap.yaml`, mounted into
+`/etc/nginx/api-proxy.d`, which the image's `nginx.conf` includes), so the
+API needs no Route of its own. This replaced a set of five path-scoped API
+Routes on 2026-09-12, at the operator's request.
+
+Two consequences worth knowing before you deploy it:
+
+- **`/docs`, `/openapi.json` and `/metrics` are no longer reachable from
+  outside the cluster.** Nothing in the UI calls them. Reach them with
+  `kubectl port-forward svc/<release>-api 8080:80`. Prometheus is
+  unaffected — it scrapes `/metrics` through the Service, in-cluster.
+- **`route.host` is no longer mandatory with the frontend on.** One Route
+  means an OpenShift-generated hostname works; set `route.host` when you
+  want a specific one.
 
 ## Container security
 

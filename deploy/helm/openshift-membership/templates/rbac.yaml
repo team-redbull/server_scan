@@ -4,7 +4,7 @@ kind: ServiceAccount
 metadata:
   name: {{ .Values.serviceAccount.name }}
   labels:
-    app.kubernetes.io/part-of: server-inventory
+    app.kubernetes.io/part-of: server-scan
 ---
 # ClusterRole rather than Role: nodes are cluster-scoped, and Agents live
 # in one namespace per managed cluster on a hub, so a namespaced Role

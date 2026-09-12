@@ -7,7 +7,7 @@ metadata:
   labels:
     app.kubernetes.io/name: {{ .Release.Name }}-openshift-nodes
     app.kubernetes.io/component: membership
-    app.kubernetes.io/part-of: server-inventory
+    app.kubernetes.io/part-of: server-scan
 spec:
   schedule: {{ .Values.nodes.schedule | quote }}
   {{- with .Values.timeZone }}
@@ -28,7 +28,7 @@ spec:
           serviceAccountName: {{ .Values.serviceAccount.name }}
           # The one workload in this platform that needs its token: it
           # reads its own cluster's API. Every collector CronJob in the
-          # server-inventory chart sets this false.
+          # server-scan chart sets this false.
           automountServiceAccountToken: true
           containers:
             - name: membership

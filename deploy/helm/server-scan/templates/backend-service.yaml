@@ -5,7 +5,7 @@ metadata:
   labels:
     app.kubernetes.io/name: {{ .Release.Name }}-api
     app.kubernetes.io/component: backend
-    app.kubernetes.io/part-of: server-inventory
+    app.kubernetes.io/part-of: server-scan
 spec:
   selector:
     app.kubernetes.io/name: {{ .Release.Name }}-api

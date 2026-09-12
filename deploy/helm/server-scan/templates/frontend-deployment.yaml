@@ -6,7 +6,7 @@ metadata:
   labels:
     app.kubernetes.io/name: {{ .Release.Name }}-frontend
     app.kubernetes.io/component: frontend
-    app.kubernetes.io/part-of: server-inventory
+    app.kubernetes.io/part-of: server-scan
 spec:
   replicas: {{ .Values.frontend.replicaCount }}
   selector:
@@ -17,12 +17,12 @@ spec:
       labels:
         app.kubernetes.io/name: {{ .Release.Name }}-frontend
         app.kubernetes.io/component: frontend
-        app.kubernetes.io/part-of: server-inventory
+        app.kubernetes.io/part-of: server-scan
     spec:
       automountServiceAccountToken: false
       containers:
         - name: frontend
-          image: {{ include "serverInventory.frontendImage" . | quote }}
+          image: {{ include "serverScan.frontendImage" . | quote }}
           imagePullPolicy: {{ .Values.frontend.image.pullPolicy }}
           ports:
             - name: http
@@ -36,6 +36,10 @@ spec:
               mountPath: /var/lib/nginx/tmp
             - name: nginx-log
               mountPath: /var/log/nginx
+            # The API proxy that lets one Route serve the whole app.
+            - name: api-proxy
+              mountPath: /etc/nginx/api-proxy.d
+              readOnly: true
           livenessProbe:
             httpGet:
               path: /
@@ -65,4 +69,7 @@ spec:
           emptyDir: {}
         - name: nginx-log
           emptyDir: {}
+        - name: api-proxy
+          configMap:
+            name: {{ .Release.Name }}-frontend-api-proxy
 {{- end }}

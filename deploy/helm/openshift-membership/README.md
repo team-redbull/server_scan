@@ -1,7 +1,7 @@
 # Cluster membership CronJobs
 
 Deployed **to every cluster**, by ArgoCD — one release per cluster. This
-is a separate chart from `deploy/helm/server-inventory`, which deploys the
+is a separate chart from `deploy/helm/server-scan`, which deploys the
 platform itself: these jobs run *inside* a cluster and report which
 servers it is using.
 

@@ -13,9 +13,9 @@ image:
 # every collector — they never call the platform's API — so each cluster
 # needs network to it and a copy of these Secrets.
 db:
-  secretName: server-inventory-db
+  secretName: server-scan-db
   mongoUriKey: mongo-uri
-  cursorSecretName: server-inventory-cursor
+  cursorSecretName: server-scan-cursor
   cursorSecretKey: cursor-secret
 
 serviceAccount:

@@ -1,18 +1,29 @@
+{{- $rf := .Values.collectors.redfishStandalone }}
 {{- /*
-Opt-in: only rendered when collectors.redfishStandalone.inventoryToml is
-set. Left blank (the default), the inventory ConfigMap is provisioned
-externally — see the comment above that value in values.yaml.
+The fleet list, from whichever of three sources is set. Skipped entirely
+when `inventoryConfigMap` names one this chart does not own.
+
+`.Files.Get` is the default source, so the fleet is an actual .toml file
+in the chart (files/redfish/inventory.toml) that a reviewer can read and a
+GitOps diff can show line by line — rather than a YAML string. It holds no
+passwords, which is why this is a ConfigMap; see the file's own header.
 */}}
-{{- if .Values.collectors.redfishStandalone.inventoryToml }}
+{{- $content := "" }}
+{{- if $rf.inventoryToml }}
+{{- $content = $rf.inventoryToml }}
+{{- else if $rf.inventoryFile }}
+{{- $content = required (printf "collectors.redfishStandalone.inventoryFile points at %q, which is not in the chart." $rf.inventoryFile) (.Files.Get $rf.inventoryFile) }}
+{{- end }}
+{{- if and $content (not $rf.inventoryConfigMap) }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: {{ .Values.collectors.redfishStandalone.inventoryConfigMap | default (printf "%s-redfish-inventory" .Release.Name) }}
+  name: {{ printf "%s-redfish-inventory" .Release.Name }}
   labels:
     app.kubernetes.io/name: {{ .Release.Name }}-redfish-inventory
     app.kubernetes.io/component: collector
-    app.kubernetes.io/part-of: server-inventory
+    app.kubernetes.io/part-of: server-scan
 data:
   inventory.toml: |
-{{ .Values.collectors.redfishStandalone.inventoryToml | indent 4 }}
+{{ $content | indent 4 }}
 {{- end }}

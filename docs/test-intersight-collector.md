@@ -274,7 +274,7 @@ collectors:
 ```
 
 ```bash
-helm upgrade --install inventory ./deploy/helm/server-inventory \
+helm upgrade --install inventory ./deploy/helm/server-scan \
   --set-file collectors.intersight.apiKeyPem=/path/to/intersight-key.pem
 ```
 

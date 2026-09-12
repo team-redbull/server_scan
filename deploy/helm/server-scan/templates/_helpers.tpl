@@ -1,22 +1,22 @@
 {{- /* Emit "true" or nothing: a bare `and` returns the string "false", which every Helm `if` reads as truthy. */ -}}
-{{- define "serverInventory.composeMongoUri" -}}
+{{- define "serverScan.composeMongoUri" -}}
 {{- if and .Values.mongodb.enabled (not .Values.mongodb.auth.existingSecret) -}}true{{- end -}}
 {{- end -}}
 
-{{- define "serverInventory.composeRedisUri" -}}
+{{- define "serverScan.composeRedisUri" -}}
 {{- if and .Values.redis.enabled (not .Values.redis.auth.existingSecret) -}}true{{- end -}}
 {{- end -}}
 
-{{- define "serverInventory.mongoSecret" -}}
-{{- if include "serverInventory.composeMongoUri" . -}}
+{{- define "serverScan.mongoSecret" -}}
+{{- if include "serverScan.composeMongoUri" . -}}
 {{ .Release.Name }}-bundled-db
 {{- else -}}
 {{ .Values.db.secretName }}
 {{- end -}}
 {{- end -}}
 
-{{- define "serverInventory.redisSecret" -}}
-{{- if include "serverInventory.composeRedisUri" . -}}
+{{- define "serverScan.redisSecret" -}}
+{{- if include "serverScan.composeRedisUri" . -}}
 {{ .Release.Name }}-bundled-db
 {{- else -}}
 {{ .Values.db.secretName }}
@@ -24,16 +24,16 @@
 {{- end -}}
 
 {{- /* The API and every collector CronJob. Collectors need the cursor secret too, or Settings refuses to start. */ -}}
-{{- define "serverInventory.dbEnv" -}}
+{{- define "serverScan.dbEnv" -}}
 - name: INVENTORY_MONGO_URI
   valueFrom:
     secretKeyRef:
-      name: {{ include "serverInventory.mongoSecret" . }}
+      name: {{ include "serverScan.mongoSecret" . }}
       key: mongo-uri
 - name: INVENTORY_REDIS_URI
   valueFrom:
     secretKeyRef:
-      name: {{ include "serverInventory.redisSecret" . }}
+      name: {{ include "serverScan.redisSecret" . }}
       key: redis-uri
 {{- if or .Values.backend.cursorSecret .Values.backend.existingCursorSecret }}
 - name: INVENTORY_CURSOR_SECRET
@@ -45,10 +45,10 @@
 {{- end -}}
 
 {{- /* Blank tag means the chart's appVersion. Never `latest` — see deploy/README.md. */ -}}
-{{- define "serverInventory.apiImage" -}}
+{{- define "serverScan.apiImage" -}}
 {{ .Values.backend.image.repository }}:{{ .Values.backend.image.tag | default .Chart.AppVersion }}
 {{- end -}}
 
-{{- define "serverInventory.frontendImage" -}}
+{{- define "serverScan.frontendImage" -}}
 {{ .Values.frontend.image.repository }}:{{ .Values.frontend.image.tag | default .Chart.AppVersion }}
 {{- end -}}
