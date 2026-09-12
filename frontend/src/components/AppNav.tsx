@@ -17,6 +17,13 @@ export function AppNav() {
   return (
     <nav className="border-b border-[var(--border-subtle)] bg-[var(--surface-raised)]">
       <div className="mx-auto flex max-w-7xl items-center gap-6 px-8">
+        {/* Served straight from `public/`, not imported: it is one fixed
+            asset, so a build-time import would buy a hashed filename and
+            nothing else. `alt` rather than `aria-hidden` so a missing
+            file degrades to the word instead of a broken-image icon. */}
+        <Link to="/" className="flex shrink-0 items-center py-2">
+          <img src="/redbull.svg" alt="Red Bull" className="h-7 w-auto" />
+        </Link>
         {LINKS.map((link) => {
           const isActive =
             link.to === "/" ? location.pathname === "/" : location.pathname.startsWith(link.to);
