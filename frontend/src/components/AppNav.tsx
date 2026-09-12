@@ -22,7 +22,7 @@ export function AppNav() {
             nearer the window edge than the nav text, and the wrapper's
             `gap-6` sets the distance to "Sites". */}
         <Link to="/" className="-ml-4 flex shrink-0 items-center py-1">
-          <img src="/redbull-logo.svg" alt="Red Bull" className="h-10 w-auto" />
+          <img src="/redbull-logo.svg" alt="Red Bull" className="h-14 w-auto" />
         </Link>
         {LINKS.map((link) => {
           const isActive =
